@@ -575,8 +575,12 @@ pub mod window_events {
     use std::ptr;
     use winapi::um::errhandlingapi::GetLastError;
 
-    pub static mut WINDOW_TRACKER: Option<Arc<Mutex<WindowTracker>>> = None;
-    pub static mut EVENT_HOOKS: Vec<winapi::shared::windef::HWINEVENTHOOK> = Vec::new();
+    // Global state for event hooks - necessary due to Windows API callback constraints
+    // These are accessed only from the main thread and properly synchronized
+    // SAFETY: These statics are only accessed from a single thread (main thread)
+    // and proper cleanup is ensured through the cleanup_hooks function
+    static mut WINDOW_TRACKER: Option<Arc<Mutex<WindowTracker>>> = None;
+    static mut EVENT_HOOKS: Vec<winapi::shared::windef::HWINEVENTHOOK> = Vec::new();
 
     // WinEvent hook procedure
     pub unsafe extern "system" fn win_event_proc(
@@ -598,8 +602,9 @@ pub mod window_events {
             return;
         }
 
-        #[allow(static_mut_refs)]
-        if let Some(tracker_arc) = &WINDOW_TRACKER {
+        // Safe access to static without creating references
+        let tracker_opt = ptr::addr_of!(WINDOW_TRACKER).read();
+        if let Some(tracker_arc) = tracker_opt {
             if let Ok(mut tracker) = tracker_arc.try_lock() {
                 let window_title = WindowTracker::get_window_title(hwnd);
                 let event_name = match event {
@@ -690,8 +695,9 @@ pub mod window_events {
 
     pub fn setup_window_events(tracker: Arc<Mutex<WindowTracker>>) -> Result<(), String> {
         unsafe {
-            WINDOW_TRACKER = Some(tracker.clone());
-            EVENT_HOOKS.clear();
+            // Use raw pointer access to avoid static mut ref warnings
+            ptr::addr_of_mut!(WINDOW_TRACKER).write(Some(tracker.clone()));
+            ptr::addr_of_mut!(EVENT_HOOKS).write(Vec::new());
 
             println!("🔧 Setting up WinEvent hooks...");
 
@@ -720,16 +726,20 @@ pub mod window_events {
                     let error = GetLastError();
                     println!("❌ Failed to set up hook for {}: error {}", description, error);
                 } else {
-                    EVENT_HOOKS.push(hook);
+                    // Safely add hook to static vector
+                    let hooks_ptr = ptr::addr_of_mut!(EVENT_HOOKS);
+                    (*hooks_ptr).push(hook);
                     println!("✅ Successfully set up hook for {}", description);
                 }
             }
 
-            if EVENT_HOOKS.is_empty() {
+            // Check if we have any hooks
+            let hooks_len = ptr::addr_of!(EVENT_HOOKS).read().len();
+            if hooks_len == 0 {
                 return Err("Failed to set up any event hooks".to_string());
             }
 
-            println!("🚀 Successfully set up {} WinEvent hooks!", EVENT_HOOKS.len());
+            println!("🚀 Successfully set up {} WinEvent hooks!", hooks_len);
             println!("📢 Now listening for real-time window events across all monitors!");
             println!();
 
@@ -739,10 +749,12 @@ pub mod window_events {
 
     pub fn cleanup_hooks() {
         unsafe {
-            for hook in &EVENT_HOOKS {
+            // Use raw pointer iteration to avoid warnings
+            let hooks_ptr = ptr::addr_of!(EVENT_HOOKS);
+            for hook in &(*hooks_ptr) {
                 UnhookWinEvent(*hook);
             }
-            EVENT_HOOKS.clear();
+            ptr::addr_of_mut!(EVENT_HOOKS).write(Vec::new());
             println!("🧹 Cleaned up all event hooks");
         }
     }
