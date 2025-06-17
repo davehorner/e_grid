@@ -38,148 +38,136 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     
     println!("✅ Connected to IPC services");
     println!("📡 Listening for events and responses...");
+    println!("📋 Available commands:");
+    println!("   • 'assign' - Assign a window to a grid cell");
+    println!("   • 'list' - List all windows");
+    println!("   • 'grid' - Show grid state");
+    println!("   • 'quit' - Exit client");
     
-    // Send initial test commands
-    std::thread::sleep(std::time::Duration::from_secs(2));
-    
-    let test_command = ipc::WindowCommand {
-        command_type: 1, // GetGridState
-        hwnd: 0,
-        target_row: 0,
-        target_col: 0,
-    };
-    command_publisher.send_copy(test_command)?;
-    println!("📤 [CLIENT] Sent GetGridState command");
-    
-    // Main client loop
-    let mut iterations = 0;
+    // Interactive client loop
     loop {
-        // Check for events
-        while let Some(event_sample) = event_subscriber.receive()? {
-            let event = *event_sample;
-            println!("📡 [CLIENT] Received Event: {:?}", event);
-            
-            // Convert to human-readable format
-            match event.event_type {
-                0 => println!("   ✨ Window Created: HWND {} at ({}, {})", event.hwnd, event.row, event.col),
-                1 => println!("   💥 Window Destroyed: HWND {}", event.hwnd),
-                2 => println!("   🔄 Window Moved: HWND {} from ({}, {}) to ({}, {})", 
-                    event.hwnd, event.old_row, event.old_col, event.row, event.col),
-                3 => println!("   📊 Grid State: {} windows, {} occupied cells", 
-                    event.total_windows, event.occupied_cells),
-                _ => println!("   ❓ Unknown event type: {}", event.event_type),
-            }
-        }
+        print!("\n[CLIENT] > ");
+        io::stdout().flush()?;
         
-        // Check for responses
-        while let Some(response_sample) = response_subscriber.receive()? {
-            let response = *response_sample;
-            println!("📤 [CLIENT] Received Response: {:?}", response);
-            
-            // Convert to human-readable format
-            match response.response_type {
-                0 => println!("   ✅ Success"),
-                1 => println!("   ❌ Error (code: {})", response.error_code),
-                2 => println!("   📋 Window List: {} windows", response.window_count),
-                _ => println!("   ❓ Unknown response type: {}", response.response_type),
-            }
-        }
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
         
-        // Send periodic test commands
-        iterations += 1;
-        if iterations == 50 {
-            let test_command = ipc::WindowCommand {
-                command_type: 2, // GetWindowList
-                hwnd: 0,
-                target_row: 0,
-                target_col: 0,
-            };
-            command_publisher.send_copy(test_command)?;
-            println!("📤 [CLIENT] Sent GetWindowList command");
-        }
-        
-        // Small delay to prevent busy waiting
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        
-        // Exit after reasonable time for demo purposes
-        if iterations > 200 {
-            println!("👋 [CLIENT] Demo completed, shutting down...");
-            break;
-        }
-    }
-    
-    Ok(())
-}
-    
-    // Subscribe to events
-    let event_service = node
-        .service_builder(&ServiceName::new(ipc::GRID_EVENTS_SERVICE)?)
-        .publish_subscribe::<ipc::WindowEvent>()
-        .open()?;
-    
-    let mut event_subscriber = event_service.subscriber_builder().create()?;
-    
-    // Subscribe to responses
-    let response_service = node
-        .service_builder(&ServiceName::new(ipc::GRID_RESPONSE_SERVICE)?)
-        .publish_subscribe::<ipc::WindowResponse>()
-        .open()?;
-    
-    let mut response_subscriber = response_service.subscriber_builder().create()?;
-    
-    // Create command publisher
-    let command_service = node
-        .service_builder(&ServiceName::new(ipc::GRID_COMMANDS_SERVICE)?)
-        .publish_subscribe::<ipc::WindowCommand>()
-        .open()?;
-    
-    let mut command_publisher = command_service.publisher_builder().create()?;
-    
-    println!("✅ Connected to IPC services");
-    println!("📡 Listening for events and responses...");
-    println!("💬 Commands: 'cmd' to send test command, 'q' to quit");
-    
-    // Non-blocking input handling
-    std::thread::spawn(move || {
-        loop {
-            let mut input = String::new();
-            if io::stdin().read_line(&mut input).is_ok() {
-                let input = input.trim().to_lowercase();
-                match input.as_str() {
-                    "cmd" => {
-                        // Send a test command
-                        let test_command = ipc::WindowCommand {
-                            command_type: 1, // GetGridState
-                            hwnd: 0,
-                            target_row: 0,
-                            target_col: 0,
-                        };
-                        if let Err(e) = command_publisher.send_copy(test_command) {
-                            eprintln!("❌ Failed to send command: {}", e);
-                        } else {
-                            println!("📤 Sent GetGridState command");
-                        }
-                    }
-                    "q" | "quit" | "exit" => {
-                        println!("👋 Client shutting down...");
-                        std::process::exit(0);
-                    }
-                    _ => {
-                        println!("❓ Unknown command. Type 'cmd' or 'q'");
-                    }
+        match input.as_str() {
+            "assign" => {
+                // Get assignment mode
+                print!("Choose assignment mode (v=virtual, m=monitor): ");
+                io::stdout().flush()?;
+                let mut mode_input = String::new();
+                io::stdin().read_line(&mut mode_input)?;
+                let mode = mode_input.trim().to_lowercase();
+                  if mode == "v" || mode == "virtual" {
+                    // Virtual grid assignment
+                    print!("Enter window HWND: ");
+                    io::stdout().flush()?;
+                    let mut hwnd_input = String::new();
+                    io::stdin().read_line(&mut hwnd_input)?;
+                    let hwnd: u64 = hwnd_input.trim().parse().unwrap_or(0);
+                    
+                    print!("Enter target row (0-based): ");
+                    io::stdout().flush()?;
+                    let mut row_input = String::new();
+                    io::stdin().read_line(&mut row_input)?;
+                    let row: u32 = row_input.trim().parse().unwrap_or(0);
+                    
+                    print!("Enter target column (0-based): ");
+                    io::stdout().flush()?;
+                    let mut col_input = String::new();
+                    io::stdin().read_line(&mut col_input)?;
+                    let col: u32 = col_input.trim().parse().unwrap_or(0);
+                    
+                    let command = ipc::WindowCommand {
+                        command_type: 5, // AssignToVirtualCell
+                        hwnd,
+                        target_row: row,
+                        target_col: col,
+                        monitor_id: 0, // Not used for virtual assignment
+                    };
+                    
+                    command_publisher.send_copy(command)?;
+                    println!("📤 Sent virtual assignment command: HWND {} to ({}, {})", hwnd, row, col);
+                    
+                } else if mode == "m" || mode == "monitor" {
+                    // Monitor grid assignment
+                    print!("Enter window HWND: ");
+                    io::stdout().flush()?;
+                    let mut hwnd_input = String::new();
+                    io::stdin().read_line(&mut hwnd_input)?;
+                    let hwnd: u64 = hwnd_input.trim().parse().unwrap_or(0);
+                    
+                    print!("Enter monitor ID: ");
+                    io::stdout().flush()?;
+                    let mut monitor_input = String::new();
+                    io::stdin().read_line(&mut monitor_input)?;
+                    let monitor_id: u32 = monitor_input.trim().parse().unwrap_or(0);
+                      print!("Enter target row (0-based): ");
+                    io::stdout().flush()?;
+                    let mut row_input = String::new();
+                    io::stdin().read_line(&mut row_input)?;
+                    let row: u32 = row_input.trim().parse().unwrap_or(0);
+                    
+                    print!("Enter target column (0-based): ");
+                    io::stdout().flush()?;
+                    let mut col_input = String::new();
+                    io::stdin().read_line(&mut col_input)?;
+                    let col: u32 = col_input.trim().parse().unwrap_or(0);
+                    
+                    let command = ipc::WindowCommand {
+                        command_type: 6, // AssignToMonitorCell
+                        hwnd,
+                        target_row: row,
+                        target_col: col,
+                        monitor_id,
+                    };
+                    
+                    command_publisher.send_copy(command)?;
+                    println!("📤 Sent monitor assignment command: HWND {} to Monitor {} ({}, {})", hwnd, monitor_id, row, col);
+                    
+                } else {
+                    println!("❌ Invalid assignment mode. Use 'v' for virtual or 'm' for monitor.");
                 }
             }
+            "list" => {
+                let command = ipc::WindowCommand {
+                    command_type: 2, // GetWindowList
+                    hwnd: 0,
+                    target_row: 0,
+                    target_col: 0,
+                    monitor_id: 0,
+                };
+                command_publisher.send_copy(command)?;
+                println!("📤 Sent GetWindowList command");
+            }
+            "grid" => {
+                let command = ipc::WindowCommand {
+                    command_type: 1, // GetGridState
+                    hwnd: 0,
+                    target_row: 0,
+                    target_col: 0,
+                    monitor_id: 0,
+                };
+                command_publisher.send_copy(command)?;
+                println!("📤 Sent GetGridState command");
+            }
+            "quit" | "exit" | "q" => {
+                println!("👋 Client shutting down...");
+                break;
+            }
+            _ => {
+                println!("❓ Unknown command. Available: assign, list, grid, quit");
+            }
         }
-    });
-    
-    // Main client loop - listen for events and responses
-    loop {
-        // Check for events
+        
+        // Check for events and responses after each command
         while let Some(event_sample) = event_subscriber.receive()? {
             let event = *event_sample;
-            println!("📡 [CLIENT] Received Event: {:?}", event);
+            println!("📡 [EVENT] {:?}", event);
             
-            // Convert to human-readable format
             match event.event_type {
                 0 => println!("   ✨ Window Created: HWND {} at ({}, {})", event.hwnd, event.row, event.col),
                 1 => println!("   💥 Window Destroyed: HWND {}", event.hwnd),
@@ -191,12 +179,10 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         
-        // Check for responses
         while let Some(response_sample) = response_subscriber.receive()? {
             let response = *response_sample;
-            println!("📤 [CLIENT] Received Response: {:?}", response);
+            println!("� [RESPONSE] {:?}", response);
             
-            // Convert to human-readable format
             match response.response_type {
                 0 => println!("   ✅ Success"),
                 1 => println!("   ❌ Error (code: {})", response.error_code),
@@ -204,10 +190,8 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                 _ => println!("   ❓ Unknown response type: {}", response.response_type),
             }
         }
-        
-        // Small delay to prevent busy waiting
-        std::thread::sleep(std::time::Duration::from_millis(100));
     }
+      Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -227,9 +211,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _client_process = Command::new(current_exe)
         .arg("--client")
         .spawn()?;
+      // Give client time to start
+    std::thread::sleep(std::time::Duration::from_millis(500));
     
-    // Give client time to start
-    std::thread::sleep(std::time::Duration::from_millis(500));// Create window tracker
+    // Create window tracker
     let mut tracker = WindowTracker::new();
     println!("📊 Initial scan for windows...");
     tracker.scan_existing_windows();

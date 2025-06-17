@@ -76,12 +76,12 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     // Send initial test commands (if we have a publisher)
     std::thread::sleep(std::time::Duration::from_secs(1));
     
-    if let Some(ref publisher) = command_publisher {
-        let test_command = ipc::WindowCommand {
+    if let Some(ref publisher) = command_publisher {        let test_command = ipc::WindowCommand {
             command_type: 1, // GetGridState
             hwnd: 0,
             target_row: 0,
             target_col: 0,
+            monitor_id: 0,
         };
         publisher.send_copy(test_command)?;
         println!("📤 [CLIENT {}] Sent initial GetGridState command", client_id);
@@ -91,7 +91,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     
     // Print initial prompt if we can send commands
     if command_publisher.is_some() {
-        println!("\n💬 [CLIENT {}] Type 'g' for grid, 'w' for windows, 'h' for help, 'q' to quit", client_id);
+        println!("\n💬 [CLIENT {}] Type 'g' for grid, 'w' for windows, 'a' for assign, 'h' for help, 'q' to quit", client_id);
         print!("[CLIENT-{}]> ", client_id);
         io::stdout().flush()?;
         command_mode = true;
@@ -149,7 +149,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
         
         // Process interactive commands periodically if we can send commands
         if command_mode && command_publisher.is_some() && iterations % 50 == 0 {
-            println!("\n💬 [CLIENT {}] Enter command: 'g'=grid, 'w'=windows, 'h'=help, 'q'=quit", client_id);
+            println!("\n💬 [CLIENT {}] Enter command: 'g'=grid, 'w'=windows, 'a'=assign, 'h'=help, 'q'=quit", client_id);
             print!("[CLIENT-{}]> ", client_id);
             io::stdout().flush()?;
             
@@ -159,12 +159,12 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                 if !input.is_empty() {
                     match input.as_str() {
                         "g" | "grid" => {
-                            if let Some(ref publisher) = command_publisher {
-                                let command = ipc::WindowCommand {
+                            if let Some(ref publisher) = command_publisher {                                let command = ipc::WindowCommand {
                                     command_type: 1, // GetGridState
                                     hwnd: 0,
                                     target_row: 0,
                                     target_col: 0,
+                                    monitor_id: 0,
                                 };
                                 if let Err(e) = publisher.send_copy(command) {
                                     println!("❌ [CLIENT-{}] Failed to send grid command: {}", client_id, e);
@@ -172,14 +172,13 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                                     println!("📤 [CLIENT-{}] Requested grid state", client_id);
                                 }
                             }
-                        }
-                        "w" | "windows" => {
-                            if let Some(ref publisher) = command_publisher {
-                                let command = ipc::WindowCommand {
+                        }                        "w" | "windows" => {
+                            if let Some(ref publisher) = command_publisher {                                let command = ipc::WindowCommand {
                                     command_type: 2, // GetWindowList
                                     hwnd: 0,
                                     target_row: 0,
                                     target_col: 0,
+                                    monitor_id: 0,
                                 };
                                 if let Err(e) = publisher.send_copy(command) {
                                     println!("❌ [CLIENT-{}] Failed to send windows command: {}", client_id, e);
@@ -187,13 +186,121 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                                     println!("📤 [CLIENT-{}] Requested window list", client_id);
                                 }
                             }
-                        }
-                        "h" | "help" => {
+                        }                        "a" | "assign" => {
+                            if let Some(ref publisher) = command_publisher {
+                                println!("📍 [CLIENT-{}] Assign window to grid cell", client_id);
+                                println!("Assignment mode:");
+                                println!("  1. Virtual grid (spans all monitors)");
+                                println!("  2. Specific monitor grid");
+                                print!("Mode (1-2)> ");
+                                io::stdout().flush().unwrap();
+                                
+                                let mut mode_input = String::new();
+                                if io::stdin().read_line(&mut mode_input).is_ok() {
+                                    let mode = mode_input.trim();
+                                    
+                                    println!("Enter HWND (window handle):");
+                                    print!("HWND> ");
+                                    io::stdout().flush().unwrap();
+                                    
+                                    let mut hwnd_input = String::new();
+                                    if io::stdin().read_line(&mut hwnd_input).is_ok() {
+                                        if let Ok(hwnd) = hwnd_input.trim().parse::<u64>() {
+                                            println!("Enter target row (0-7):");
+                                            print!("Row> ");
+                                            io::stdout().flush().unwrap();
+                                            
+                                            let mut row_input = String::new();
+                                            if io::stdin().read_line(&mut row_input).is_ok() {
+                                                if let Ok(row) = row_input.trim().parse::<u32>() {
+                                                    println!("Enter target column (0-11):");
+                                                    print!("Col> ");
+                                                    io::stdout().flush().unwrap();
+                                                    
+                                                    let mut col_input = String::new();
+                                                    if io::stdin().read_line(&mut col_input).is_ok() {
+                                                        if let Ok(col) = col_input.trim().parse::<u32>() {
+                                                            match mode {
+                                                                "1" => {
+                                                                    // Virtual grid assignment
+                                                                    let command = ipc::WindowCommand {
+                                                                        command_type: 3, // AssignWindowToVirtualCell
+                                                                        hwnd,
+                                                                        target_row: row,
+                                                                        target_col: col,
+                                                                        monitor_id: 0, // Ignored for virtual
+                                                                    };
+                                                                    if let Err(e) = publisher.send_copy(command) {
+                                                                        println!("❌ [CLIENT-{}] Failed to send assign command: {}", client_id, e);
+                                                                    } else {
+                                                                        println!("📤 [CLIENT-{}] Requested VIRTUAL grid assignment of HWND {} to cell ({}, {})", client_id, hwnd, row, col);
+                                                                    }
+                                                                }
+                                                                "2" => {
+                                                                    // Monitor-specific assignment
+                                                                    println!("Enter monitor ID (usually 0 for primary):");
+                                                                    print!("Monitor> ");
+                                                                    io::stdout().flush().unwrap();
+                                                                    
+                                                                    let mut monitor_input = String::new();
+                                                                    if io::stdin().read_line(&mut monitor_input).is_ok() {
+                                                                        if let Ok(monitor_id) = monitor_input.trim().parse::<u32>() {
+                                                                            let command = ipc::WindowCommand {
+                                                                                command_type: 4, // AssignWindowToMonitorCell
+                                                                                hwnd,
+                                                                                target_row: row,
+                                                                                target_col: col,
+                                                                                monitor_id,
+                                                                            };
+                                                                            if let Err(e) = publisher.send_copy(command) {
+                                                                                println!("❌ [CLIENT-{}] Failed to send assign command: {}", client_id, e);
+                                                                            } else {
+                                                                                println!("📤 [CLIENT-{}] Requested MONITOR {} assignment of HWND {} to cell ({}, {})", client_id, monitor_id, hwnd, row, col);
+                                                                            }
+                                                                        } else {
+                                                                            println!("❌ [CLIENT-{}] Invalid monitor ID", client_id);
+                                                                        }
+                                                                    } else {
+                                                                        println!("❌ [CLIENT-{}] Failed to read monitor input", client_id);
+                                                                    }
+                                                                }
+                                                                _ => {
+                                                                    println!("❌ [CLIENT-{}] Invalid mode. Choose 1 or 2.", client_id);
+                                                                }
+                                                            }
+                                                        } else {
+                                                            println!("❌ [CLIENT-{}] Invalid column number", client_id);
+                                                        }
+                                                    } else {
+                                                        println!("❌ [CLIENT-{}] Failed to read column input", client_id);
+                                                    }
+                                                } else {
+                                                    println!("❌ [CLIENT-{}] Invalid row number", client_id);
+                                                }
+                                            } else {
+                                                println!("❌ [CLIENT-{}] Failed to read row input", client_id);
+                                            }
+                                        } else {
+                                            println!("❌ [CLIENT-{}] Invalid HWND", client_id);
+                                        }
+                                    } else {
+                                        println!("❌ [CLIENT-{}] Failed to read HWND input", client_id);
+                                    }
+                                } else {
+                                    println!("❌ [CLIENT-{}] Failed to read mode input", client_id);
+                                }
+                            }
+                        }                        "h" | "help" => {
                             println!("📋 [CLIENT-{}] Available commands:", client_id);
                             println!("   g/grid    - Request current grid state");
                             println!("   w/windows - Request window list");
+                            println!("   a/assign  - Assign window to grid cell (virtual or monitor-specific)");
                             println!("   h/help    - Show this help");
                             println!("   q/quit    - Exit client");
+                            println!("");
+                            println!("📍 Assignment modes:");
+                            println!("   1. Virtual grid: coordinates span all monitors (0,0) to (7,11)");
+                            println!("   2. Monitor grid: coordinates on specific monitor (0,0) to (7,11)");
                         }
                         "q" | "quit" | "exit" => {
                             println!("👋 [CLIENT-{}] User requested exit", client_id);

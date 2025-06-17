@@ -3,6 +3,7 @@ use iceoryx2::prelude::*;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use serde::{Deserialize, Serialize};
+use std::ptr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -46,10 +47,11 @@ impl Default for WindowEvent {
 #[derive(Debug, Clone, Copy, PartialEq,ZeroCopySend)]
 #[repr(C)]
 pub struct WindowCommand {
-    pub command_type: u8, // 0=move_window, 1=get_state, 2=get_windows
+    pub command_type: u8, // 0=move_window, 1=get_state, 2=get_windows, 3=assign_window_virtual, 4=assign_window_monitor
     pub hwnd: u64,
     pub target_row: u32,
     pub target_col: u32,
+    pub monitor_id: u32, // Monitor index for per-monitor assignment (ignored for virtual grid)
 }
 
 impl Default for WindowCommand {
@@ -59,6 +61,7 @@ impl Default for WindowCommand {
             hwnd: 0,
             target_row: 0,
             target_col: 0,
+            monitor_id: 0,
         }
     }
 }
@@ -117,6 +120,17 @@ pub enum GridCommand {
         hwnd: u64,
         target_row: usize,
         target_col: usize,
+    },
+    AssignWindowToVirtualCell {
+        hwnd: u64,
+        target_row: usize,
+        target_col: usize,
+    },
+    AssignWindowToMonitorCell {
+        hwnd: u64,
+        target_row: usize,
+        target_col: usize,
+        monitor_id: usize,
     },
     GetGridState,
     GetWindowList,
@@ -264,7 +278,7 @@ impl GridIpcManager {
         Ok(())
     }
 
-    pub fn handle_command(&self, command: GridCommand) -> Result<GridResponse, Box<dyn std::error::Error>> {
+    pub fn handle_command(&mut self, command: GridCommand) -> Result<GridResponse, Box<dyn std::error::Error>> {
         match command {            GridCommand::GetGridState => {
                 if let Ok(tracker) = self.tracker.lock() {
                     let total_windows = tracker.windows.len();
@@ -324,8 +338,7 @@ impl GridIpcManager {
                 } else {
                     Ok(GridResponse::Error("Failed to access window tracker".to_string()))
                 }
-            }
-            GridCommand::MoveWindowToCell { hwnd, target_row, target_col } => {
+            }            GridCommand::MoveWindowToCell { hwnd, target_row, target_col } => {
                 println!("🎯 Request to move window {} to cell ({}, {})", hwnd, target_row, target_col);
                 
                 // TODO: Implement actual window movement using Windows API
@@ -333,11 +346,24 @@ impl GridIpcManager {
                     Ok(_) => Ok(GridResponse::Success),
                     Err(e) => Ok(GridResponse::Error(format!("Failed to move window: {}", e))),
                 }
+            }            GridCommand::AssignWindowToVirtualCell { hwnd, target_row, target_col } => {
+                println!("📍 Request to assign window {} to virtual grid cell ({}, {})", hwnd, target_row, target_col);
+                
+                match self.assign_window_to_virtual_cell(hwnd, target_row, target_col) {
+                    Ok(_) => Ok(GridResponse::Success),
+                    Err(e) => Ok(GridResponse::Error(format!("Failed to assign window to virtual cell: {}", e))),
+                }
+            }
+            GridCommand::AssignWindowToMonitorCell { hwnd, target_row, target_col, monitor_id } => {
+                println!("📍 Request to assign window {} to monitor {} cell ({}, {})", hwnd, monitor_id, target_row, target_col);
+                
+                match self.assign_window_to_monitor_cell(hwnd, target_row, target_col, monitor_id) {
+                    Ok(_) => Ok(GridResponse::Success),
+                    Err(e) => Ok(GridResponse::Error(format!("Failed to assign window to monitor cell: {}", e))),
+                }
             }
         }
-    }
-
-    fn move_window_to_cell(&self, hwnd: u64, target_row: usize, target_col: usize) -> Result<(), Box<dyn std::error::Error>> {
+    }    fn move_window_to_cell(&mut self, hwnd: u64, target_row: usize, target_col: usize) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: Implement actual window movement logic
         // This would involve:
         // 1. Calculate target position based on grid dimensions
@@ -348,15 +374,195 @@ impl GridIpcManager {
         Ok(())
     }
 
+    // Assignment to virtual grid (coordinates span all monitors)
+    fn assign_window_to_virtual_cell(&mut self, hwnd: u64, target_row: usize, target_col: usize) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            // Find the window in our tracking and save the title first
+            let window_title = if let Some(window) = tracker.windows.get(&(hwnd as winapi::shared::windef::HWND)) {
+                window.title.clone()
+            } else {
+                return Err(format!("Window with HWND {} not found in tracker", hwnd).into());
+            };
+            
+            // Now we can safely modify the window
+            if let Some(window) = tracker.windows.get_mut(&(hwnd as winapi::shared::windef::HWND)) {
+                // Clear existing grid assignments for this window
+                window.grid_cells.clear();
+                
+                // Assign to the new cell
+                window.grid_cells.push((target_row, target_col));
+                
+                println!("✅ Assigned window {} '{}' to virtual grid cell ({}, {})", 
+                    hwnd, 
+                    if window_title.len() > 30 { 
+                        format!("{}...", &window_title[..30]) 
+                    } else { 
+                        window_title.clone() 
+                    }, 
+                    target_row, 
+                    target_col
+                );            }
+            
+            // Update both virtual and monitor grids
+            tracker.update_grid();
+            tracker.update_monitor_grids();
+              // Release the tracker lock before moving the window
+            drop(tracker);
+              // Calculate the target position for the virtual grid cell
+            match self.calculate_virtual_cell_position(target_row, target_col) {
+                Ok((cell_left, cell_top, cell_right, cell_bottom)) => {
+                    // Calculate cell dimensions
+                    let cell_width = cell_right - cell_left;
+                    let cell_height = cell_bottom - cell_top;
+                    
+                    // Calculate window position and size to fill the cell
+                    let window_width = cell_width.max(100);  // Minimum width of 100
+                    let window_height = cell_height.max(50); // Minimum height of 50
+                    let window_left = cell_left;
+                    let window_top = cell_top;
+                    
+                    println!("🔧 Cell bounds: ({}, {}) to ({}, {}) [{}x{}]", 
+                        cell_left, cell_top, cell_right, cell_bottom, cell_width, cell_height);
+                    println!("🎯 Window bounds: ({}, {}) [{}x{}]", 
+                        window_left, window_top, window_width, window_height);
+                    
+                    // Move the window to the calculated position
+                    if let Err(e) = self.move_window_to_position(hwnd, window_left, window_top, window_width, window_height) {
+                        println!("⚠️ Failed to physically move window {}: {}", hwnd, e);
+                    } else {
+                        println!("🎯 Successfully moved window {} to virtual grid cell ({}, {})", hwnd, target_row, target_col);
+                    }
+                }
+                Err(e) => {
+                    println!("⚠️ Failed to calculate position for virtual grid cell ({}, {}): {}", target_row, target_col, e);
+                }
+            }
+            
+            // Publish an event about the assignment
+            let event = crate::ipc::GridEvent::WindowMoved {
+                hwnd,
+                title: window_title,
+                old_row: 0, // We don't track previous assignment currently
+                old_col: 0,
+                new_row: target_row,
+                new_col: target_col,
+            };
+            
+            // Convert and publish the event
+            let window_event = self.grid_event_to_window_event(&event);
+            if let Some(ref mut publisher) = self.event_publisher {
+                let _ = publisher.send_copy(window_event);
+            }
+            
+            Ok(())
+        } else {
+            Err("Failed to acquire window tracker lock".into())
+        }
+    }
+
+    // Assignment to specific monitor grid
+    fn assign_window_to_monitor_cell(&mut self, hwnd: u64, target_row: usize, target_col: usize, monitor_id: usize) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            // Find the window in our tracking and save the title first
+            let window_title = if let Some(window) = tracker.windows.get(&(hwnd as winapi::shared::windef::HWND)) {
+                window.title.clone()
+            } else {
+                return Err(format!("Window with HWND {} not found in tracker", hwnd).into());
+            };
+            
+            // Check if the monitor exists
+            if monitor_id >= tracker.monitor_grids.len() {
+                return Err(format!("Monitor {} does not exist. Available monitors: 0-{}", 
+                    monitor_id, tracker.monitor_grids.len() - 1).into());
+            }
+            
+            // Now we can safely modify the window
+            if let Some(window) = tracker.windows.get_mut(&(hwnd as winapi::shared::windef::HWND)) {
+                // Clear existing monitor assignments for this window
+                window.monitor_cells.clear();
+                
+                // Assign to the new monitor cell
+                window.monitor_cells.insert(monitor_id, vec![(target_row, target_col)]);
+                
+                println!("✅ Assigned window {} '{}' to monitor {} grid cell ({}, {})", 
+                    hwnd, 
+                    if window_title.len() > 30 { 
+                        format!("{}...", &window_title[..30]) 
+                    } else { 
+                        window_title.clone() 
+                    }, 
+                    monitor_id,
+                    target_row, 
+                    target_col
+                );            }
+            
+            // Update both virtual and monitor grids
+            tracker.update_grid();
+            tracker.update_monitor_grids();
+            
+            // Release the tracker lock before moving the window
+            drop(tracker);
+              // Calculate the target position for the monitor grid cell
+            match self.calculate_monitor_cell_position(target_row, target_col, monitor_id) {
+                Ok((cell_left, cell_top, cell_right, cell_bottom)) => {
+                    // Calculate cell dimensions
+                    let cell_width = cell_right - cell_left;                    let cell_height = cell_bottom - cell_top;
+                    
+                    // Calculate window position and size to fill the cell
+                    let window_width = cell_width.max(100);  // Minimum width of 100
+                    let window_height = cell_height.max(50); // Minimum height of 50
+                    let window_left = cell_left;
+                    let window_top = cell_top;
+                    
+                    println!("🔧 Monitor {} cell bounds: ({}, {}) to ({}, {}) [{}x{}]", 
+                        monitor_id, cell_left, cell_top, cell_right, cell_bottom, cell_width, cell_height);
+                    println!("🎯 Window bounds: ({}, {}) [{}x{}]", 
+                        window_left, window_top, window_width, window_height);
+                    
+                    // Move the window to the calculated position
+                    if let Err(e) = self.move_window_to_position(hwnd, window_left, window_top, window_width, window_height) {
+                        println!("⚠️ Failed to physically move window {}: {}", hwnd, e);
+                    } else {
+                        println!("🎯 Successfully moved window {} to monitor {} grid cell ({}, {})", hwnd, monitor_id, target_row, target_col);
+                    }
+                }
+                Err(e) => {
+                    println!("⚠️ Failed to calculate position for monitor {} grid cell ({}, {}): {}", monitor_id, target_row, target_col, e);
+                }
+            }
+            
+            // Publish an event about the assignment
+            let event = crate::ipc::GridEvent::WindowMoved {
+                hwnd,
+                title: window_title,
+                old_row: 0, // We don't track previous assignment currently
+                old_col: 0,
+                new_row: target_row,
+                new_col: target_col,
+            };
+            
+            // Convert and publish the event
+            let window_event = self.grid_event_to_window_event(&event);
+            if let Some(ref mut publisher) = self.event_publisher {
+                let _ = publisher.send_copy(window_event);
+            }
+            
+            Ok(())
+        } else {
+            Err("Failed to acquire window tracker lock".into())
+        }
+    }
+
     fn count_occupied_cells(&self, tracker: &WindowTracker) -> usize {
         let mut occupied = std::collections::HashSet::new();
         for window in tracker.windows.values() {
             for &(row, col) in &window.grid_cells {
                 occupied.insert((row, col));
             }
-        }
-        occupied.len()
-    }    // Conversion functions between high-level and zero-copy types
+        }        occupied.len()
+    }
+
+    // Conversion functions between high-level and zero-copy types
     fn grid_event_to_window_event(&self, event: &GridEvent) -> WindowEvent {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -407,9 +613,21 @@ impl GridIpcManager {
             },
             1 => GridCommand::GetGridState,
             2 => GridCommand::GetWindowList,
-            _ => GridCommand::GetGridState, // Default fallback
+            3 => GridCommand::AssignWindowToVirtualCell {
+                hwnd: command.hwnd,
+                target_row: command.target_row as usize,
+                target_col: command.target_col as usize,
+            },
+            4 => GridCommand::AssignWindowToMonitorCell {
+                hwnd: command.hwnd,
+                target_row: command.target_row as usize,
+                target_col: command.target_col as usize,
+                monitor_id: command.monitor_id as usize,
+            },            _ => GridCommand::GetGridState, // Default fallback
         }
-    }    fn grid_response_to_window_response(response: &GridResponse) -> WindowResponse {
+    }
+
+    fn grid_response_to_window_response(response: &GridResponse) -> WindowResponse {
         match response {
             GridResponse::Success => WindowResponse {
                 response_type: 0,
@@ -475,9 +693,7 @@ impl GridIpcManager {
     pub fn publish_window_moved(&mut self, hwnd: u64, title: String, old_row: usize, old_col: usize, new_row: usize, new_col: usize) -> Result<(), Box<dyn std::error::Error>> {
         let event = GridEvent::WindowMoved { hwnd, title, old_row, old_col, new_row, new_col };
         self.publish_event(event)
-    }
-
-    pub fn publish_grid_state_changed(&mut self, total_windows: usize, occupied_cells: usize) -> Result<(), Box<dyn std::error::Error>> {
+    }    pub fn publish_grid_state_changed(&mut self, total_windows: usize, occupied_cells: usize) -> Result<(), Box<dyn std::error::Error>> {
         let event = GridEvent::GridStateChanged {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -487,5 +703,130 @@ impl GridIpcManager {
             occupied_cells,
         };
         self.publish_event(event)
+    }
+
+    // Calculate position for virtual grid (coordinates span all monitors)
+    fn calculate_virtual_cell_position(&self, target_row: usize, target_col: usize) -> Result<(i32, i32, i32, i32), Box<dyn std::error::Error>> {
+        if let Ok(tracker) = self.tracker.lock() {
+            // Use the virtual grid (spanning all monitors)
+            let (left, top, right, bottom) = (
+                tracker.monitor_rect.left,
+                tracker.monitor_rect.top,
+                tracker.monitor_rect.right,
+                tracker.monitor_rect.bottom
+            );
+            
+            let cell_width = (right - left) / crate::GRID_COLS as i32;
+            let cell_height = (bottom - top) / crate::GRID_ROWS as i32;
+            
+            if target_row < crate::GRID_ROWS && target_col < crate::GRID_COLS {
+                let cell_left = left + (target_col as i32 * cell_width);
+                let cell_top = top + (target_row as i32 * cell_height);
+                let cell_right = cell_left + cell_width;
+                let cell_bottom = cell_top + cell_height;
+                
+                println!("🔧 Calculated VIRTUAL GRID cell position for ({}, {}): screen coords ({}, {}) to ({}, {})", 
+                    target_row, target_col, cell_left, cell_top, cell_right, cell_bottom);
+                println!("   Virtual screen bounds: ({}, {}) to ({}, {})", left, top, right, bottom);
+                
+                Ok((cell_left, cell_top, cell_right, cell_bottom))
+            } else {
+                Err(format!("Invalid virtual grid coordinates: ({}, {}). Max is ({}, {})", 
+                    target_row, target_col, crate::GRID_ROWS - 1, crate::GRID_COLS - 1).into())
+            }
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }
+
+    // Calculate position for specific monitor grid
+    fn calculate_monitor_cell_position(&self, target_row: usize, target_col: usize, monitor_id: usize) -> Result<(i32, i32, i32, i32), Box<dyn std::error::Error>> {
+        if let Ok(tracker) = self.tracker.lock() {
+            // Get the specific monitor
+            if monitor_id >= tracker.monitor_grids.len() {
+                return Err(format!("Monitor {} does not exist. Available monitors: 0-{}", 
+                    monitor_id, tracker.monitor_grids.len() - 1).into());
+            }
+            
+            let monitor = &tracker.monitor_grids[monitor_id];
+            let (left, top, right, bottom) = monitor.monitor_rect;
+            
+            let cell_width = (right - left) / crate::GRID_COLS as i32;
+            let cell_height = (bottom - top) / crate::GRID_ROWS as i32;
+            
+            if target_row < crate::GRID_ROWS && target_col < crate::GRID_COLS {
+                let cell_left = left + (target_col as i32 * cell_width);
+                let cell_top = top + (target_row as i32 * cell_height);
+                let cell_right = cell_left + cell_width;
+                let cell_bottom = cell_top + cell_height;
+                
+                println!("🔧 Calculated MONITOR {} GRID cell position for ({}, {}): screen coords ({}, {}) to ({}, {})", 
+                    monitor_id, target_row, target_col, cell_left, cell_top, cell_right, cell_bottom);
+                println!("   Monitor {} bounds: ({}, {}) to ({}, {})", monitor_id, left, top, right, bottom);
+                
+                Ok((cell_left, cell_top, cell_right, cell_bottom))
+            } else {
+                Err(format!("Invalid monitor grid coordinates: ({}, {}). Max is ({}, {})", 
+                    target_row, target_col, crate::GRID_ROWS - 1, crate::GRID_COLS - 1).into())
+            }
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }    fn move_window_to_position(&self, hwnd: u64, left: i32, top: i32, width: i32, height: i32) -> Result<(), Box<dyn std::error::Error>> {
+        use winapi::um::winuser::{SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE};
+        
+        let hwnd_handle = hwnd as winapi::shared::windef::HWND;
+        
+        unsafe {
+            let result = SetWindowPos(
+                hwnd_handle,
+                ptr::null_mut(), // HWND_TOP equivalent (we use SWP_NOZORDER to ignore this)
+                left,
+                top,
+                width,
+                height,
+                SWP_NOZORDER | SWP_NOACTIVATE, // Don't change Z-order, don't activate
+            );
+            
+            if result == 0 {
+                Err("Failed to move window".into())
+            } else {
+                println!("🔧 Moved window {} to position ({}, {}) with size {}x{}", hwnd, left, top, width, height);                // Rescan the grid to update internal tracking after the window move
+                if let Ok(mut tracker) = self.tracker.lock() {
+                    println!("🔄 Rescanning grid after window movement...");
+                    
+                    // Update the window's rectangle in our tracking
+                    if let Some(new_rect) = crate::WindowTracker::get_window_rect(hwnd_handle) {
+                        if let Some(window) = tracker.windows.get_mut(&hwnd_handle) {
+                            window.rect = new_rect;
+                            println!("   📍 Updated window {} rect to ({}, {}) - ({}, {})", 
+                                hwnd, new_rect.left, new_rect.top, new_rect.right, new_rect.bottom);
+                        }
+                        
+                        // Now recalculate grid cells after releasing the mutable reference
+                        let grid_cells = tracker.window_to_grid_cells(&new_rect);
+                        let monitor_cells = tracker.calculate_monitor_cells(&new_rect);
+                        
+                        // Update the window with the new grid assignments
+                        if let Some(window) = tracker.windows.get_mut(&hwnd_handle) {
+                            window.grid_cells = grid_cells;
+                            window.monitor_cells = monitor_cells;
+                            
+                            println!("   🔄 Recalculated grid assignments: {} virtual cells, {} monitor assignments", 
+                                window.grid_cells.len(), window.monitor_cells.len());
+                        }
+                    }
+                      // Update both virtual and monitor grids
+                    tracker.update_grid();
+                    tracker.update_monitor_grids();
+                    
+                    println!("✅ Grid rescan complete after window movement");
+                } else {
+                    println!("⚠️ Failed to acquire tracker lock for grid rescan");
+                }
+                
+                Ok(())
+            }
+        }
     }
 }

@@ -8,6 +8,10 @@ use winapi::um::winuser::*;
 pub const GRID_ROWS: usize = 8;
 pub const GRID_COLS: usize = 12;
 
+// Coverage threshold: percentage of cell area that must be covered by window
+// to consider the window as occupying that cell (0.0 to 1.0)
+const COVERAGE_THRESHOLD: f32 = 0.3; // 30% coverage required
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CellState {
     Empty,           // No window (on-screen area)
@@ -55,15 +59,28 @@ impl MonitorGrid {
             return cells;
         }
 
+        // Calculate potential range of cells that might be affected
         let start_col = ((rect.left.max(left) - left) / cell_width).max(0) as usize;
         let end_col = ((rect.right.min(right) - left) / cell_width).min(GRID_COLS as i32 - 1) as usize;
         let start_row = ((rect.top.max(top) - top) / cell_height).max(0) as usize;
         let end_row = ((rect.bottom.min(bottom) - top) / cell_height).min(GRID_ROWS as i32 - 1) as usize;
 
+        // Check coverage for each potentially affected cell
         for row in start_row..=end_row {
             for col in start_col..=end_col {
                 if row < GRID_ROWS && col < GRID_COLS {
-                    cells.push((row, col));
+                    // Calculate the exact bounds of this grid cell
+                    let cell_rect = RECT {
+                        left: left + (col as i32 * cell_width),
+                        top: top + (row as i32 * cell_height),
+                        right: left + ((col + 1) as i32 * cell_width),
+                        bottom: top + ((row + 1) as i32 * cell_height),
+                    };
+                    
+                    // Only include cell if window meets coverage threshold
+                    if meets_coverage_threshold(rect, &cell_rect) {
+                        cells.push((row, col));
+                    }
                 }
             }
         }
@@ -217,6 +234,7 @@ impl WindowTracker {
             return cells;
         }
 
+        // Calculate potential range of cells that might be affected
         let start_col = ((rect.left - self.monitor_rect.left) / cell_width).max(0) as usize;
         let end_col = ((rect.right - self.monitor_rect.left) / cell_width).min(GRID_COLS as i32 - 1) as usize;
         let start_row = ((rect.top - self.monitor_rect.top) / cell_height).max(0) as usize;
@@ -227,10 +245,22 @@ impl WindowTracker {
             return cells;
         }
 
+        // Check coverage for each potentially affected cell
         for row in start_row..=end_row {
             for col in start_col..=end_col {
                 if row < GRID_ROWS && col < GRID_COLS {
-                    cells.push((row, col));
+                    // Calculate the exact bounds of this grid cell
+                    let cell_rect = RECT {
+                        left: self.monitor_rect.left + (col as i32 * cell_width),
+                        top: self.monitor_rect.top + (row as i32 * cell_height),
+                        right: self.monitor_rect.left + ((col + 1) as i32 * cell_width),
+                        bottom: self.monitor_rect.top + ((row + 1) as i32 * cell_height),
+                    };
+                    
+                    // Only include cell if window meets coverage threshold
+                    if meets_coverage_threshold(rect, &cell_rect) {
+                        cells.push((row, col));
+                    }
                 }
             }
         }
@@ -555,6 +585,33 @@ impl WindowTracker {
             monitor_grid.update_grid(&self.windows);
         }
     }
+}
+
+// Helper function to calculate intersection area between two rectangles
+fn calculate_intersection_area(rect1: &RECT, rect2: &RECT) -> i32 {
+    let left = rect1.left.max(rect2.left);
+    let top = rect1.top.max(rect2.top);
+    let right = rect1.right.min(rect2.right);
+    let bottom = rect1.bottom.min(rect2.bottom);
+    
+    if left < right && top < bottom {
+        (right - left) * (bottom - top)
+    } else {
+        0
+    }
+}
+
+// Helper function to check if window coverage of a cell meets the threshold
+fn meets_coverage_threshold(window_rect: &RECT, cell_rect: &RECT) -> bool {
+    let intersection_area = calculate_intersection_area(window_rect, cell_rect);
+    let cell_area = (cell_rect.right - cell_rect.left) * (cell_rect.bottom - cell_rect.top);
+    
+    if cell_area <= 0 {
+        return false;
+    }
+    
+    let coverage_ratio = intersection_area as f32 / cell_area as f32;
+    coverage_ratio >= COVERAGE_THRESHOLD
 }
 
 // Windows event hook integration using SetWinEventHook
