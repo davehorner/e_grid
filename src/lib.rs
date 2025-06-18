@@ -102,6 +102,32 @@ impl MonitorGrid {
             }
         }
     }
+
+    pub fn print_grid(&self) {
+        // Column headers
+        print!("    ");
+        for col in 0..GRID_COLS {
+            print!(" {:2}", col);
+        }
+        println!();
+
+        for row in 0..GRID_ROWS {
+            print!("{:2}: ", row);
+            for col in 0..GRID_COLS {
+                match self.grid[row][col] {
+                    CellState::Empty => print!(" . "),
+                    CellState::Occupied(hwnd) => {
+                        // Show last 2 digits of HWND for compactness
+                        let hwnd_u64 = hwnd as u64;
+                        let display_val = (hwnd_u64 % 100) as u8;
+                        print!("{:2X} ", display_val);
+                    }
+                    CellState::OffScreen => print!(" - "),
+                }
+            }
+            println!();
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -191,7 +217,27 @@ impl WindowTracker {
 
     pub fn is_manageable_window(hwnd: HWND) -> bool {
         unsafe {
+            let title = Self::get_window_title(hwnd);
+            
+            // Debug: Print details for client-related windows
+            if title.contains("Client") || title.contains("cargo") || title.contains("grid") {
+                println!("🔍 DEBUG: Checking client-related window: '{}'", title);
+                println!("   HWND: {:?}", hwnd);
+                println!("   IsWindow: {}", IsWindow(hwnd));
+                println!("   IsWindowVisible: {}", IsWindowVisible(hwnd));
+                println!("   IsIconic: {}", IsIconic(hwnd));
+                let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                println!("   ExStyle: 0x{:X}", ex_style);
+                println!("   WS_EX_TOOLWINDOW: {}", (ex_style & WS_EX_TOOLWINDOW) != 0);
+                println!("   WS_EX_APPWINDOW: {}", (ex_style & WS_EX_APPWINDOW) != 0);
+            }
+            
             if IsWindow(hwnd) == 0 || IsWindowVisible(hwnd) == 0 {
+                return false;
+            }
+
+            // Skip minimized windows
+            if IsIconic(hwnd) != 0 {
                 return false;
             }
 
@@ -199,10 +245,12 @@ impl WindowTracker {
             
             // Skip tool windows unless they have app window flag
             if (ex_style & WS_EX_TOOLWINDOW) != 0 && (ex_style & WS_EX_APPWINDOW) == 0 {
+                if title.contains("Client") || title.contains("cargo") || title.contains("grid") {
+                    println!("   ❌ Filtered out due to WS_EX_TOOLWINDOW");
+                }
                 return false;
             }
 
-            let title = Self::get_window_title(hwnd);
             if title.is_empty() {
                 return false;
             }
@@ -212,6 +260,10 @@ impl WindowTracker {
                 || title.contains("Task Switching")
                 || title.contains("Windows Input Experience") {
                 return false;
+            }
+
+            if title.contains("Client") || title.contains("cargo") || title.contains("grid") {
+                println!("   ✅ Window passed all filters - will be tracked");
             }
 
             true
@@ -619,6 +671,12 @@ pub mod window_events;
 
 // iceoryx2 IPC integration for command and control
 pub mod ipc;
+
+// Client module for real-time grid reconstruction and monitoring
+pub mod ipc_client;
+
+// Server module for IPC server functionality
+pub mod ipc_server;
 
 // Window enumeration callback function
 unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> i32 {

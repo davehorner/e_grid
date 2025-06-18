@@ -6,11 +6,14 @@ use serde::{Deserialize, Serialize};
 use std::ptr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use winapi::shared::windef::HWND;
 
 // Service names for iceoryx2 communication  
 pub const GRID_EVENTS_SERVICE: &str = "e_grid_events";
 pub const GRID_COMMANDS_SERVICE: &str = "e_grid_commands";
 pub const GRID_RESPONSE_SERVICE: &str = "e_grid_responses";
+pub const GRID_WINDOW_LIST_SERVICE: &str = "e_grid_window_list"; // Deprecated - chunked approach
+pub const GRID_WINDOW_DETAILS_SERVICE: &str = "e_grid_window_details"; // Individual window details
 
 // Zero-copy compatible data types for iceoryx2
 // Using only basic types that work with iceoryx2's zero-copy requirements
@@ -69,7 +72,7 @@ impl Default for WindowCommand {
 #[derive(Debug, Clone, Copy, PartialEq,ZeroCopySend)]
 #[repr(C)]
 pub struct WindowResponse {
-    pub response_type: u8, // 0=success, 1=error, 2=window_list
+    pub response_type: u8, // 0=success, 1=error, 2=window_list_count, 3=individual_window
     pub error_code: u32,
     pub window_count: u32,
     pub data: [u64; 4], // Generic data payload
@@ -82,6 +85,81 @@ impl Default for WindowResponse {
             error_code: 0,
             window_count: 0,
             data: [0; 4],
+        }
+    }
+}
+
+// Individual window information with position data
+#[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
+#[repr(C)]
+pub struct WindowPositionInfo {
+    pub hwnd: u64,
+    pub top_left_row: u32,
+    pub top_left_col: u32,
+    pub bottom_right_row: u32,
+    pub bottom_right_col: u32,
+    pub width: u32,
+    pub height: u32,
+    pub x: i32,
+    pub y: i32,
+}
+
+impl Default for WindowPositionInfo {
+    fn default() -> Self {
+        Self {
+            hwnd: 0,
+            top_left_row: 0,
+            top_left_col: 0,
+            bottom_right_row: 0,
+            bottom_right_col: 0,
+            width: 0,
+            height: 0,
+            x: 0,
+            y: 0,
+        }
+    }
+}
+
+// Zero-copy compatible individual window information for IPC
+// Based on the WindowInfo from lib.rs but optimized for IPC
+#[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
+#[repr(C)]
+pub struct WindowDetails {
+    pub hwnd: u64,
+    pub x: i32,         // Window rectangle coordinates
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub virtual_row_start: u32,    // Top-left grid position in virtual grid
+    pub virtual_col_start: u32,
+    pub virtual_row_end: u32,      // Bottom-right grid position in virtual grid  
+    pub virtual_col_end: u32,
+    pub monitor_id: u32,           // Which monitor this window is primarily on
+    pub monitor_row_start: u32,    // Top-left grid position in monitor grid
+    pub monitor_col_start: u32,
+    pub monitor_row_end: u32,      // Bottom-right grid position in monitor grid
+    pub monitor_col_end: u32,
+    pub title_len: u32,            // Length of title (for separate title transmission)
+}
+
+impl Default for WindowDetails {
+    fn default() -> Self {
+        Self {
+            hwnd: 0,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            virtual_row_start: 0,
+            virtual_col_start: 0,
+            virtual_row_end: 0,
+            virtual_col_end: 0,
+            monitor_id: 0,
+            monitor_row_start: 0,
+            monitor_col_start: 0,
+            monitor_row_end: 0,
+            monitor_col_end: 0,
+            title_len: 0,
         }
     }
 }
@@ -169,36 +247,36 @@ pub struct GridIpcManager {
     
     // iceoryx2 node
     node: Option<Node<ipc::Service>>,
-    
-    // iceoryx2 services
+      // iceoryx2 services
     event_publisher: Option<Publisher<ipc::Service, WindowEvent, ()>>,
     command_subscriber: Option<Subscriber<ipc::Service, WindowCommand, ()>>,
     response_publisher: Option<Publisher<ipc::Service, WindowResponse, ()>>,
+    window_details_publisher: Option<Publisher<ipc::Service, WindowDetails, ()>>, // Individual window details
     
     is_running: bool,
 }
 
-impl GridIpcManager {
-    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self { 
+impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Result<Self, Box<dyn std::error::Error>> {        Ok(Self { 
             tracker,
             event_listeners: Vec::new(),
             node: None,
             event_publisher: None,
             command_subscriber: None,
             response_publisher: None,
+            window_details_publisher: None, // Initialize window details publisher
             is_running: false,
         })
-    }    pub fn setup_services(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    }pub fn setup_services(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("🔧 Setting up iceoryx2 IPC services...");
         
         // Create iceoryx2 node
         let node = NodeBuilder::new().create::<ipc::Service>()?;
-        
-        // Setup event publishing service
+          // Setup event publishing service
         let event_service = node
             .service_builder(&ServiceName::new(GRID_EVENTS_SERVICE)?)
             .publish_subscribe::<WindowEvent>()
+            .max_publishers(8)  // Increase from default (usually 2)
+            .max_subscribers(8) // Increase from default (usually 2)
             .open_or_create()?;
         
         self.event_publisher = Some(event_service.publisher_builder().create()?);
@@ -207,17 +285,28 @@ impl GridIpcManager {
         let command_service = node
             .service_builder(&ServiceName::new(GRID_COMMANDS_SERVICE)?)
             .publish_subscribe::<WindowCommand>()
+            .max_publishers(8)  // Increase from default (usually 2)
+            .max_subscribers(8) // Increase from default (usually 2)
             .open_or_create()?;
         
         self.command_subscriber = Some(command_service.subscriber_builder().create()?);
-        
-        // Setup response publishing service
+          // Setup response publishing service
         let response_service = node
             .service_builder(&ServiceName::new(GRID_RESPONSE_SERVICE)?)
             .publish_subscribe::<WindowResponse>()
+            .max_publishers(8)  // Increase from default (usually 2)
+            .max_subscribers(8) // Increase from default (usually 2)
+            .open_or_create()?;
+          self.response_publisher = Some(response_service.publisher_builder().create()?);
+          // Setup window details publishing service 
+        let window_details_service = node
+            .service_builder(&ServiceName::new(GRID_WINDOW_DETAILS_SERVICE)?)
+            .publish_subscribe::<WindowDetails>()
+            .max_publishers(8)  // Increase from default (usually 2)
+            .max_subscribers(8) // Increase from default (usually 2)
             .open_or_create()?;
         
-        self.response_publisher = Some(response_service.publisher_builder().create()?);
+        self.window_details_publisher = Some(window_details_service.publisher_builder().create()?);
         
         // Store the node
         self.node = Some(node);
@@ -226,10 +315,11 @@ impl GridIpcManager {
         println!("   📡 Event service: {}", GRID_EVENTS_SERVICE);
         println!("   📨 Command service: {}", GRID_COMMANDS_SERVICE);
         println!("   📤 Response service: {}", GRID_RESPONSE_SERVICE);
+        println!("   📋 Window details service: {}", GRID_WINDOW_DETAILS_SERVICE);
 
         self.is_running = true;
         Ok(())
-    }    pub fn publish_event(&mut self, event: GridEvent) -> Result<(), Box<dyn std::error::Error>> {
+    }pub fn publish_event(&mut self, event: GridEvent) -> Result<(), Box<dyn std::error::Error>> {
         // Convert high-level event to zero-copy format
         let window_event = self.grid_event_to_window_event(&event);
         
@@ -310,35 +400,26 @@ impl GridIpcManager {
                 } else {
                     Ok(GridResponse::Error("Failed to access window tracker".to_string()))
                 }
-            }
-            GridCommand::GetWindowList => {
-                if let Ok(tracker) = self.tracker.lock() {
-                    let windows: Vec<WindowInfo> = tracker.windows.iter()
-                        .map(|(hwnd, window)| {
-                            let (row, col) = if !window.grid_cells.is_empty() {
-                                (window.grid_cells[0].0, window.grid_cells[0].1)
-                            } else {
-                                (0, 0)
-                            };
-                            
-                            WindowInfo {
-                                hwnd: *hwnd as u64,
-                                title: window.title.clone(),
-                                x: window.rect.left,
-                                y: window.rect.top,
-                                width: window.rect.right - window.rect.left,
-                                height: window.rect.bottom - window.rect.top,
-                                row,
-                                col,
-                            }
-                        })
-                        .collect();
-                    
-                    Ok(GridResponse::WindowList { windows })
+            }            GridCommand::GetWindowList => {
+                let hwnd_list = if let Ok(tracker) = self.tracker.lock() {
+                    // Collect HWNDs for the window list response
+                    tracker.windows.keys()
+                        .map(|hwnd| *hwnd as u64)
+                        .collect::<Vec<u64>>()
                 } else {
-                    Ok(GridResponse::Error("Failed to access window tracker".to_string()))
+                    return Ok(GridResponse::Error("Failed to access window tracker".to_string()));
+                };
+                
+                println!("📋 GetWindowList request - publishing details for {} windows", hwnd_list.len());
+                
+                // Publish individual window details for all windows
+                if let Err(e) = self.publish_all_window_details() {
+                    println!("⚠️ Failed to publish window details: {}", e);
                 }
-            }            GridCommand::MoveWindowToCell { hwnd, target_row, target_col } => {
+                
+                // Still return a simple response via the regular channel
+                Ok(GridResponse::Success)
+            }GridCommand::MoveWindowToCell { hwnd, target_row, target_col } => {
                 println!("🎯 Request to move window {} to cell ({}, {})", hwnd, target_row, target_col);
                 
                 // TODO: Implement actual window movement using Windows API
@@ -705,6 +786,44 @@ impl GridIpcManager {
         self.publish_event(event)
     }
 
+    // Publish individual window details for real-time client updates
+    pub fn publish_window_details(&mut self, hwnd: HWND) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(tracker) = self.tracker.lock() {
+            if let Some(window_info) = tracker.windows.get(&hwnd) {
+                let details = self.window_info_to_details(hwnd, window_info);
+                  if let Some(ref mut publisher) = self.window_details_publisher {
+                    publisher.send_copy(details)?;
+                    println!("📤 Published window details for HWND {:?}", hwnd);
+                } else {
+                    println!("⚠️ Window details publisher not available");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Publish details for all current windows (useful for client initialization)
+    pub fn publish_all_window_details(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(tracker) = self.tracker.lock() {
+            let window_count = tracker.windows.len();
+            println!("📤 Publishing details for {} windows...", window_count);
+            
+            for (&hwnd, window_info) in &tracker.windows {
+                let details = self.window_info_to_details(hwnd, window_info);
+                
+                if let Some(ref mut publisher) = self.window_details_publisher {
+                    publisher.send_copy(details)?;
+                } else {
+                    println!("⚠️ Window details publisher not available");
+                    break;
+                }
+            }
+            
+            println!("✅ Published details for {} windows", window_count);
+        }
+        Ok(())
+    }
+
     // Calculate position for virtual grid (coordinates span all monitors)
     fn calculate_virtual_cell_position(&self, target_row: usize, target_col: usize) -> Result<(i32, i32, i32, i32), Box<dyn std::error::Error>> {
         if let Ok(tracker) = self.tracker.lock() {
@@ -829,4 +948,81 @@ impl GridIpcManager {
             }
         }
     }
+
+    // Helper function to convert WindowInfo to WindowDetails for IPC
+    fn window_info_to_details(&self, hwnd: HWND, window_info: &crate::WindowInfo) -> WindowDetails {
+        // Calculate grid positions for the window
+        let rect = &window_info.rect;
+        
+        // Get virtual grid positions
+        let (virtual_start_row, virtual_start_col, virtual_end_row, virtual_end_col) = 
+            if let Ok(tracker) = self.tracker.lock() {
+                let cells = tracker.window_to_grid_cells(rect);
+                if cells.is_empty() {
+                    (0, 0, 0, 0)
+                } else {
+                    let min_row = cells.iter().map(|(r, _)| *r).min().unwrap_or(0) as u32;
+                    let max_row = cells.iter().map(|(r, _)| *r).max().unwrap_or(0) as u32;
+                    let min_col = cells.iter().map(|(_, c)| *c).min().unwrap_or(0) as u32;
+                    let max_col = cells.iter().map(|(_, c)| *c).max().unwrap_or(0) as u32;
+                    (min_row, min_col, max_row, max_col)
+                }
+            } else {
+                (0, 0, 0, 0)
+            };
+          // Find which monitor this window is primarily on and get monitor grid positions
+        let (monitor_id, monitor_start_row, monitor_start_col, monitor_end_row, monitor_end_col) = 
+            if let Ok(tracker) = self.tracker.lock() {
+                // Find the monitor that contains the center of the window
+                let center_x = rect.left + (rect.right - rect.left) / 2;
+                let center_y = rect.top + (rect.bottom - rect.top) / 2;
+                
+                let mut found_monitor = None;
+                
+                for (i, monitor) in tracker.monitor_grids.iter().enumerate() {
+                    let (left, top, right, bottom) = monitor.monitor_rect;
+                    if center_x >= left && center_x < right && center_y >= top && center_y < bottom {
+                        // Get grid positions within this monitor
+                        let cells = monitor.window_to_grid_cells(rect);
+                        if cells.is_empty() {
+                            found_monitor = Some((i as u32, 0, 0, 0, 0));
+                        } else {
+                            let min_row = cells.iter().map(|(r, _)| *r).min().unwrap_or(0) as u32;
+                            let max_row = cells.iter().map(|(r, _)| *r).max().unwrap_or(0) as u32;
+                            let min_col = cells.iter().map(|(_, c)| *c).min().unwrap_or(0) as u32;
+                            let max_col = cells.iter().map(|(_, c)| *c).max().unwrap_or(0) as u32;
+                            found_monitor = Some((i as u32, min_row, min_col, max_row, max_col));
+                        }
+                        break;
+                    }
+                }
+                
+                found_monitor.unwrap_or((0, 0, 0, 0, 0))
+            } else {
+                (0, 0, 0, 0, 0)
+            };
+        
+        WindowDetails {
+            hwnd: hwnd as u64,
+            x: rect.left,
+            y: rect.top,
+            width: rect.right - rect.left,
+            height: rect.bottom - rect.top,
+            virtual_row_start: virtual_start_row,
+            virtual_col_start: virtual_start_col,
+            virtual_row_end: virtual_end_row,
+            virtual_col_end: virtual_end_col,
+            monitor_id,
+            monitor_row_start: monitor_start_row,
+            monitor_col_start: monitor_start_col,
+            monitor_row_end: monitor_end_row,
+            monitor_col_end: monitor_end_col,
+            title_len: window_info.title.len().min(255) as u32, // Cap at 255 chars
+        }
+    }
+}
+
+// Module definition for iceoryx2 service type
+pub mod ipc {
+    pub use iceoryx2::service::ipc::Service;
 }

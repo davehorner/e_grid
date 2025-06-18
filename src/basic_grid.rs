@@ -29,10 +29,11 @@ impl SimpleTracker {
             right: 1920,
             bottom: 1080,
         };
-        
+
         unsafe {
             SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut rect as *mut _ as *mut _, 0);
-        }        Self {
+        }
+        Self {
             windows: HashMap::new(),
             monitor_rect: rect,
             grid: [[None; GRID_COLS]; GRID_ROWS],
@@ -78,7 +79,7 @@ impl SimpleTracker {
             }
 
             let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-            
+
             if (ex_style & WS_EX_TOOLWINDOW) != 0 && (ex_style & WS_EX_APPWINDOW) == 0 {
                 return false;
             }
@@ -89,20 +90,25 @@ impl SimpleTracker {
             }
 
             // Skip system windows
-            if title.contains("Program Manager") 
+            if title.contains("Program Manager")
                 || title.contains("Task Switching")
-                || title.contains("Windows Input Experience") {
+                || title.contains("Windows Input Experience")
+            {
                 return false;
             }
 
             true
         }
-    }    fn window_to_grid_cells(&self, rect: &RECT) -> Vec<(usize, usize)> {
+    }
+    fn window_to_grid_cells(&self, rect: &RECT) -> Vec<(usize, usize)> {
         let mut cells = Vec::new();
 
         // Skip windows with invalid coordinates (like minimized windows)
-        if rect.left < -30000 || rect.top < -30000 || 
-           rect.right < rect.left || rect.bottom < rect.top {
+        if rect.left < -30000
+            || rect.top < -30000
+            || rect.right < rect.left
+            || rect.bottom < rect.top
+        {
             println!("      Skipping window with invalid coordinates");
             return cells;
         }
@@ -116,9 +122,11 @@ impl SimpleTracker {
         }
 
         let start_col = ((rect.left - self.monitor_rect.left) / cell_width).max(0) as usize;
-        let end_col = ((rect.right - self.monitor_rect.left) / cell_width).min(GRID_COLS as i32 - 1) as usize;
+        let end_col =
+            ((rect.right - self.monitor_rect.left) / cell_width).min(GRID_COLS as i32 - 1) as usize;
         let start_row = ((rect.top - self.monitor_rect.top) / cell_height).max(0) as usize;
-        let end_row = ((rect.bottom - self.monitor_rect.top) / cell_height).min(GRID_ROWS as i32 - 1) as usize;
+        let end_row = ((rect.bottom - self.monitor_rect.top) / cell_height)
+            .min(GRID_ROWS as i32 - 1) as usize;
 
         // Additional bounds checking
         if start_col >= GRID_COLS || start_row >= GRID_ROWS {
@@ -149,21 +157,32 @@ impl SimpleTracker {
                 }
             }
         }
-    }    fn add_window(&mut self, hwnd: HWND) -> bool {
+    }
+    fn add_window(&mut self, hwnd: HWND) -> bool {
         println!("    Getting window rect...");
         if let Some(rect) = Self::get_window_rect(hwnd) {
-            println!("    Got rect: ({},{}) {}x{}", rect.left, rect.top, 
-                rect.right - rect.left, rect.bottom - rect.top);
-            
+            println!(
+                "    Got rect: ({},{}) {}x{}",
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top
+            );
+
             let title = Self::get_window_title(hwnd);
             println!("    Computing grid cells...");
             let grid_cells = self.window_to_grid_cells(&rect);
             println!("    Computed {} grid cells", grid_cells.len());
 
-            println!("Adding window: {} at ({},{}) {}x{} -> {} cells", 
-                title, rect.left, rect.top, 
-                rect.right - rect.left, rect.bottom - rect.top,
-                grid_cells.len());
+            println!(
+                "Adding window: {} at ({},{}) {}x{} -> {} cells",
+                title,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                grid_cells.len()
+            );
 
             let window_info = WindowInfo {
                 title,
@@ -186,10 +205,17 @@ impl SimpleTracker {
     fn print_grid(&self) {
         println!();
         println!("{}", "=".repeat(60));
-        println!("Window Grid Tracker - {}x{} Grid ({} windows)", GRID_ROWS, GRID_COLS, self.windows.len());
-        println!("Monitor: {}x{} px", 
+        println!(
+            "Window Grid Tracker - {}x{} Grid ({} windows)",
+            GRID_ROWS,
+            GRID_COLS,
+            self.windows.len()
+        );
+        println!(
+            "Monitor: {}x{} px",
             self.monitor_rect.right - self.monitor_rect.left,
-            self.monitor_rect.bottom - self.monitor_rect.top);
+            self.monitor_rect.bottom - self.monitor_rect.top
+        );
         println!("{}", "=".repeat(60));
 
         // Print column headers
@@ -202,7 +228,7 @@ impl SimpleTracker {
         // Print grid
         for row in 0..GRID_ROWS {
             print!("{:2} ", row);
-            
+
             for col in 0..GRID_COLS {
                 match self.grid[row][col] {
                     Some(_hwnd) => {
@@ -219,42 +245,47 @@ impl SimpleTracker {
         println!();
         println!("Active Windows:");
         println!("{}", "-".repeat(60));
-        
+
         for (i, (_hwnd, window_info)) in self.windows.iter().enumerate() {
-            println!("## {} ({} cells)", 
-                window_info.title, 
+            println!(
+                "## {} ({} cells)",
+                window_info.title,
                 window_info.grid_cells.len()
             );
         }
-        
+
         println!();
-    }    fn scan_windows(&mut self) {
+    }
+    fn scan_windows(&mut self) {
         println!("Starting window scan...");
         self.enum_counter = 0; // Reset counter
-        
+
         unsafe {
             let result = EnumWindows(Some(simple_enum_proc), self as *mut _ as LPARAM);
             println!("EnumWindows returned: {}", result);
         }
-        
-        println!("Window scan completed. Found {} windows.", self.windows.len());
+
+        println!(
+            "Window scan completed. Found {} windows.",
+            self.windows.len()
+        );
     }
 }
 
 unsafe extern "system" fn simple_enum_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
     let tracker = &mut *(lparam as *mut SimpleTracker);
-    
+
     // Safety counter to prevent infinite loops
     tracker.enum_counter += 1;
     if tracker.enum_counter > 1000 {
         println!("SAFETY: Stopping enumeration after 1000 windows");
         return 0; // Stop enumeration
     }
-    
+
     // Add debug output to see where it might hang
     let title = SimpleTracker::get_window_title(hwnd);
     println!("Checking window #{}: {}", tracker.enum_counter, title);
-    
+
     if SimpleTracker::is_manageable_window(hwnd) {
         println!("  -> Manageable, adding...");
         if tracker.add_window(hwnd) {
@@ -265,20 +296,22 @@ unsafe extern "system" fn simple_enum_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
     } else {
         println!("  -> Not manageable, skipping");
     }
-    
+
     1 // Continue enumeration
 }
 
 fn main() {
     println!("Basic Grid Display Test");
     println!("=======================");
-    
+
     let mut tracker = SimpleTracker::new();
-    
-    println!("Monitor area: {}x{} px", 
+
+    println!(
+        "Monitor area: {}x{} px",
         tracker.monitor_rect.right - tracker.monitor_rect.left,
-        tracker.monitor_rect.bottom - tracker.monitor_rect.top);
-    
+        tracker.monitor_rect.bottom - tracker.monitor_rect.top
+    );
+
     tracker.scan_windows();
     tracker.print_grid();
 

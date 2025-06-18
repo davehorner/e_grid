@@ -1,34 +1,37 @@
 # E-Grid: Advanced Window Grid Management System
 
-A comprehensive window management system that provides real-time window tracking, grid-based positioning, and IPC-based window assignment across multiple monitors.
+A comprehensive, event-driven window management system that provides real-time window tracking, grid-based positioning, and efficient IPC-based communication across multiple monitors.
 
 ## 🎯 Core Features
 
-### Real-Time Window Tracking
-- **Shell Hook Integration**: Uses Windows Shell Hooks to detect window creation, destruction, and activation
+### Event-Driven Real-Time Window Tracking
+- **WinEvent Integration**: Uses Windows WinEvent hooks for true real-time window detection
+- **Non-blocking Architecture**: Minimal WinEvent callbacks prevent system deadlocks
+- **Efficient IPC**: iceoryx2-based high-performance inter-process communication
 - **Multi-Monitor Support**: Tracks windows across all connected monitors with per-monitor grids
 - **Visual Grid Display**: Shows both virtual (spanning all monitors) and per-monitor 8x12 grids
-- **Live Updates**: Automatic grid updates when windows are moved, resized, or closed
 
-### Advanced Window Assignment
+### Advanced Client-Server Architecture
+- **Dedicated Server**: `ipc_server_demo` - Handles window tracking and event publishing
+- **Intelligent Client**: `grid_client_demo` - Real-time grid reconstruction and display
+- **Live Synchronization**: Server publishes individual window details for efficient updates
+- **Command Processing**: GetWindowList, GetGridState, window assignment commands
+- **Background Monitoring**: Client receives real-time updates and maintains matching grid state
+
+### Smart Window Detection & Assignment
+- **Coverage-Based Algorithm**: Only marks cells as occupied when windows cover ≥30% of cell area
 - **Dual Assignment Modes**:
   - **Virtual Grid**: Assign windows using coordinates spanning all monitors
   - **Monitor-Specific**: Assign windows to specific cells on individual monitors
-- **Interactive IPC Client**: Real-time window assignment through command-line interface
-- **Grid State Synchronization**: Automatic rescanning and updating after window movements
-- **Smart Cell Detection**: Coverage-based algorithm that only marks cells as occupied when windows cover ≥30% of the cell area
+- **Precise Grid Representation**: Eliminates false positives from boundary overlaps
+- **Configurable Thresholds**: Adjustable coverage percentage for different use cases
 
-### IPC Communication System
-- **iceoryx2 Integration**: High-performance inter-process communication
-- **Client-Server Architecture**: Separate client for interactive control, server for window management
-- **Real-Time Events**: Live broadcasting of window events and grid state changes
-- **Command Processing**: Support for grid queries, window listing, and assignments
-
-### Intelligent Grid Detection
-- **Coverage Threshold**: Configurable percentage (default 30%) of cell area that must be covered to consider a cell occupied
-- **Precise Assignment**: When assigning windows to single cells, only that cell shows as occupied
-- **Flexible Detection**: Handles windows of any size with accurate grid representation
-- **No False Positives**: Eliminates issues with windows appearing in multiple cells due to boundary overlaps
+### Efficient Communication System
+- **Event Publishing**: Server publishes CREATE/MOVE/DESTROY events for individual windows
+- **On-Demand Data**: Client requests full window list only when needed
+- **Incremental Updates**: Server sends only changed window details, not full state
+- **Deadlock Prevention**: Minimal processing in system callbacks
+- **High Performance**: Zero-copy data sharing via iceoryx2
 
 ## 🎯 Smart Grid Detection System
 
@@ -92,12 +95,67 @@ cd e_grid
 cargo build --release
 ```
 
-### Basic Usage
+### Quick Start - Event-Driven System
 
-#### 1. Run the Interactive Demo (Recommended)
+#### 1. Start the Server (Real-time Window Tracking)
+```bash
+cargo run --bin ipc_server_demo
+```
+This starts the main server that:
+- Tracks all windows in real-time using WinEvents
+- Publishes window details and grid state via IPC
+- Shows periodic grid updates and window counts
+- Handles client commands for window assignment
+- Uses minimal WinEvent callbacks to prevent deadlocks
+- Performs heavy processing in main server loop (every 2 seconds)
+
+#### 2. Start the Client (Grid Visualization & Control)
+```bash
+# In a separate terminal
+cargo run --bin grid_client_demo
+```
+This starts the intelligent client that:
+- Automatically requests window data from server on startup
+- Displays real-time grid updates as windows move
+- Shows detailed window information and grid state
+- Demonstrates efficient event-driven synchronization
+- Uses throttled display updates to prevent UI flooding
+- Implements non-blocking grid state checks with try_lock
+
+#### 3. Legacy Interactive Demo
 ```bash
 cargo run --bin ipc_demo
 ```
+Original combined server/client for interactive window assignment.
+
+### Architecture Overview
+
+```
+┌─────────────────────┐    WinEvents     ┌──────────────────────┐
+│   Windows System    │ ──────────────→  │   IPC Server Demo    │
+│   (Window Events)   │                  │  - Minimal callbacks │
+└─────────────────────┘                  │  - Main loop logic   │
+                                         │  - Window rescanning │
+                                         │  - IPC publishing    │
+                                         └──────────┬───────────┘
+                                                    │ iceoryx2 IPC
+                                                    │ (Events + Details)
+                                                    ▼
+                                         ┌──────────────────────┐
+                                         │  Grid Client Demo    │
+                                         │  - Real-time updates │
+                                         │  - Throttled display │
+                                         │  - Non-blocking UI   │
+                                         │  - Event processing  │
+                                         └──────────────────────┘
+```
+
+**Key Architecture Features:**
+- **Deadlock Prevention**: WinEvent callbacks only log events, no lock acquisition
+- **Main Loop Processing**: All heavy work done in server main loop (every 2 seconds)
+- **Non-blocking Client**: Uses try_lock and display throttling for responsive UI
+- **Event-Driven Updates**: Server publishes incremental changes, not full state dumps
+- **Efficient IPC**: Large buffer sizes (64KB) prevent message loss
 This starts both the server and an interactive client for testing window assignments.
 
 #### 2. Manual Server/Client Setup
@@ -203,30 +261,37 @@ Active Windows:
 
 ### Core Technologies
 - **Rust** with `winapi` for Windows API integration
-- **iceoryx2** for high-performance IPC communication
+- **iceoryx2** for high-performance IPC communication (64KB buffer sizes)
 - **crossterm** for colored terminal output
-- **Windows Shell Hooks** for real-time event detection
+- **Windows WinEvents** for real-time event detection with minimal callbacks
 
 ### Key Features
 - **Thread-Safe Design**: Uses `Arc<Mutex<>>` for safe concurrent access
+- **Deadlock Prevention**: Minimal WinEvent processing, heavy work in main loops
 - **Multi-Monitor Aware**: Automatic detection and handling of monitor configurations
 - **Memory Safe**: Leverages Rust's ownership system and explicit safety documentation
 - **Modular Architecture**: Clean separation of concerns between tracking, IPC, and UI
 - **Smart Grid Detection**: Coverage-based algorithm with configurable thresholds for precise cell assignment
+- **Non-blocking UI**: Client uses try_lock and display throttling for responsive interface
 
 ### Window Management Process
-1. **Shell Hook Registration**: Registers for `HSHELL_WINDOWCREATED`, `HSHELL_WINDOWDESTROYED`, and `HSHELL_WINDOWACTIVATED` events
-2. **Multi-Monitor Detection**: Enumerates all connected monitors and their configurations
-3. **Coverage-Based Grid Calculation**: Calculates intersection areas between windows and grid cells
-4. **Threshold-Based Assignment**: Only assigns cells where window coverage exceeds configurable threshold
-5. **Real-Time Updates**: Automatic rescanning after window movements and assignments
-5. **IPC Communication**: Publishes events and processes commands through iceoryx2
+1. **WinEvent Registration**: Registers for comprehensive window events (CREATE, MOVE, DESTROY, etc.)
+2. **Minimal Callbacks**: WinEvent handlers only log events, preventing deadlocks
+3. **Main Loop Processing**: Server periodically scans windows and updates grid (every 2 seconds)
+4. **Multi-Monitor Detection**: Enumerates all connected monitors and their configurations
+5. **Coverage-Based Grid Calculation**: Calculates intersection areas between windows and grid cells
+6. **Threshold-Based Assignment**: Only assigns cells where window coverage exceeds configurable threshold
+7. **Incremental Updates**: Server publishes only changed window details via IPC
+8. **Real-Time Synchronization**: Client maintains matching grid state through event processing
+9. **IPC Communication**: High-performance message passing through iceoryx2 with large buffers
 
 ### Safety and Reliability
 - **Static Safety**: Explicit use of raw pointers with comprehensive safety documentation
+- **Deadlock Prevention**: Minimal processing in system callbacks, heavy work in main loops
 - **Error Handling**: Comprehensive error handling throughout the IPC and windowing layers
 - **Resource Cleanup**: Proper cleanup of hooks, handles, and IPC resources
-- **Thread Safety**: All shared state protected by mutexes
+- **Thread Safety**: All shared state protected by mutexes with non-blocking try_lock patterns
+- **IPC Reliability**: Large buffer sizes (64KB) and error recovery prevent message loss
 
 ## 🚧 Future Enhancements
 

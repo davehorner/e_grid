@@ -40,7 +40,7 @@ fn is_manageable_window(hwnd: HWND) -> bool {
         }
 
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-        
+
         // Skip tool windows, but include app windows
         if (ex_style & WS_EX_TOOLWINDOW) != 0 && (ex_style & WS_EX_APPWINDOW) == 0 {
             return false;
@@ -65,10 +65,12 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, _lparam: LPARAM) -> i32 
     if is_manageable_window(hwnd) {
         let title = get_window_title(hwnd);
         if let Some(rect) = get_window_rect(hwnd) {
-            println!("Window: {} - ({}, {}) {}x{}", 
-                title, 
-                rect.left, rect.top, 
-                rect.right - rect.left, 
+            println!(
+                "Window: {} - ({}, {}) {}x{}",
+                title,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
                 rect.bottom - rect.top
             );
         }
@@ -78,13 +80,13 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, _lparam: LPARAM) -> i32 
 
 fn main() {
     println!("Starting simple window test...");
-    
+
     unsafe {
         println!("Calling EnumWindows...");
         let result = EnumWindows(Some(enum_windows_proc), 0);
         println!("EnumWindows result: {}", result);
     }
-    
+
     println!("Test completed. Press Enter to exit...");
     let mut input = String::new();
     match std::io::stdin().read_line(&mut input) {

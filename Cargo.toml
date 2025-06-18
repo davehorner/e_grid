@@ -52,3 +52,15 @@ path = "src/ipc_demo_new.rs"
 [[bin]]
 name = "ipc_test"
 path = "src/ipc_test.rs"
+
+[[bin]]
+name = "grid_client_demo"
+path = "src/grid_client_demo.rs"
+
+[[bin]]
+name = "ipc_server_demo"
+path = "src/ipc_server_demo.rs"
+
+[[bin]]
+name = "ipc_server_demo_new"
+path = "src/ipc_server_demo_new.rs"
