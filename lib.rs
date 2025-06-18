@@ -332,7 +332,7 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
             println!("  -> Failed to add");
         }
     } else if tracker.enum_counter <= 100 {
-        println!("  -> Skipping non-manageable window");
+        //println!("  -> Skipping non-manageable window");
     }
     
     1 // Continue enumeration

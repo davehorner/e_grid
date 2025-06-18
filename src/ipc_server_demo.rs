@@ -113,6 +113,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("❌ Error processing commands: {}", e);
                 }
             }
+            
+            // Process grid layout commands
+            if let Err(e) = ipc_server.process_layout_commands() {
+                println!("❌ Error processing layout commands: {}", e);
+            }
+            
+            // Process animation commands  
+            if let Err(e) = ipc_server.process_animation_commands() {
+                println!("❌ Error processing animation commands: {}", e);
+            }
+            
+            // Update animations
+            if let Err(e) = ipc_server.update_animations() {
+                println!("❌ Error updating animations: {}", e);
+            }
         }
         // Small sleep to prevent busy waiting while still being responsive
         thread::sleep(Duration::from_millis(10));

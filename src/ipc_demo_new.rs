@@ -103,6 +103,9 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
             target_row: 0,
             target_col: 0,
             monitor_id: 0,
+            layout_id: 0,
+            animation_duration_ms: 0,
+            easing_type: 0,
         };
         publisher.send_copy(test_command)?;
         println!(
@@ -210,6 +213,9 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                                     target_row: 0,
                                     target_col: 0,
                                     monitor_id: 0,
+                                    layout_id: 0,
+                                    animation_duration_ms: 0,
+                                    easing_type: 0,
                                 };
                                 if let Err(e) = publisher.send_copy(command) {
                                     println!(
@@ -229,6 +235,9 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                                     target_row: 0,
                                     target_col: 0,
                                     monitor_id: 0,
+                                    layout_id: 0,
+                                    animation_duration_ms: 0,
+                                    easing_type: 0,
                                 };
                                 if let Err(e) = publisher.send_copy(command) {
                                     println!(
@@ -287,6 +296,9 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                                                                             target_row: row,
                                                                             target_col: col,
                                                                             monitor_id: 0, // Ignored for virtual
+                                                                            layout_id: 0,
+                                                                            animation_duration_ms: 0,
+                                                                            easing_type: 0,
                                                                         };
                                                                     if let Err(e) =
                                                                         publisher.send_copy(command)
@@ -321,6 +333,9 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                                                                                 target_row: row,
                                                                                 target_col: col,
                                                                                 monitor_id,
+                                                                                layout_id: 0,
+                                                                                animation_duration_ms: 0,
+                                                                                easing_type: 0,
                                                                             };
                                                                             if let Err(e) =
                                                                                 publisher.send_copy(

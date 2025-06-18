@@ -14,6 +14,10 @@ pub const GRID_COMMANDS_SERVICE: &str = "e_grid_commands";
 pub const GRID_RESPONSE_SERVICE: &str = "e_grid_responses";
 pub const GRID_WINDOW_LIST_SERVICE: &str = "e_grid_window_list"; // Deprecated - chunked approach
 pub const GRID_WINDOW_DETAILS_SERVICE: &str = "e_grid_window_details"; // Individual window details
+pub const GRID_LAYOUT_SERVICE: &str = "e_grid_layouts"; // Grid layout transfer
+pub const GRID_CELL_ASSIGNMENTS_SERVICE: &str = "e_grid_cell_assignments"; // Cell assignments for layouts
+pub const ANIMATION_COMMANDS_SERVICE: &str = "e_grid_animations"; // Animation control
+pub const ANIMATION_STATUS_SERVICE: &str = "e_grid_animation_status"; // Animation status updates
 
 // Zero-copy compatible data types for iceoryx2
 // Using only basic types that work with iceoryx2's zero-copy requirements
@@ -50,11 +54,14 @@ impl Default for WindowEvent {
 #[derive(Debug, Clone, Copy, PartialEq,ZeroCopySend)]
 #[repr(C)]
 pub struct WindowCommand {
-    pub command_type: u8, // 0=move_window, 1=get_state, 2=get_windows, 3=assign_window_virtual, 4=assign_window_monitor
+    pub command_type: u8, // 0=move_window, 1=get_state, 2=get_windows, 3=assign_window_virtual, 4=assign_window_monitor, 5=apply_grid_layout, 6=save_layout, 7=get_layouts
     pub hwnd: u64,
     pub target_row: u32,
     pub target_col: u32,
     pub monitor_id: u32, // Monitor index for per-monitor assignment (ignored for virtual grid)
+    pub layout_id: u32,  // Layout ID for grid operations
+    pub animation_duration_ms: u32, // Animation duration in milliseconds
+    pub easing_type: u8, // Easing function type
 }
 
 impl Default for WindowCommand {
@@ -65,6 +72,9 @@ impl Default for WindowCommand {
             target_row: 0,
             target_col: 0,
             monitor_id: 0,
+            layout_id: 0,
+            animation_duration_ms: 1000,
+            easing_type: 0,
         }
     }
 }
@@ -210,6 +220,27 @@ pub enum GridCommand {
         target_col: usize,
         monitor_id: usize,
     },
+    ApplyGridLayout {
+        layout_name: String,
+        duration_ms: u32,
+        easing_type: crate::EasingType,
+    },
+    SaveCurrentLayout {
+        layout_name: String,
+    },
+    GetSavedLayouts,
+    StartAnimation {
+        hwnd: u64,
+        target_x: i32,
+        target_y: i32,
+        target_width: u32,
+        target_height: u32,
+        duration_ms: u32,
+        easing_type: crate::EasingType,
+    },
+    GetAnimationStatus {
+        hwnd: u64, // 0 for all windows
+    },
     GetGridState,
     GetWindowList,
 }
@@ -226,6 +257,12 @@ pub enum GridResponse {
         occupied_cells: usize,
         grid_summary: String,
     },
+    SavedLayouts {
+        layout_names: Vec<String>,
+    },
+    AnimationStatus {
+        statuses: Vec<(u64, bool, f32)>, // (hwnd, is_active, progress)
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +275,116 @@ pub struct WindowInfo {
     pub height: i32,
     pub row: usize,
     pub col: usize,
+}
+
+// Grid Layout Transfer - Compact representation of grid state
+#[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
+#[repr(C)]
+pub struct GridLayoutMessage {
+    pub message_type: u8, // 0=apply_layout, 1=save_current_layout, 2=get_saved_layouts
+    pub layout_id: u32,   // Unique ID for this layout
+    pub animation_duration_ms: u32, // Animation duration in milliseconds
+    pub easing_type: u8,  // 0=Linear, 1=EaseIn, 2=EaseOut, 3=EaseInOut, 4=Bounce, 5=Elastic, 6=Back
+    pub grid_rows: u8,    // Number of rows in the grid
+    pub grid_cols: u8,    // Number of columns in the grid
+    pub total_cells: u16, // Total number of cells with windows
+    pub layout_name_hash: u64, // Hash of layout name for identification
+}
+
+impl Default for GridLayoutMessage {
+    fn default() -> Self {
+        Self {
+            message_type: 0,
+            layout_id: 0,
+            animation_duration_ms: 1000, // Default 1 second
+            easing_type: 0, // Linear
+            grid_rows: crate::GRID_ROWS as u8,
+            grid_cols: crate::GRID_COLS as u8,
+            total_cells: 0,
+            layout_name_hash: 0,
+        }
+    }
+}
+
+// Grid Cell Assignment - Individual cell data for layout transfer
+#[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
+#[repr(C)]
+pub struct GridCellAssignment {
+    pub row: u8,
+    pub col: u8,
+    pub hwnd: u64,        // Window handle assigned to this cell (0 if empty)
+    pub monitor_id: u8,   // Monitor ID for per-monitor layouts (255 for virtual grid)
+    pub reserved: [u8; 5], // Padding for alignment
+}
+
+impl Default for GridCellAssignment {
+    fn default() -> Self {
+        Self {
+            row: 0,
+            col: 0,
+            hwnd: 0,
+            monitor_id: 255, // Default to virtual grid
+            reserved: [0; 5],
+        }
+    }
+}
+
+// Animation Control Message
+#[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
+#[repr(C)]
+pub struct AnimationCommand {
+    pub command_type: u8, // 0=start_animation, 1=stop_animation, 2=pause_animation, 3=resume_animation, 4=get_status
+    pub hwnd: u64,        // Target window (0 for all windows)
+    pub duration_ms: u32, // Animation duration in milliseconds
+    pub easing_type: u8,  // Easing function type
+    pub target_x: i32,    // Target X position
+    pub target_y: i32,    // Target Y position
+    pub target_width: u32,  // Target width
+    pub target_height: u32, // Target height
+}
+
+impl Default for AnimationCommand {
+    fn default() -> Self {
+        Self {
+            command_type: 0,
+            hwnd: 0,
+            duration_ms: 1000,
+            easing_type: 0,
+            target_x: 0,
+            target_y: 0,
+            target_width: 0,
+            target_height: 0,
+        }
+    }
+}
+
+// Animation Status Response
+#[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
+#[repr(C)]
+pub struct AnimationStatus {
+    pub hwnd: u64,
+    pub is_active: u8,    // 1 if animation is active, 0 if not
+    pub progress: u8,     // Animation progress (0-100)
+    pub elapsed_ms: u32,  // Elapsed time in milliseconds
+    pub remaining_ms: u32, // Remaining time in milliseconds
+    pub current_x: i32,   // Current X position
+    pub current_y: i32,   // Current Y position
+    pub reserved: [u8; 8], // Padding for future use
+}
+
+impl Default for AnimationStatus {
+    fn default() -> Self {
+        Self {
+            hwnd: 0,
+            is_active: 0,
+            progress: 0,
+            elapsed_ms: 0,
+            remaining_ms: 0,
+            current_x: 0,
+            current_y: 0,
+            reserved: [0; 8],
+        }
+    }
 }
 
 // IPC Manager with full iceoryx2 integration
@@ -253,6 +400,15 @@ pub struct GridIpcManager {
     response_publisher: Option<Publisher<ipc::Service, WindowResponse, ()>>,
     window_details_publisher: Option<Publisher<ipc::Service, WindowDetails, ()>>, // Individual window details
     
+    // New services for grid layouts and animations
+    layout_publisher: Option<Publisher<ipc::Service, GridLayoutMessage, ()>>,
+    layout_subscriber: Option<Subscriber<ipc::Service, GridLayoutMessage, ()>>,
+    cell_assignment_publisher: Option<Publisher<ipc::Service, GridCellAssignment, ()>>,
+    cell_assignment_subscriber: Option<Subscriber<ipc::Service, GridCellAssignment, ()>>,
+    animation_publisher: Option<Publisher<ipc::Service, AnimationCommand, ()>>,
+    animation_subscriber: Option<Subscriber<ipc::Service, AnimationCommand, ()>>,
+    animation_status_publisher: Option<Publisher<ipc::Service, AnimationStatus, ()>>,
+    
     is_running: bool,
 }
 
@@ -264,6 +420,13 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             command_subscriber: None,
             response_publisher: None,
             window_details_publisher: None, // Initialize window details publisher
+            layout_publisher: None,
+            layout_subscriber: None,
+            cell_assignment_publisher: None,
+            cell_assignment_subscriber: None,
+            animation_publisher: None,
+            animation_subscriber: None,
+            animation_status_publisher: None,
             is_running: false,
         })
     }pub fn setup_services(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -305,8 +468,50 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             .max_publishers(8)  // Increase from default (usually 2)
             .max_subscribers(8) // Increase from default (usually 2)
             .open_or_create()?;
+          self.window_details_publisher = Some(window_details_service.publisher_builder().create()?);
         
-        self.window_details_publisher = Some(window_details_service.publisher_builder().create()?);
+        // Setup grid layout services
+        let layout_service = node
+            .service_builder(&ServiceName::new(GRID_LAYOUT_SERVICE)?)
+            .publish_subscribe::<GridLayoutMessage>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create()?;
+        
+        self.layout_publisher = Some(layout_service.publisher_builder().create()?);
+        self.layout_subscriber = Some(layout_service.subscriber_builder().create()?);
+        
+        // Setup cell assignment services
+        let cell_assignment_service = node
+            .service_builder(&ServiceName::new(GRID_CELL_ASSIGNMENTS_SERVICE)?)
+            .publish_subscribe::<GridCellAssignment>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create()?;
+        
+        self.cell_assignment_publisher = Some(cell_assignment_service.publisher_builder().create()?);
+        self.cell_assignment_subscriber = Some(cell_assignment_service.subscriber_builder().create()?);
+        
+        // Setup animation services
+        let animation_service = node
+            .service_builder(&ServiceName::new(ANIMATION_COMMANDS_SERVICE)?)
+            .publish_subscribe::<AnimationCommand>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create()?;
+        
+        self.animation_publisher = Some(animation_service.publisher_builder().create()?);
+        self.animation_subscriber = Some(animation_service.subscriber_builder().create()?);
+        
+        // Setup animation status service
+        let animation_status_service = node
+            .service_builder(&ServiceName::new(ANIMATION_STATUS_SERVICE)?)
+            .publish_subscribe::<AnimationStatus>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create()?;
+        
+        self.animation_status_publisher = Some(animation_status_service.publisher_builder().create()?);
         
         // Store the node
         self.node = Some(node);
@@ -316,6 +521,10 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         println!("   📨 Command service: {}", GRID_COMMANDS_SERVICE);
         println!("   📤 Response service: {}", GRID_RESPONSE_SERVICE);
         println!("   📋 Window details service: {}", GRID_WINDOW_DETAILS_SERVICE);
+        println!("   🗂️  Grid layout service: {}", GRID_LAYOUT_SERVICE);
+        println!("   📍 Cell assignment service: {}", GRID_CELL_ASSIGNMENTS_SERVICE);
+        println!("   🎬 Animation service: {}", ANIMATION_COMMANDS_SERVICE);
+        println!("   📊 Animation status service: {}", ANIMATION_STATUS_SERVICE);
 
         self.is_running = true;
         Ok(())
@@ -434,13 +643,85 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     Ok(_) => Ok(GridResponse::Success),
                     Err(e) => Ok(GridResponse::Error(format!("Failed to assign window to virtual cell: {}", e))),
                 }
-            }
-            GridCommand::AssignWindowToMonitorCell { hwnd, target_row, target_col, monitor_id } => {
+            }            GridCommand::AssignWindowToMonitorCell { hwnd, target_row, target_col, monitor_id } => {
                 println!("📍 Request to assign window {} to monitor {} cell ({}, {})", hwnd, monitor_id, target_row, target_col);
                 
                 match self.assign_window_to_monitor_cell(hwnd, target_row, target_col, monitor_id) {
                     Ok(_) => Ok(GridResponse::Success),
                     Err(e) => Ok(GridResponse::Error(format!("Failed to assign window to monitor cell: {}", e))),
+                }
+            }
+            GridCommand::ApplyGridLayout { layout_name, duration_ms, easing_type } => {
+                println!("🗂️ Request to apply grid layout '{}' with {}ms duration", layout_name, duration_ms);
+                
+                match self.apply_saved_layout(&layout_name, duration_ms, easing_type) {
+                    Ok(count) => {
+                        println!("✅ Started {} animations for layout '{}'", count, layout_name);
+                        Ok(GridResponse::Success)
+                    },
+                    Err(e) => Ok(GridResponse::Error(format!("Failed to apply layout: {}", e))),
+                }
+            }
+            GridCommand::SaveCurrentLayout { layout_name } => {
+                println!("💾 Request to save current layout as '{}'", layout_name);
+                
+                match self.save_current_layout(layout_name.clone()) {
+                    Ok(_) => Ok(GridResponse::Success),
+                    Err(e) => Ok(GridResponse::Error(format!("Failed to save layout: {}", e))),
+                }
+            }
+            GridCommand::GetSavedLayouts => {
+                println!("📋 Request for saved layouts list");
+                
+                if let Ok(tracker) = self.tracker.lock() {
+                    let layout_names: Vec<String> = tracker.list_saved_layouts().into_iter().cloned().collect();
+                    Ok(GridResponse::SavedLayouts { layout_names })
+                } else {
+                    Ok(GridResponse::Error("Failed to access window tracker".to_string()))
+                }
+            }
+            GridCommand::StartAnimation { hwnd, target_x, target_y, target_width, target_height, duration_ms, easing_type } => {
+                println!("🎬 Request to animate window {} to ({}, {}) size {}x{}", hwnd, target_x, target_y, target_width, target_height);
+                
+                let target_rect = winapi::shared::windef::RECT {
+                    left: target_x,
+                    top: target_y,
+                    right: target_x + target_width as i32,
+                    bottom: target_y + target_height as i32,
+                };
+                
+                match self.start_window_animation(hwnd, target_rect, duration_ms, easing_type) {
+                    Ok(_) => Ok(GridResponse::Success),
+                    Err(e) => Ok(GridResponse::Error(format!("Failed to start animation: {}", e))),
+                }
+            }
+            GridCommand::GetAnimationStatus { hwnd } => {
+                println!("📊 Request for animation status of window {}", hwnd);
+                
+                if let Ok(tracker) = self.tracker.lock() {
+                    let statuses = if hwnd == 0 {
+                        // Get status for all active animations
+                        tracker.active_animations.iter().map(|(h, anim)| {
+                            let progress = if anim.is_completed() { 1.0 } else {
+                                anim.start_time.elapsed().as_secs_f32() / anim.duration.as_secs_f32()
+                            };
+                            (*h as u64, !anim.is_completed(), progress)
+                        }).collect()
+                    } else {
+                        // Get status for specific window
+                        if let Some(anim) = tracker.active_animations.get(&(hwnd as winapi::shared::windef::HWND)) {
+                            let progress = if anim.is_completed() { 1.0 } else {
+                                anim.start_time.elapsed().as_secs_f32() / anim.duration.as_secs_f32()
+                            };
+                            vec![(hwnd, !anim.is_completed(), progress)]
+                        } else {
+                            vec![(hwnd, false, 0.0)]
+                        }
+                    };
+                    
+                    Ok(GridResponse::AnimationStatus { statuses })
+                } else {
+                    Ok(GridResponse::Error("Failed to access window tracker".to_string()))
                 }
             }
         }
@@ -683,9 +964,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 ..Default::default()
             },
         }
-    }
-
-    fn window_command_to_grid_command(command: &WindowCommand) -> GridCommand {
+    }    fn window_command_to_grid_command(command: &WindowCommand) -> GridCommand {
         match command.command_type {
             0 => GridCommand::MoveWindowToCell {
                 hwnd: command.hwnd,
@@ -704,11 +983,28 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 target_row: command.target_row as usize,
                 target_col: command.target_col as usize,
                 monitor_id: command.monitor_id as usize,
-            },            _ => GridCommand::GetGridState, // Default fallback
+            },
+            5 => GridCommand::ApplyGridLayout {
+                layout_name: format!("layout_{}", command.layout_id),
+                duration_ms: command.animation_duration_ms,
+                easing_type: match command.easing_type {
+                    0 => crate::EasingType::Linear,
+                    1 => crate::EasingType::EaseIn,
+                    2 => crate::EasingType::EaseOut,
+                    3 => crate::EasingType::EaseInOut,
+                    4 => crate::EasingType::Bounce,
+                    5 => crate::EasingType::Elastic,
+                    6 => crate::EasingType::Back,
+                    _ => crate::EasingType::Linear,
+                },
+            },
+            6 => GridCommand::SaveCurrentLayout {
+                layout_name: format!("layout_{}", command.layout_id),
+            },
+            7 => GridCommand::GetSavedLayouts,
+            _ => GridCommand::GetGridState, // Default fallback
         }
-    }
-
-    fn grid_response_to_window_response(response: &GridResponse) -> WindowResponse {
+    }    fn grid_response_to_window_response(response: &GridResponse) -> WindowResponse {
         match response {
             GridResponse::Success => WindowResponse {
                 response_type: 0,
@@ -730,6 +1026,22 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 error_code: 0,
                 window_count: *total_windows as u32,
                 data: [*occupied_cells as u64, 0, 0, 0], // Pack occupied_cells into first data slot
+            },
+            GridResponse::SavedLayouts { layout_names } => WindowResponse {
+                response_type: 4, // Saved layouts response
+                error_code: 0,
+                window_count: layout_names.len() as u32,
+                ..Default::default()
+            },
+            GridResponse::AnimationStatus { statuses } => WindowResponse {
+                response_type: 5, // Animation status response
+                error_code: 0,
+                window_count: statuses.len() as u32,
+                data: [
+                    statuses.len() as u64,
+                    statuses.iter().filter(|(_, active, _)| *active).count() as u64,
+                    0, 0
+                ],
             },
         }
     }
@@ -1016,9 +1328,194 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             monitor_row_start: monitor_start_row,
             monitor_col_start: monitor_start_col,
             monitor_row_end: monitor_end_row,
-            monitor_col_end: monitor_end_col,
-            title_len: window_info.title.len().min(255) as u32, // Cap at 255 chars
+            monitor_col_end: monitor_end_col,            title_len: window_info.title.len().min(255) as u32, // Cap at 255 chars
         }
+    }
+
+    // Grid Layout and Animation Methods
+      pub fn apply_saved_layout(&mut self, layout_name: &str, duration_ms: u32, easing_type: crate::EasingType) -> Result<usize, Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            if let Some(layout) = tracker.get_saved_layout(layout_name).cloned() {
+                let duration = std::time::Duration::from_millis(duration_ms as u64);
+                tracker.apply_grid_layout(&layout, duration, easing_type)
+                    .map_err(|e| e.into())
+            } else {
+                Err(format!("Layout '{}' not found", layout_name).into())
+            }
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }
+    
+    pub fn save_current_layout(&mut self, layout_name: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            tracker.save_current_layout(layout_name);
+            Ok(())
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }
+      pub fn start_window_animation(&mut self, hwnd: u64, target_rect: winapi::shared::windef::RECT, duration_ms: u32, easing_type: crate::EasingType) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            let duration = std::time::Duration::from_millis(duration_ms as u64);
+            tracker.start_window_animation(hwnd as winapi::shared::windef::HWND, target_rect, duration, easing_type)
+                .map_err(|e| e.into())
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }
+    
+    pub fn update_animations(&mut self) -> Result<Vec<u64>, Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            let completed = tracker.update_animations();
+            Ok(completed.into_iter().map(|hwnd| hwnd as u64).collect())
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }
+    
+    pub fn publish_grid_layout(&mut self, layout_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(tracker) = self.tracker.lock() {
+            if let Some(layout) = tracker.get_saved_layout(layout_name) {
+                // Create layout message
+                let layout_message = GridLayoutMessage {
+                    message_type: 0, // apply_layout
+                    layout_id: layout_name.chars().map(|c| c as u32).sum(), // Simple hash
+                    animation_duration_ms: 1000, // Default duration
+                    easing_type: 0, // Linear
+                    grid_rows: crate::GRID_ROWS as u8,
+                    grid_cols: crate::GRID_COLS as u8,
+                    total_cells: layout.virtual_grid.iter().flatten().filter(|cell| cell.is_some()).count() as u16,
+                    layout_name_hash: layout_name.chars().map(|c| c as u64).sum(),
+                };
+                
+                // Send layout header
+                if let Some(ref mut publisher) = self.layout_publisher {
+                    publisher.send_copy(layout_message)?;
+                }
+                
+                // Send individual cell assignments
+                if let Some(ref mut cell_publisher) = self.cell_assignment_publisher {
+                    for row in 0..crate::GRID_ROWS {
+                        for col in 0..crate::GRID_COLS {
+                            if let Some(hwnd) = layout.virtual_grid[row][col] {
+                                let cell_assignment = GridCellAssignment {
+                                    row: row as u8,
+                                    col: col as u8,
+                                    hwnd: hwnd as u64,
+                                    monitor_id: 255, // Virtual grid
+                                    reserved: [0; 5],
+                                };
+                                cell_publisher.send_copy(cell_assignment)?;
+                            }
+                        }
+                    }
+                }
+                
+                println!("📤 Published grid layout '{}' with {} occupied cells", layout_name, layout_message.total_cells);
+                Ok(())
+            } else {
+                Err(format!("Layout '{}' not found", layout_name).into())
+            }
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }
+      pub fn process_layout_commands(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut commands_to_process = Vec::new();
+        
+        // First, collect all incoming commands
+        if let Some(ref mut subscriber) = self.layout_subscriber {
+            while let Some(sample) = subscriber.receive()? {
+                commands_to_process.push(*sample);
+            }
+        }
+        
+        // Then process each command
+        for layout_msg in commands_to_process {
+            println!("🗂️ Received layout command: {:?}", layout_msg);
+            
+            match layout_msg.message_type {
+                0 => { // apply_layout
+                    // This would typically be handled by receiving cell assignments
+                    println!("📥 Layout application request received");
+                },
+                1 => { // save_current_layout  
+                    let layout_name = format!("layout_{}", layout_msg.layout_id);
+                    if let Err(e) = self.save_current_layout(layout_name.clone()) {
+                        println!("⚠️ Failed to save layout {}: {}", layout_name, e);
+                    }
+                },
+                2 => { // get_saved_layouts
+                    // Send response with saved layouts
+                    println!("📋 Saved layouts request received");
+                },
+                _ => {
+                    println!("⚠️ Unknown layout command type: {}", layout_msg.message_type);
+                }
+            }
+        }
+        Ok(())
+    }
+      pub fn process_animation_commands(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut commands_to_process = Vec::new();
+        
+        // First, collect all incoming commands
+        if let Some(ref mut subscriber) = self.animation_subscriber {
+            while let Some(sample) = subscriber.receive()? {
+                commands_to_process.push(*sample);
+            }
+        }
+        
+        // Then process each command
+        for anim_cmd in commands_to_process {
+            println!("🎬 Received animation command: {:?}", anim_cmd);
+            
+            match anim_cmd.command_type {
+                0 => { // start_animation
+                    let target_rect = winapi::shared::windef::RECT {
+                        left: anim_cmd.target_x,
+                        top: anim_cmd.target_y,
+                        right: anim_cmd.target_x + anim_cmd.target_width as i32,
+                        bottom: anim_cmd.target_y + anim_cmd.target_height as i32,
+                    };
+                    
+                    let easing_type = match anim_cmd.easing_type {
+                        0 => crate::EasingType::Linear,
+                        1 => crate::EasingType::EaseIn,
+                        2 => crate::EasingType::EaseOut,
+                        3 => crate::EasingType::EaseInOut,
+                        4 => crate::EasingType::Bounce,
+                        5 => crate::EasingType::Elastic,
+                        6 => crate::EasingType::Back,
+                        _ => crate::EasingType::Linear,
+                    };
+                    
+                    if let Err(e) = self.start_window_animation(anim_cmd.hwnd, target_rect, anim_cmd.duration_ms, easing_type) {
+                        println!("⚠️ Failed to start animation for window {}: {}", anim_cmd.hwnd, e);
+                    }
+                },
+                1 => { // stop_animation
+                    if let Ok(mut tracker) = self.tracker.lock() {
+                        if anim_cmd.hwnd == 0 {
+                            tracker.active_animations.clear();
+                            println!("🛑 Stopped all animations");
+                        } else {
+                            tracker.active_animations.remove(&(anim_cmd.hwnd as winapi::shared::windef::HWND));
+                            println!("🛑 Stopped animation for window {}", anim_cmd.hwnd);
+                        }
+                    }
+                },
+                4 => { // get_status
+                    // Send animation status - this could be enhanced to send via status publisher
+                    println!("📊 Animation status request for window {}", anim_cmd.hwnd);
+                },
+                _ => {
+                    println!("⚠️ Unknown animation command type: {}", anim_cmd.command_type);
+                }
+            }
+        }
+        Ok(())
     }
 }
 

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ptr;
+use std::time::{Duration, Instant};
 use winapi::shared::minwindef::LPARAM;
 use winapi::shared::windef::{HWND, RECT};
 use winapi::um::winuser::*;
@@ -11,6 +12,187 @@ pub const GRID_COLS: usize = 12;
 // Coverage threshold: percentage of cell area that must be covered by window
 // to consider the window as occupying that cell (0.0 to 1.0)
 const COVERAGE_THRESHOLD: f32 = 0.3; // 30% coverage required
+
+// Animation and Tweening System
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum EasingType {
+    Linear,        // Constant speed
+    EaseIn,        // Slow start, fast end
+    EaseOut,       // Fast start, slow end  
+    EaseInOut,     // Slow start and end, fast middle
+    Bounce,        // Bouncing effect at the end
+    Elastic,       // Elastic/spring effect
+    Back,          // Slight overshoot then settle
+}
+
+#[derive(Clone)]
+pub struct WindowAnimation {
+    pub hwnd: HWND,
+    pub start_rect: RECT,
+    pub target_rect: RECT,
+    pub start_time: Instant,
+    pub duration: Duration,
+    pub easing: EasingType,
+    pub completed: bool,
+}
+
+impl WindowAnimation {
+    pub fn new(hwnd: HWND, start_rect: RECT, target_rect: RECT, duration: Duration, easing: EasingType) -> Self {
+        Self {
+            hwnd,
+            start_rect,
+            target_rect,
+            start_time: Instant::now(),
+            duration,
+            easing,
+            completed: false,
+        }
+    }
+    
+    pub fn get_current_rect(&self) -> RECT {
+        if self.completed {
+            return self.target_rect;
+        }
+        
+        let elapsed = self.start_time.elapsed();
+        if elapsed >= self.duration {
+            return self.target_rect;
+        }
+        
+        let progress = elapsed.as_secs_f32() / self.duration.as_secs_f32();
+        let eased_progress = self.apply_easing(progress);
+        
+        RECT {
+            left: self.lerp(self.start_rect.left, self.target_rect.left, eased_progress),
+            top: self.lerp(self.start_rect.top, self.target_rect.top, eased_progress),
+            right: self.lerp(self.start_rect.right, self.target_rect.right, eased_progress),
+            bottom: self.lerp(self.start_rect.bottom, self.target_rect.bottom, eased_progress),
+        }
+    }
+    
+    pub fn is_completed(&self) -> bool {
+        self.completed || self.start_time.elapsed() >= self.duration
+    }
+    
+    pub fn get_progress(&self) -> f32 {
+        if self.completed {
+            return 1.0;
+        }
+        
+        let elapsed = self.start_time.elapsed();
+        if elapsed >= self.duration {
+            1.0
+        } else {
+            elapsed.as_secs_f32() / self.duration.as_secs_f32()
+        }
+    }
+    
+    fn lerp(&self, start: i32, end: i32, t: f32) -> i32 {
+        (start as f32 + (end - start) as f32 * t) as i32
+    }
+    
+    pub fn apply_easing(&self, t: f32) -> f32 {
+        match self.easing {
+            EasingType::Linear => t,
+            EasingType::EaseIn => t * t,
+            EasingType::EaseOut => 1.0 - (1.0 - t) * (1.0 - t),
+            EasingType::EaseInOut => {
+                if t < 0.5 {
+                    2.0 * t * t
+                } else {
+                    1.0 - 2.0 * (1.0 - t) * (1.0 - t)
+                }
+            },
+            EasingType::Bounce => {
+                if t < 1.0 / 2.75 {
+                    7.5625 * t * t
+                } else if t < 2.0 / 2.75 {
+                    let t = t - 1.5 / 2.75;
+                    7.5625 * t * t + 0.75
+                } else if t < 2.5 / 2.75 {
+                    let t = t - 2.25 / 2.75;
+                    7.5625 * t * t + 0.9375
+                } else {
+                    let t = t - 2.625 / 2.75;
+                    7.5625 * t * t + 0.984375
+                }
+            },
+            EasingType::Elastic => {
+                if t == 0.0 || t == 1.0 {
+                    t
+                } else {
+                    let p = 0.3;
+                    let s = p / 4.0;
+                    -((2.0_f32).powf(10.0 * (t - 1.0)) * ((t - 1.0 - s) * (2.0 * std::f32::consts::PI) / p).sin())
+                }
+            },
+            EasingType::Back => {
+                let c1 = 1.70158;
+                let c3 = c1 + 1.0;
+                c3 * t * t * t - c1 * t * t
+            },
+        }
+    }
+}
+
+// Grid Layout for transferring complete grid states
+#[derive(Clone, Debug)]
+pub struct GridLayout {
+    pub name: String,
+    pub virtual_grid: [[Option<HWND>; GRID_COLS]; GRID_ROWS],
+    pub monitor_grids: Vec<MonitorGridLayout>,
+    pub created_at: Instant,
+}
+
+#[derive(Clone, Debug)]
+pub struct MonitorGridLayout {
+    pub monitor_id: usize,
+    pub grid: [[Option<HWND>; GRID_COLS]; GRID_ROWS],
+}
+
+impl GridLayout {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            virtual_grid: [[None; GRID_COLS]; GRID_ROWS],
+            monitor_grids: Vec::new(),
+            created_at: Instant::now(),
+        }
+    }
+    
+    pub fn from_current_state(tracker: &WindowTracker, name: String) -> Self {
+        let mut layout = Self::new(name);
+        
+        // Extract virtual grid layout
+        for row in 0..GRID_ROWS {
+            for col in 0..GRID_COLS {
+                if let CellState::Occupied(hwnd) = tracker.grid[row][col] {
+                    layout.virtual_grid[row][col] = Some(hwnd);
+                }
+            }
+        }
+        
+        // Extract monitor grid layouts
+        for monitor_grid in &tracker.monitor_grids {
+            let mut monitor_layout = MonitorGridLayout {
+                monitor_id: monitor_grid.monitor_id,
+                grid: [[None; GRID_COLS]; GRID_ROWS],
+            };
+            
+            for row in 0..GRID_ROWS {
+                for col in 0..GRID_COLS {
+                    if let CellState::Occupied(hwnd) = monitor_grid.grid[row][col] {
+                        monitor_layout.grid[row][col] = Some(hwnd);
+                    }
+                }
+            }
+            
+            layout.monitor_grids.push(monitor_layout);
+        }
+        
+        layout
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CellState {
@@ -145,6 +327,8 @@ pub struct WindowTracker {
     pub grid: [[CellState; GRID_COLS]; GRID_ROWS], // Virtual grid
     pub monitor_grids: Vec<MonitorGrid>, // Individual monitor grids
     pub enum_counter: usize,
+    pub active_animations: HashMap<HWND, WindowAnimation>, // Active window animations
+    pub saved_layouts: HashMap<String, GridLayout>, // Saved grid layouts
 }
 
 impl WindowTracker {
@@ -165,6 +349,8 @@ impl WindowTracker {
             grid: [[CellState::Empty; GRID_COLS]; GRID_ROWS],
             monitor_grids: Vec::new(),
             enum_counter: 0,
+            active_animations: HashMap::new(),
+            saved_layouts: HashMap::new(),
         };
 
         // Initialize individual monitor grids
@@ -637,6 +823,201 @@ impl WindowTracker {
             monitor_grid.update_grid(&self.windows);
         }
     }
+
+    // Animation Management Methods
+    
+    pub fn start_window_animation(&mut self, hwnd: HWND, target_rect: RECT, duration: Duration, easing: EasingType) -> Result<(), String> {
+        if let Some(current_rect) = Self::get_window_rect(hwnd) {
+            let animation = WindowAnimation::new(hwnd, current_rect, target_rect, duration, easing);
+            self.active_animations.insert(hwnd, animation);
+            println!("🎬 Started animation for window {:?}: {} -> {} over {:?}", 
+                hwnd, 
+                format!("({},{},{},{})", current_rect.left, current_rect.top, current_rect.right, current_rect.bottom),
+                format!("({},{},{},{})", target_rect.left, target_rect.top, target_rect.right, target_rect.bottom),
+                duration
+            );
+            Ok(())
+        } else {
+            Err(format!("Failed to get current rect for window {:?}", hwnd))
+        }
+    }
+    
+    pub fn update_animations(&mut self) -> Vec<HWND> {
+        let mut completed_animations = Vec::new();
+        
+        for (hwnd, animation) in &mut self.active_animations {
+            if animation.is_completed() {
+                completed_animations.push(*hwnd);
+            } else {
+                let current_rect = animation.get_current_rect();
+                // Move window to current animation position
+                unsafe {
+                    use winapi::um::winuser::{SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE};
+                    SetWindowPos(
+                        *hwnd,
+                        std::ptr::null_mut(),
+                        current_rect.left,
+                        current_rect.top,
+                        current_rect.right - current_rect.left,
+                        current_rect.bottom - current_rect.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
+            }
+        }
+        
+        // Remove completed animations
+        for hwnd in &completed_animations {
+            self.active_animations.remove(hwnd);
+            println!("🎬 Animation completed for window {:?}", hwnd);
+        }
+        
+        completed_animations
+    }
+    
+    pub fn apply_grid_layout(&mut self, layout: &GridLayout, duration: Duration, easing: EasingType) -> Result<usize, String> {
+        let mut animations_started = 0;
+        
+        // Apply virtual grid layout
+        for row in 0..GRID_ROWS {
+            for col in 0..GRID_COLS {
+                if let Some(target_hwnd) = layout.virtual_grid[row][col] {
+                    // Calculate target position from grid coordinates
+                    if let Some(target_rect) = self.virtual_cell_to_window_rect(row, col) {
+                        if self.windows.contains_key(&target_hwnd) {
+                            match self.start_window_animation(target_hwnd, target_rect, duration, easing) {
+                                Ok(_) => animations_started += 1,
+                                Err(e) => println!("⚠️ Failed to start animation for window {:?}: {}", target_hwnd, e),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        println!("🎬 Started {} animations for grid layout '{}'", animations_started, layout.name);
+        Ok(animations_started)
+    }
+    
+    pub fn save_current_layout(&mut self, name: String) {
+        let layout = GridLayout::from_current_state(self, name.clone());
+        self.saved_layouts.insert(name.clone(), layout);
+        println!("💾 Saved current grid layout as '{}'", name);
+    }
+    
+    pub fn get_saved_layout(&self, name: &str) -> Option<&GridLayout> {
+        self.saved_layouts.get(name)
+    }
+    
+    pub fn list_saved_layouts(&self) -> Vec<&String> {
+        self.saved_layouts.keys().collect()
+    }
+    
+    fn virtual_cell_to_window_rect(&self, row: usize, col: usize) -> Option<RECT> {
+        if row >= GRID_ROWS || col >= GRID_COLS {
+            return None;
+        }
+        
+        let grid_width = self.monitor_rect.right - self.monitor_rect.left;
+        let grid_height = self.monitor_rect.bottom - self.monitor_rect.top;
+        
+        let cell_width = grid_width / GRID_COLS as i32;
+        let cell_height = grid_height / GRID_ROWS as i32;
+        
+        let left = self.monitor_rect.left + (col as i32 * cell_width);
+        let top = self.monitor_rect.top + (row as i32 * cell_height);
+        let right = left + cell_width;
+        let bottom = top + cell_height;
+        
+        Some(RECT { left, top, right, bottom })
+    }
+    
+    /// Move a window to a specific grid cell
+    pub fn move_window_to_cell(&mut self, hwnd: HWND, target_row: usize, target_col: usize) -> Result<(), String> {
+        if target_row >= GRID_ROWS || target_col >= GRID_COLS {
+            return Err(format!("Invalid grid coordinates: ({}, {})", target_row, target_col));
+        }
+        
+        if let Some(target_rect) = self.virtual_cell_to_window_rect(target_row, target_col) {
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    ptr::null_mut(),
+                    target_rect.left,
+                    target_rect.top,
+                    target_rect.right - target_rect.left,
+                    target_rect.bottom - target_rect.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Assign a window to a virtual grid cell (tracking only, no movement)
+    pub fn assign_window_to_virtual_cell(&mut self, hwnd: HWND, target_row: usize, target_col: usize) -> Result<(), String> {
+        if target_row >= GRID_ROWS || target_col >= GRID_COLS {
+            return Err(format!("Invalid grid coordinates: ({}, {})", target_row, target_col));
+        }
+        
+        // Clear the old position
+        for row in 0..GRID_ROWS {
+            for col in 0..GRID_COLS {
+                if let CellState::Occupied(existing_hwnd) = self.grid[row][col] {
+                    if existing_hwnd == hwnd {
+                        self.grid[row][col] = CellState::Empty;
+                    }
+                }
+            }
+        }
+        
+        // Set the new position
+        self.grid[target_row][target_col] = CellState::Occupied(hwnd);
+        
+        // Update the window info if it exists
+        if let Some(window_info) = self.windows.get_mut(&hwnd) {
+            window_info.grid_cells.clear();
+            window_info.grid_cells.push((target_row, target_col));
+        }
+        
+        Ok(())
+    }
+
+    /// Assign a window to a monitor-specific grid cell
+    pub fn assign_window_to_monitor_cell(&mut self, hwnd: HWND, target_row: usize, target_col: usize, monitor_id: usize) -> Result<(), String> {
+        if monitor_id >= self.monitor_grids.len() {
+            return Err(format!("Invalid monitor ID: {}", monitor_id));
+        }
+        
+        if target_row >= GRID_ROWS || target_col >= GRID_COLS {
+            return Err(format!("Invalid monitor grid coordinates: ({}, {}) for monitor {}", target_row, target_col, monitor_id));
+        }
+        
+        // Clear the old position in all monitor grids
+        for grid in &mut self.monitor_grids {
+            for row in 0..GRID_ROWS {
+                for col in 0..GRID_COLS {
+                    if let CellState::Occupied(existing_hwnd) = grid.grid[row][col] {
+                        if existing_hwnd == hwnd {
+                            grid.grid[row][col] = CellState::Empty;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Set the new position
+        self.monitor_grids[monitor_id].grid[target_row][target_col] = CellState::Occupied(hwnd);
+        
+        // Update the window info if it exists
+        if let Some(window_info) = self.windows.get_mut(&hwnd) {
+            let cells = vec![(target_row, target_col)];
+            window_info.monitor_cells.insert(monitor_id, cells);
+        }
+        
+        Ok(())
+    }
 }
 
 // Helper function to calculate intersection area between two rectangles
@@ -683,19 +1064,16 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
     let tracker = &mut *(lparam as *mut WindowTracker);
     tracker.enum_counter += 1;
     
-    let title = WindowTracker::get_window_title(hwnd);
-    println!("Checking window #{}: {}", tracker.enum_counter, 
-        if title.is_empty() { "<No Title>" } else { &title });
-
     if WindowTracker::is_manageable_window(hwnd) {
+        let title = WindowTracker::get_window_title(hwnd);
+        println!("Checking window #{}: {}", tracker.enum_counter, 
+            if title.is_empty() { "<No Title>" } else { &title });
         println!("  -> Adding manageable window: {}", title);
         if tracker.add_window(hwnd) {
             println!("  -> Added successfully");
         } else {
             println!("  -> Failed to add window");
         }
-    } else {
-        println!("  -> Skipping non-manageable window");
     }
     
     1 // Continue enumeration

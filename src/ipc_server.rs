@@ -33,9 +33,15 @@ pub struct GridIpcServer {
     event_publisher: Option<Publisher<Service, ipc::WindowEvent, ()>>,
     response_publisher: Option<Publisher<Service, ipc::WindowResponse, ()>>,
     window_details_publisher: Option<Publisher<Service, ipc::WindowDetails, ()>>,
+    layout_publisher: Option<Publisher<Service, ipc::GridLayoutMessage, ()>>,
+    cell_assignment_publisher: Option<Publisher<Service, ipc::GridCellAssignment, ()>>,
+    animation_status_publisher: Option<Publisher<Service, ipc::AnimationStatus, ()>>,
     
     // IPC Subscribers
     command_subscriber: Option<Subscriber<Service, ipc::WindowCommand, ()>>,
+    layout_subscriber: Option<Subscriber<Service, ipc::GridLayoutMessage, ()>>,
+    cell_assignment_subscriber: Option<Subscriber<Service, ipc::GridCellAssignment, ()>>,
+    animation_subscriber: Option<Subscriber<Service, ipc::AnimationCommand, ()>>,
     
     // Server state
     is_running: bool,
@@ -46,13 +52,18 @@ pub struct GridIpcServer {
 }
 
 impl GridIpcServer {    /// Create a new IPC server instance
-    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self {
+    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Result<Self, Box<dyn std::error::Error>> {        Ok(Self {
             tracker,
             event_publisher: None,
             response_publisher: None,
             window_details_publisher: None,
+            layout_publisher: None,
+            cell_assignment_publisher: None,
+            animation_status_publisher: None,
             command_subscriber: None,
+            layout_subscriber: None,
+            cell_assignment_subscriber: None,
+            animation_subscriber: None,
             is_running: false,
             event_listeners: Vec::new(),
             event_hooks: Vec::new(),
@@ -98,14 +109,59 @@ impl GridIpcServer {    /// Create a new IPC server instance
             .publish_subscribe::<ipc::WindowCommand>()
             .max_publishers(8)
             .max_subscribers(8)
+            .open_or_create()?;        self.command_subscriber = Some(command_service.subscriber_builder().create()?);
+
+        // Setup grid layout services
+        let layout_service = node
+            .service_builder(&ServiceName::new(ipc::GRID_LAYOUT_SERVICE)?)
+            .publish_subscribe::<ipc::GridLayoutMessage>()
+            .max_publishers(8)
+            .max_subscribers(8)
             .open_or_create()?;
-        self.command_subscriber = Some(command_service.subscriber_builder().create()?);
+        
+        self.layout_publisher = Some(layout_service.publisher_builder().create()?);
+        self.layout_subscriber = Some(layout_service.subscriber_builder().create()?);
+        
+        // Setup cell assignment services
+        let cell_assignment_service = node
+            .service_builder(&ServiceName::new(ipc::GRID_CELL_ASSIGNMENTS_SERVICE)?)
+            .publish_subscribe::<ipc::GridCellAssignment>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create()?;
+        
+        self.cell_assignment_publisher = Some(cell_assignment_service.publisher_builder().create()?);
+        self.cell_assignment_subscriber = Some(cell_assignment_service.subscriber_builder().create()?);
+
+        // Setup animation services
+        let animation_service = node
+            .service_builder(&ServiceName::new(ipc::ANIMATION_COMMANDS_SERVICE)?)
+            .publish_subscribe::<ipc::AnimationCommand>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create()?;
+        
+        self.animation_subscriber = Some(animation_service.subscriber_builder().create()?);
+        
+        // Setup animation status service
+        let animation_status_service = node
+            .service_builder(&ServiceName::new(ipc::ANIMATION_STATUS_SERVICE)?)
+            .publish_subscribe::<ipc::AnimationStatus>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create()?;
+        
+        self.animation_status_publisher = Some(animation_status_service.publisher_builder().create()?);
 
         println!("✅ E-Grid IPC server services initialized successfully");
         println!("   📡 Event service: {}", ipc::GRID_EVENTS_SERVICE);
         println!("   📨 Command service: {}", ipc::GRID_COMMANDS_SERVICE);
         println!("   📤 Response service: {}", ipc::GRID_RESPONSE_SERVICE);
         println!("   📋 Window details service: {}", ipc::GRID_WINDOW_DETAILS_SERVICE);
+        println!("   🗂️  Grid layout service: {}", ipc::GRID_LAYOUT_SERVICE);
+        println!("   📍 Cell assignment service: {}", ipc::GRID_CELL_ASSIGNMENTS_SERVICE);
+        println!("   🎬 Animation service: {}", ipc::ANIMATION_COMMANDS_SERVICE);
+        println!("   📊 Animation status service: {}", ipc::ANIMATION_STATUS_SERVICE);
 
         self.is_running = true;
         Ok(())
@@ -235,13 +291,71 @@ impl GridIpcServer {    /// Create a new IPC server instance
                     Ok(_) => Ok(ipc::GridResponse::Success),
                     Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to assign window to virtual cell: {}", e))),
                 }
-            }
-
-            ipc::GridCommand::AssignWindowToMonitorCell { hwnd, target_row, target_col, monitor_id } => {
+            }            ipc::GridCommand::AssignWindowToMonitorCell { hwnd, target_row, target_col, monitor_id } => {
                 println!("🖥️ Request to assign window {} to monitor {} cell ({}, {})", hwnd, monitor_id, target_row, target_col);
                 match self.assign_window_to_monitor_cell(hwnd, target_row, target_col, monitor_id) {
                     Ok(_) => Ok(ipc::GridResponse::Success),
                     Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to assign window to monitor cell: {}", e))),
+                }
+            }            ipc::GridCommand::ApplyGridLayout { layout_name, duration_ms, easing_type } => {
+                println!("🎨 Request to apply saved layout '{}'", layout_name);
+                match self.apply_saved_layout(&layout_name, duration_ms, easing_type) {
+                    Ok(count) => Ok(ipc::GridResponse::Success),
+                    Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to apply grid layout: {}", e))),
+                }
+            }
+
+            ipc::GridCommand::SaveCurrentLayout { layout_name } => {
+                println!("💾 Request to save current layout as '{}'", layout_name);
+                match self.save_current_layout(layout_name) {
+                    Ok(_) => Ok(ipc::GridResponse::Success),
+                    Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to save layout: {}", e))),
+                }
+            }            ipc::GridCommand::GetSavedLayouts => {
+                println!("📂 Request to get saved layouts");
+                match self.get_saved_layouts() {
+                    Ok(layout_names) => Ok(ipc::GridResponse::SavedLayouts { layout_names }),
+                    Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to get saved layouts: {}", e))),
+                }
+            }ipc::GridCommand::StartAnimation { hwnd, target_x, target_y, target_width, target_height, duration_ms, easing_type } => {
+                println!("🎬 Request to start animation for window {}", hwnd);
+                let target_rect = winapi::shared::windef::RECT {
+                    left: target_x,
+                    top: target_y,
+                    right: target_x + target_width as i32,
+                    bottom: target_y + target_height as i32,
+                };
+                match self.start_window_animation(hwnd, target_rect, duration_ms, easing_type) {
+                    Ok(_) => Ok(ipc::GridResponse::Success),
+                    Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to start animation: {}", e))),
+                }
+            }            ipc::GridCommand::GetAnimationStatus { hwnd } => {
+                println!("📊 Request to get animation status for window {}", hwnd);
+                if hwnd == 0 {
+                    // Get status for all windows
+                    if let Ok(tracker) = self.tracker.lock() {
+                        let mut statuses = Vec::new();
+                        for (window_hwnd, animation) in &tracker.active_animations {
+                            let progress = animation.get_progress();
+                            statuses.push((*window_hwnd as u64, true, progress));
+                        }
+                        Ok(ipc::GridResponse::AnimationStatus { statuses })
+                    } else {
+                        Ok(ipc::GridResponse::Error("Failed to get animation status".to_string()))
+                    }
+                } else {
+                    // Get status for specific window
+                    match self.get_animation_status(hwnd) {
+                        Ok(status) => {
+                            let statuses = if let Some(animation) = status {
+                                vec![(hwnd, true, animation.get_progress())]
+                            } else {
+                                vec![(hwnd, false, 0.0)]
+                            };
+                            Ok(ipc::GridResponse::AnimationStatus { statuses })
+                        },
+                        Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to get animation status: {}", e))),
+                    }
                 }
             }
         }
@@ -458,20 +572,98 @@ impl GridIpcServer {    /// Create a new IPC server instance
         occupied.len()
     }
 
-    // TODO: Implement actual window movement and assignment methods
-    fn move_window_to_cell(&mut self, hwnd: u64, target_row: usize, target_col: usize) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🔧 TODO: Implement window movement for HWND {} to ({}, {})", hwnd, target_row, target_col);
-        Ok(())
+    /// Move a window to a specific grid cell
+    pub fn move_window_to_cell(&mut self, hwnd: u64, target_row: usize, target_col: usize) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            tracker.move_window_to_cell(hwnd as winapi::shared::windef::HWND, target_row, target_col)
+                .map_err(|e| e.into())
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
     }
 
-    fn assign_window_to_virtual_cell(&mut self, hwnd: u64, target_row: usize, target_col: usize) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🔧 TODO: Implement virtual cell assignment for HWND {} to ({}, {})", hwnd, target_row, target_col);
-        Ok(())
+    /// Assign a window to a virtual grid cell
+    pub fn assign_window_to_virtual_cell(&mut self, hwnd: u64, target_row: usize, target_col: usize) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            tracker.assign_window_to_virtual_cell(hwnd as winapi::shared::windef::HWND, target_row, target_col)
+                .map_err(|e| e.into())
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
     }
 
-    fn assign_window_to_monitor_cell(&mut self, hwnd: u64, target_row: usize, target_col: usize, monitor_id: usize) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🔧 TODO: Implement monitor cell assignment for HWND {} to Monitor {} ({}, {})", hwnd, monitor_id, target_row, target_col);
-        Ok(())
+    /// Assign a window to a monitor-specific grid cell
+    pub fn assign_window_to_monitor_cell(&mut self, hwnd: u64, target_row: usize, target_col: usize, monitor_id: usize) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            tracker.assign_window_to_monitor_cell(hwnd as winapi::shared::windef::HWND, target_row, target_col, monitor_id)
+                .map_err(|e| e.into())
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }
+
+    /// Apply a saved layout by name
+    pub fn apply_saved_layout(&mut self, layout_name: &str, duration_ms: u32, easing_type: crate::EasingType) -> Result<usize, Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            if let Some(layout) = tracker.get_saved_layout(layout_name).cloned() {
+                let duration = std::time::Duration::from_millis(duration_ms as u64);
+                tracker.apply_grid_layout(&layout, duration, easing_type)
+                    .map_err(|e| e.into())
+            } else {
+                Err(format!("Layout '{}' not found", layout_name).into())
+            }
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }
+
+    /// Save the current layout with a given name
+    pub fn save_current_layout(&mut self, layout_name: String) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            tracker.save_current_layout(layout_name);
+            Ok(())
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }
+
+    /// Get all saved layout names
+    pub fn get_saved_layouts(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        if let Ok(tracker) = self.tracker.lock() {
+            Ok(tracker.saved_layouts.keys().cloned().collect())
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }
+
+    /// Start animation for a specific window
+    pub fn start_window_animation(&mut self, hwnd: u64, target_rect: winapi::shared::windef::RECT, duration_ms: u32, easing_type: crate::EasingType) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            let duration = std::time::Duration::from_millis(duration_ms as u64);
+            tracker.start_window_animation(hwnd as winapi::shared::windef::HWND, target_rect, duration, easing_type)
+                .map_err(|e| e.into())
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }
+
+    /// Stop animation for a specific window
+    pub fn stop_window_animation(&mut self, hwnd: u64) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            tracker.active_animations.remove(&(hwnd as winapi::shared::windef::HWND));
+            Ok(())
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
+    }
+
+    /// Get animation status for a specific window
+    pub fn get_animation_status(&self, hwnd: u64) -> Result<Option<crate::WindowAnimation>, Box<dyn std::error::Error>> {
+        if let Ok(tracker) = self.tracker.lock() {
+            Ok(tracker.active_animations.get(&(hwnd as winapi::shared::windef::HWND)).cloned())
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
     }
 
     // Conversion helper methods
@@ -538,9 +730,7 @@ impl GridIpcServer {    /// Create a new IPC server instance
             },
             _ => ipc::GridCommand::GetGridState, // Default fallback
         }
-    }
-
-    fn grid_response_to_window_response(response: &ipc::GridResponse) -> ipc::WindowResponse {
+    }    fn grid_response_to_window_response(response: &ipc::GridResponse) -> ipc::WindowResponse {
         match response {
             ipc::GridResponse::Success => ipc::WindowResponse {
                 response_type: 0,
@@ -562,6 +752,22 @@ impl GridIpcServer {    /// Create a new IPC server instance
                 error_code: 0,
                 window_count: *total_windows as u32,
                 data: [*occupied_cells as u64, 0, 0, 0],
+            },            ipc::GridResponse::SavedLayouts { layout_names } => ipc::WindowResponse {
+                response_type: 4,
+                error_code: 0,
+                window_count: layout_names.len() as u32,
+                ..Default::default()
+            },
+            ipc::GridResponse::AnimationStatus { statuses } => ipc::WindowResponse {
+                response_type: 5,
+                error_code: 0,
+                window_count: statuses.len() as u32,
+                data: if let Some((hwnd, is_active, progress)) = statuses.first() {
+                    [*hwnd, if *is_active { 1 } else { 0 }, (*progress * 1000.0) as u64, 0]
+                } else {
+                    [0, 0, 0, 0]
+                },
+                ..Default::default()
             },
         }
     }
@@ -725,8 +931,110 @@ impl GridIpcServer {
             println!("🚀 Successfully set up {} WinEvent hooks!", self.event_hooks.len());
             println!("📢 Now listening for real-time window events and publishing updates!");
         }
-        
+          Ok(())
+    }
+    
+    /// Process layout commands from clients
+    pub fn process_layout_commands(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(ref mut subscriber) = self.layout_subscriber {
+            while let Some(sample) = subscriber.receive()? {
+                let layout_msg = *sample;
+                println!("🗂️ Received layout command: {:?}", layout_msg);
+                
+                match layout_msg.message_type {
+                    0 => { // apply_layout
+                        println!("📥 Layout application request received");
+                    },
+                    1 => { // save_current_layout  
+                        let layout_name = format!("layout_{}", layout_msg.layout_id);
+                        if let Ok(mut tracker) = self.tracker.lock() {
+                            tracker.save_current_layout(layout_name.clone());
+                            println!("💾 Saved current layout as '{}'", layout_name);
+                        }
+                    },
+                    2 => { // get_saved_layouts
+                        println!("📋 Saved layouts request received");
+                    },
+                    _ => {
+                        println!("⚠️ Unknown layout command type: {}", layout_msg.message_type);
+                    }
+                }
+            }
+        }
         Ok(())
+    }
+    
+    /// Process animation commands from clients
+    pub fn process_animation_commands(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(ref mut subscriber) = self.animation_subscriber {
+            while let Some(sample) = subscriber.receive()? {
+                let anim_cmd = *sample;
+                println!("🎬 Received animation command: {:?}", anim_cmd);
+                
+                match anim_cmd.command_type {
+                    0 => { // start_animation
+                        let target_rect = winapi::shared::windef::RECT {
+                            left: anim_cmd.target_x,
+                            top: anim_cmd.target_y,
+                            right: anim_cmd.target_x + anim_cmd.target_width as i32,
+                            bottom: anim_cmd.target_y + anim_cmd.target_height as i32,
+                        };
+                        
+                        let easing_type = match anim_cmd.easing_type {
+                            0 => crate::EasingType::Linear,
+                            1 => crate::EasingType::EaseIn,
+                            2 => crate::EasingType::EaseOut,
+                            3 => crate::EasingType::EaseInOut,
+                            4 => crate::EasingType::Bounce,
+                            5 => crate::EasingType::Elastic,
+                            6 => crate::EasingType::Back,
+                            _ => crate::EasingType::Linear,
+                        };
+                        
+                        if let Ok(mut tracker) = self.tracker.lock() {
+                            let duration = std::time::Duration::from_millis(anim_cmd.duration_ms as u64);
+                            if let Err(e) = tracker.start_window_animation(
+                                anim_cmd.hwnd as winapi::shared::windef::HWND, 
+                                target_rect, 
+                                duration, 
+                                easing_type
+                            ) {
+                                println!("⚠️ Failed to start animation for window {}: {}", anim_cmd.hwnd, e);
+                            }
+                        }
+                    },
+                    1 => { // stop_animation
+                        if let Ok(mut tracker) = self.tracker.lock() {
+                            if anim_cmd.hwnd == 0 {
+                                tracker.active_animations.clear();
+                                println!("🛑 Stopped all animations");
+                            } else {
+                                tracker.active_animations.remove(&(anim_cmd.hwnd as winapi::shared::windef::HWND));
+                                println!("🛑 Stopped animation for window {}", anim_cmd.hwnd);
+                            }
+                        }
+                    },
+                    4 => { // get_status
+                        println!("📊 Animation status request for window {}", anim_cmd.hwnd);
+                        // Could publish status here
+                    },
+                    _ => {
+                        println!("⚠️ Unknown animation command type: {}", anim_cmd.command_type);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    
+    /// Update all active animations
+    pub fn update_animations(&mut self) -> Result<Vec<u64>, Box<dyn std::error::Error>> {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            let completed = tracker.update_animations();
+            Ok(completed.into_iter().map(|hwnd| hwnd as u64).collect())
+        } else {
+            Err("Failed to acquire tracker lock".into())
+        }
     }
     
     /// Cleanup WinEvent hooks

@@ -337,31 +337,7 @@ impl GridClient {
         
         Ok(())
     }
-    
-    fn request_initial_data(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("📡 Requesting initial window data from server...");
-          // Request window list
-        let window_list_command = ipc::WindowCommand {
-            command_type: 2, // GetWindowList
-            hwnd: 0,
-            target_row: 0,
-            target_col: 0,
-            monitor_id: 0,
-        };
-        self.command_publisher.send_copy(window_list_command)?;
-        
-        // Request grid state
-        let grid_state_command = ipc::WindowCommand {
-            command_type: 1, // GetGridState
-            hwnd: 0,
-            target_row: 0,
-            target_col: 0,
-            monitor_id: 0,
-        };
-        self.command_publisher.send_copy(grid_state_command)?;
-          println!("📡 Initial data requests sent");
-        Ok(())
-    }
+  
 
     fn create_background_subscribers() -> Result<(Subscriber<Service, ipc::WindowEvent, ()>, Subscriber<Service, ipc::WindowDetails, ()>), Box<dyn std::error::Error>> {
         let node = NodeBuilder::new().create::<Service>()?;
@@ -753,14 +729,16 @@ impl GridClient {
         self.command_publisher.send_copy(command)?;
         Ok(())
     }
-    
-    pub fn request_window_list(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+      pub fn request_window_list(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let command = ipc::WindowCommand {
             command_type: 2, // GetWindowList
             hwnd: 0,
             target_row: 0,
             target_col: 0,
             monitor_id: 0,
+            layout_id: 0,
+            animation_duration_ms: 0,
+            easing_type: 0,
         };
         self.send_command(command)
     }
@@ -772,28 +750,37 @@ impl GridClient {
             target_row: 0,
             target_col: 0,
             monitor_id: 0,
+            layout_id: 0,
+            animation_duration_ms: 0,
+            easing_type: 0,
         };
         self.send_command(command)
     }
-    
-    pub fn assign_window_to_virtual_cell(&mut self, hwnd: u64, row: u32, col: u32) -> Result<(), Box<dyn std::error::Error>> {
+      pub fn assign_window_to_virtual_cell(&mut self, hwnd: u64, row: u32, col: u32) -> Result<(), Box<dyn std::error::Error>> {
         let command = ipc::WindowCommand {
-            command_type: 5, // AssignToVirtualCell
+            command_type: 3, // AssignToVirtualCell
             hwnd,
             target_row: row,
             target_col: col,
             monitor_id: 0,
+            layout_id: 0,
+            animation_duration_ms: 0,
+            easing_type: 0,
         };
         self.send_command(command)
     }
     
     pub fn assign_window_to_monitor_cell(&mut self, hwnd: u64, row: u32, col: u32, monitor_id: u32) -> Result<(), Box<dyn std::error::Error>> {
         let command = ipc::WindowCommand {
-            command_type: 6, // AssignToMonitorCell
+            command_type: 4, // AssignToMonitorCell
             hwnd,
             target_row: row,
             target_col: col,
-            monitor_id,        };
+            monitor_id,
+            layout_id: 0,
+            animation_duration_ms: 0,
+            easing_type: 0,
+        };
         self.send_command(command)
     }
     

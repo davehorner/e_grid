@@ -93,6 +93,9 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                         target_row: row,
                         target_col: col,
                         monitor_id: 0, // Not used for virtual assignment
+                        layout_id: 0,
+                        animation_duration_ms: 0,
+                        easing_type: 0,
                     };
 
                     command_publisher.send_copy(command)?;
@@ -131,6 +134,9 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                         target_row: row,
                         target_col: col,
                         monitor_id,
+                        layout_id: 0,
+                        animation_duration_ms: 0,
+                        easing_type: 0,
                     };
 
                     command_publisher.send_copy(command)?;
@@ -149,6 +155,9 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                     target_row: 0,
                     target_col: 0,
                     monitor_id: 0,
+                    layout_id: 0,
+                    animation_duration_ms: 0,
+                    easing_type: 0,
                 };
                 command_publisher.send_copy(command)?;
                 println!("Requested window list");
@@ -191,6 +200,9 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                     target_row: 0,
                     target_col: 0,
                     monitor_id: 0,
+                    layout_id: 0,
+                    animation_duration_ms: 0,
+                    easing_type: 0,
                 };
                 command_publisher.send_copy(command)?;
                 println!("📤 Sent GetGridState command");
