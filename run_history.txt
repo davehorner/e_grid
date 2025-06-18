@@ -1,3 +1,5 @@
 simple_grid_new
 simple_grid_new
 simple_grid_new
+test_new_features
+test_new_features

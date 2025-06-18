@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📊 Server Statistics:");
     if let Ok(tracker) = tracker.lock() {
         println!("  Windows tracked: {}", tracker.windows.len());
-        println!("  Grid size: {}x{}", e_grid::GRID_ROWS, e_grid::GRID_COLS);
+        println!("  Grid size: {}x{}", server.config.rows, server.config.cols);
         println!("  Monitors: {}", tracker.monitor_grids.len());
     }
     println!();

@@ -1,4 +1,4 @@
-use e_grid::{WindowTracker, EasingType, WindowAnimation};
+use e_grid::{WindowTracker, EasingType, WindowAnimation, GridConfig};
 use std::time::Duration;
 use std::collections::HashMap;
 use std::thread;
@@ -48,35 +48,71 @@ fn get_visible_windows() -> Vec<(HWND, RECT, String)> {
     }
 }
 
-fn calculate_4x4_grid_position(index: usize, monitor_rect: RECT) -> RECT {
-    let row = index / 4;
-    let col = index % 4;
+fn calculate_grid_position(window_index: usize, grid_rows: usize, grid_cols: usize, monitor_rect: RECT) -> RECT {
+    let row = window_index / grid_cols;  // Dynamic grid columns
+    let col = window_index % grid_cols;  // Dynamic grid columns
     
-    let width = (monitor_rect.right - monitor_rect.left) / 4;
-    let height = (monitor_rect.bottom - monitor_rect.top) / 4;
+    if row >= grid_rows {
+        // If we exceed the grid, place in the last available cell
+        let row = grid_rows - 1;
+        let col = grid_cols - 1;
+    }
+    
+    let grid_width = monitor_rect.right - monitor_rect.left;
+    let grid_height = monitor_rect.bottom - monitor_rect.top;
+    let cell_width = grid_width / grid_cols as i32;
+    let cell_height = grid_height / grid_rows as i32;
+    
+    // Add padding to prevent windows from touching edges/each other
+    let padding = 20;
+    let window_width = cell_width - (padding * 2);
+    let window_height = cell_height - (padding * 2);
     
     RECT {
-        left: monitor_rect.left + (col as i32 * width),
-        top: monitor_rect.top + (row as i32 * height),
-        right: monitor_rect.left + ((col + 1) as i32 * width),
-        bottom: monitor_rect.top + ((row + 1) as i32 * height),
+        left: monitor_rect.left + (col as i32 * cell_width) + padding,
+        top: monitor_rect.top + (row as i32 * cell_height) + padding,
+        right: monitor_rect.left + (col as i32 * cell_width) + padding + window_width,
+        bottom: monitor_rect.top + (row as i32 * cell_height) + padding + window_height,
+    }
+}
+
+fn determine_optimal_grid_size(window_count: usize) -> (usize, usize) {
+    // Choose grid size based on number of windows
+    match window_count {
+        1..=4 => (2, 2),    // 2x2 grid for 1-4 windows
+        5..=6 => (2, 3),    // 2x3 grid for 5-6 windows  
+        7..=9 => (3, 3),    // 3x3 grid for 7-9 windows
+        10..=12 => (3, 4),  // 3x4 grid for 10-12 windows
+        13..=16 => (4, 4),  // 4x4 grid for 13-16 windows
+        17..=20 => (4, 5),  // 4x5 grid for 17-20 windows        21..=24 => (4, 6),  // 4x6 grid for 21-24 windows
+        _ => {
+            // For more windows, use a larger grid
+            (8, 12) // Default grid size
+        }
     }
 }
 
 fn main() {
     println!("🧪 Testing E-Grid with Real Window Animation...");
     
-    // Initialize window tracker
-    let mut tracker = WindowTracker::new();
-    println!("✅ WindowTracker created successfully");
-    
     // Get all visible windows and save their original positions
     let windows = get_visible_windows();
     let mut original_positions: HashMap<HWND, RECT> = HashMap::new();
     
     println!("📋 Found {} visible windows:", windows.len());
+    
+    // Determine optimal grid size based on number of windows
+    let window_count = windows.len().min(24); // Increase limit for better testing
+    let (grid_rows, grid_cols) = determine_optimal_grid_size(window_count);
+    let grid_config = GridConfig::new(grid_rows, grid_cols);
+    let mut tracker = WindowTracker::new_with_config(grid_config);
+    println!("✅ WindowTracker created with {}x{} dynamic grid", grid_rows, grid_cols);
+    let max_windows = grid_rows * grid_cols;
+    
+    println!("🎯 Using {}x{} grid for {} windows", grid_rows, grid_cols, window_count.min(max_windows));
+    
     for (i, (hwnd, rect, title)) in windows.iter().enumerate() {
-        if i < 16 { // Only use first 16 windows for 4x4 grid
+        if i < max_windows { // Use calculated grid capacity
             original_positions.insert(*hwnd, *rect);
             println!("  {}. {} [{},{} {}x{}]", 
                 i + 1, 
@@ -110,10 +146,45 @@ fn main() {
         monitor_1_rect.left, monitor_1_rect.top,
         monitor_1_rect.right - monitor_1_rect.left,
         monitor_1_rect.bottom - monitor_1_rect.top
-    );
+    );    // Phase 1: Move windows to dynamic grid with random animations
+    println!("\n🎬 Phase 1: Moving windows to {}x{} grid with random animations...", grid_rows, grid_cols);
+    println!("📐 Grid Layout Preview:");
+      // Dynamic grid preview  
+    print!("   ┌");
+    for col in 0..grid_cols {
+        print!("─────");
+        if col < grid_cols - 1 { print!("┬"); }
+    }
+    println!("┐");
     
-    // Phase 1: Move windows to 4x4 grid with random animations
-    println!("\n🎬 Phase 1: Moving windows to 4x4 grid with random animations...");
+    for row in 0..grid_rows {
+        print!("   │");
+        for col in 0..grid_cols {
+            let index = row * grid_cols + col;
+            if index < original_positions.len() {
+                print!(" {:2}  │", index + 1);
+            } else {
+                print!("  -  │");
+            }
+        }
+        println!();
+        if row < grid_rows - 1 {
+            print!("   ├");
+            for col in 0..grid_cols {
+                print!("─────");
+                if col < grid_cols - 1 { print!("┼"); }
+            }
+            println!("┤");
+        }
+    }
+    
+    print!("   └");
+    for col in 0..grid_cols {
+        print!("─────");
+        if col < grid_cols - 1 { print!("┴"); }
+    }
+    println!("┘");
+    println!();
     
     let easing_types = [
         EasingType::Linear,
@@ -126,18 +197,21 @@ fn main() {
     ];
     
     let mut rng = rand::thread_rng();    let mut animations = Vec::new();
-    let windows_list: Vec<_> = windows.iter().take(16).collect(); // Keep reference to original list
-    
-    for (i, (hwnd, original_rect)) in original_positions.iter().enumerate() {
-        if i >= 16 { break; } // Only 16 windows for 4x4 grid
+    let windows_list: Vec<_> = windows.iter().take(max_windows).collect(); // Use calculated max
+      for (i, (hwnd, original_rect)) in original_positions.iter().enumerate() {
+        if i >= max_windows { break; } // Use calculated grid capacity
         
         let title = &windows_list[i].2; // Get title from original list
-        let grid_rect = calculate_4x4_grid_position(i, monitor_1_rect);
+        let grid_rect = calculate_grid_position(i, grid_rows, grid_cols, monitor_1_rect);
         let duration_ms = rng.gen_range(1000..=3000); // 1-3 seconds
         let easing_type = easing_types[rng.gen_range(0..easing_types.len())];
+          let row = i / grid_cols;
+        let col = i % grid_cols;
         
-        println!("  Moving '{}' to position [{},{}] with {:?} easing for {}ms", 
+        println!("  📍 Window {}: '{}' -> Grid[{},{}] at [{},{}] ({:?}, {}ms)", 
+            i + 1,
             if title.len() > 20 { &title[..20] } else { title },
+            row, col,
             grid_rect.left, grid_rect.top,
             easing_type, duration_ms
         );

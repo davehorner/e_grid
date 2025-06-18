@@ -1,4 +1,4 @@
-use crate::WindowTracker;
+use crate::{WindowTracker, GridConfig};
 use iceoryx2::prelude::*;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
@@ -242,6 +242,7 @@ pub enum GridCommand {
         hwnd: u64, // 0 for all windows
     },
     GetGridState,
+    GetGridConfig,
     GetWindowList,
 }
 
@@ -257,6 +258,7 @@ pub enum GridResponse {
         occupied_cells: usize,
         grid_summary: String,
     },
+    GridConfig(GridConfig),
     SavedLayouts {
         layout_names: Vec<String>,
     },
@@ -291,15 +293,15 @@ pub struct GridLayoutMessage {
     pub layout_name_hash: u64, // Hash of layout name for identification
 }
 
-impl Default for GridLayoutMessage {
-    fn default() -> Self {
+impl Default for GridLayoutMessage {    fn default() -> Self {
+        let default_config = crate::GridConfig::default();
         Self {
             message_type: 0,
             layout_id: 0,
             animation_duration_ms: 1000, // Default 1 second
             easing_type: 0, // Linear
-            grid_rows: crate::GRID_ROWS as u8,
-            grid_cols: crate::GRID_COLS as u8,
+            grid_rows: default_config.rows as u8,
+            grid_cols: default_config.cols as u8,
             total_cells: 0,
             layout_name_hash: 0,
         }
@@ -694,8 +696,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     Ok(_) => Ok(GridResponse::Success),
                     Err(e) => Ok(GridResponse::Error(format!("Failed to start animation: {}", e))),
                 }
-            }
-            GridCommand::GetAnimationStatus { hwnd } => {
+            }            GridCommand::GetAnimationStatus { hwnd } => {
                 println!("📊 Request for animation status of window {}", hwnd);
                 
                 if let Ok(tracker) = self.tracker.lock() {
@@ -723,6 +724,11 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 } else {
                     Ok(GridResponse::Error("Failed to access window tracker".to_string()))
                 }
+            }
+            GridCommand::GetGridConfig => {
+                // This command should be handled by the server, not here
+                // Return an error indicating this command is not supported in this context
+                Ok(GridResponse::Error("GetGridConfig command not supported in this handler".to_string()))
             }
         }
     }    fn move_window_to_cell(&mut self, hwnd: u64, target_row: usize, target_col: usize) -> Result<(), Box<dyn std::error::Error>> {
@@ -1032,8 +1038,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 error_code: 0,
                 window_count: layout_names.len() as u32,
                 ..Default::default()
-            },
-            GridResponse::AnimationStatus { statuses } => WindowResponse {
+            },            GridResponse::AnimationStatus { statuses } => WindowResponse {
                 response_type: 5, // Animation status response
                 error_code: 0,
                 window_count: statuses.len() as u32,
@@ -1042,6 +1047,11 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     statuses.iter().filter(|(_, active, _)| *active).count() as u64,
                     0, 0
                 ],
+            },
+            GridResponse::GridConfig(_) => WindowResponse {
+                response_type: 6, // Grid config response
+                error_code: 0,
+                ..Default::default()
             },
         }
     }
@@ -1144,13 +1154,12 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 tracker.monitor_rect.left,
                 tracker.monitor_rect.top,
                 tracker.monitor_rect.right,
-                tracker.monitor_rect.bottom
-            );
+                tracker.monitor_rect.bottom            );
             
-            let cell_width = (right - left) / crate::GRID_COLS as i32;
-            let cell_height = (bottom - top) / crate::GRID_ROWS as i32;
+            let cell_width = (right - left) / tracker.config.cols as i32;
+            let cell_height = (bottom - top) / tracker.config.rows as i32;
             
-            if target_row < crate::GRID_ROWS && target_col < crate::GRID_COLS {
+            if target_row < tracker.config.rows && target_col < tracker.config.cols {
                 let cell_left = left + (target_col as i32 * cell_width);
                 let cell_top = top + (target_row as i32 * cell_height);
                 let cell_right = cell_left + cell_width;
@@ -1161,9 +1170,8 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 println!("   Virtual screen bounds: ({}, {}) to ({}, {})", left, top, right, bottom);
                 
                 Ok((cell_left, cell_top, cell_right, cell_bottom))
-            } else {
-                Err(format!("Invalid virtual grid coordinates: ({}, {}). Max is ({}, {})", 
-                    target_row, target_col, crate::GRID_ROWS - 1, crate::GRID_COLS - 1).into())
+            } else {                Err(format!("Invalid virtual grid coordinates: ({}, {}). Max is ({}, {})", 
+                    target_row, target_col, tracker.config.rows - 1, tracker.config.cols - 1).into())
             }
         } else {
             Err("Failed to acquire tracker lock".into())
@@ -1181,11 +1189,10 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             
             let monitor = &tracker.monitor_grids[monitor_id];
             let (left, top, right, bottom) = monitor.monitor_rect;
+              let cell_width = (right - left) / monitor.config.cols as i32;
+            let cell_height = (bottom - top) / monitor.config.rows as i32;
             
-            let cell_width = (right - left) / crate::GRID_COLS as i32;
-            let cell_height = (bottom - top) / crate::GRID_ROWS as i32;
-            
-            if target_row < crate::GRID_ROWS && target_col < crate::GRID_COLS {
+            if target_row < monitor.config.rows && target_col < monitor.config.cols {
                 let cell_left = left + (target_col as i32 * cell_width);
                 let cell_top = top + (target_row as i32 * cell_height);
                 let cell_right = cell_left + cell_width;
@@ -1196,9 +1203,8 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 println!("   Monitor {} bounds: ({}, {}) to ({}, {})", monitor_id, left, top, right, bottom);
                 
                 Ok((cell_left, cell_top, cell_right, cell_bottom))
-            } else {
-                Err(format!("Invalid monitor grid coordinates: ({}, {}). Max is ({}, {})", 
-                    target_row, target_col, crate::GRID_ROWS - 1, crate::GRID_COLS - 1).into())
+            } else {                Err(format!("Invalid monitor grid coordinates: ({}, {}). Max is ({}, {})", 
+                    target_row, target_col, monitor.config.rows - 1, monitor.config.cols - 1).into())
             }
         } else {
             Err("Failed to acquire tracker lock".into())
@@ -1374,7 +1380,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         }
     }
     
-    pub fn publish_grid_layout(&mut self, layout_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn publish_grid_layout(&mut self, layout_name: &str, config: &GridConfig) -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(tracker) = self.tracker.lock() {
             if let Some(layout) = tracker.get_saved_layout(layout_name) {
                 // Create layout message
@@ -1383,8 +1389,8 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     layout_id: layout_name.chars().map(|c| c as u32).sum(), // Simple hash
                     animation_duration_ms: 1000, // Default duration
                     easing_type: 0, // Linear
-                    grid_rows: crate::GRID_ROWS as u8,
-                    grid_cols: crate::GRID_COLS as u8,
+                    grid_rows: config.rows as u8,
+                    grid_cols: config.cols as u8,
                     total_cells: layout.virtual_grid.iter().flatten().filter(|cell| cell.is_some()).count() as u16,
                     layout_name_hash: layout_name.chars().map(|c| c as u64).sum(),
                 };
@@ -1396,8 +1402,8 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 
                 // Send individual cell assignments
                 if let Some(ref mut cell_publisher) = self.cell_assignment_publisher {
-                    for row in 0..crate::GRID_ROWS {
-                        for col in 0..crate::GRID_COLS {
+                    for row in 0..config.rows {
+                        for col in 0..config.cols {
                             if let Some(hwnd) = layout.virtual_grid[row][col] {
                                 let cell_assignment = GridCellAssignment {
                                     row: row as u8,

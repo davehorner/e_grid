@@ -5,13 +5,35 @@ use winapi::shared::minwindef::LPARAM;
 use winapi::shared::windef::{HWND, RECT};
 use winapi::um::winuser::*;
 
-// Grid configuration
-pub const GRID_ROWS: usize = 8;
-pub const GRID_COLS: usize = 12;
-
 // Coverage threshold: percentage of cell area that must be covered by window
 // to consider the window as occupying that cell (0.0 to 1.0)
 const COVERAGE_THRESHOLD: f32 = 0.3; // 30% coverage required
+
+// Dynamic grid configuration
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct GridConfig {
+    pub rows: usize,
+    pub cols: usize,
+}
+
+impl Default for GridConfig {
+    fn default() -> Self {
+        Self {
+            rows: 8,  // Default grid size
+            cols: 12,
+        }
+    }
+}
+
+impl GridConfig {
+    pub fn new(rows: usize, cols: usize) -> Self {
+        Self { rows, cols }
+    }
+    
+    pub fn cell_count(&self) -> usize {
+        self.rows * self.cols
+    }
+}
 
 // Animation and Tweening System
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -139,7 +161,8 @@ impl WindowAnimation {
 #[derive(Clone, Debug)]
 pub struct GridLayout {
     pub name: String,
-    pub virtual_grid: [[Option<HWND>; GRID_COLS]; GRID_ROWS],
+    pub config: GridConfig,
+    pub virtual_grid: Vec<Vec<Option<HWND>>>,
     pub monitor_grids: Vec<MonitorGridLayout>,
     pub created_at: Instant,
 }
@@ -147,25 +170,32 @@ pub struct GridLayout {
 #[derive(Clone, Debug)]
 pub struct MonitorGridLayout {
     pub monitor_id: usize,
-    pub grid: [[Option<HWND>; GRID_COLS]; GRID_ROWS],
+    pub config: GridConfig,
+    pub grid: Vec<Vec<Option<HWND>>>,
 }
 
 impl GridLayout {
     pub fn new(name: String) -> Self {
+        Self::new_with_config(name, GridConfig::default())
+    }
+    
+    pub fn new_with_config(name: String, config: GridConfig) -> Self {
+        let virtual_grid = vec![vec![None; config.cols]; config.rows];
         Self {
             name,
-            virtual_grid: [[None; GRID_COLS]; GRID_ROWS],
+            config,
+            virtual_grid,
             monitor_grids: Vec::new(),
             created_at: Instant::now(),
         }
     }
     
     pub fn from_current_state(tracker: &WindowTracker, name: String) -> Self {
-        let mut layout = Self::new(name);
+        let mut layout = Self::new_with_config(name, tracker.config.clone());
         
         // Extract virtual grid layout
-        for row in 0..GRID_ROWS {
-            for col in 0..GRID_COLS {
+        for row in 0..tracker.config.rows {
+            for col in 0..tracker.config.cols {
                 if let CellState::Occupied(hwnd) = tracker.grid[row][col] {
                     layout.virtual_grid[row][col] = Some(hwnd);
                 }
@@ -176,11 +206,12 @@ impl GridLayout {
         for monitor_grid in &tracker.monitor_grids {
             let mut monitor_layout = MonitorGridLayout {
                 monitor_id: monitor_grid.monitor_id,
-                grid: [[None; GRID_COLS]; GRID_ROWS],
+                config: monitor_grid.config.clone(),
+                grid: vec![vec![None; monitor_grid.config.cols]; monitor_grid.config.rows],
             };
             
-            for row in 0..GRID_ROWS {
-                for col in 0..GRID_COLS {
+            for row in 0..monitor_grid.config.rows {
+                for col in 0..monitor_grid.config.cols {
                     if let CellState::Occupied(hwnd) = monitor_grid.grid[row][col] {
                         monitor_layout.grid[row][col] = Some(hwnd);
                     }
@@ -205,15 +236,22 @@ pub enum CellState {
 pub struct MonitorGrid {
     pub monitor_id: usize,
     pub monitor_rect: (i32, i32, i32, i32), // (left, top, right, bottom)
-    pub grid: [[CellState; GRID_COLS]; GRID_ROWS],
+    pub config: GridConfig,
+    pub grid: Vec<Vec<CellState>>,
 }
 
 impl MonitorGrid {
     pub fn new(monitor_id: usize, monitor_rect: RECT) -> Self {
+        Self::new_with_config(monitor_id, monitor_rect, GridConfig::default())
+    }
+    
+    pub fn new_with_config(monitor_id: usize, monitor_rect: RECT, config: GridConfig) -> Self {
+        let grid = vec![vec![CellState::Empty; config.cols]; config.rows];
         Self {
             monitor_id,
             monitor_rect: (monitor_rect.left, monitor_rect.top, monitor_rect.right, monitor_rect.bottom),
-            grid: [[CellState::Empty; GRID_COLS]; GRID_ROWS],
+            config,
+            grid,
         }
     }
 
@@ -234,8 +272,8 @@ impl MonitorGrid {
             return cells; // Window is not on this monitor
         }
 
-        let cell_width = (right - left) / GRID_COLS as i32;
-        let cell_height = (bottom - top) / GRID_ROWS as i32;
+        let cell_width = (right - left) / self.config.cols as i32;
+        let cell_height = (bottom - top) / self.config.rows as i32;
 
         if cell_width <= 0 || cell_height <= 0 {
             return cells;
@@ -243,14 +281,14 @@ impl MonitorGrid {
 
         // Calculate potential range of cells that might be affected
         let start_col = ((rect.left.max(left) - left) / cell_width).max(0) as usize;
-        let end_col = ((rect.right.min(right) - left) / cell_width).min(GRID_COLS as i32 - 1) as usize;
+        let end_col = ((rect.right.min(right) - left) / cell_width).min(self.config.cols as i32 - 1) as usize;
         let start_row = ((rect.top.max(top) - top) / cell_height).max(0) as usize;
-        let end_row = ((rect.bottom.min(bottom) - top) / cell_height).min(GRID_ROWS as i32 - 1) as usize;
+        let end_row = ((rect.bottom.min(bottom) - top) / cell_height).min(self.config.rows as i32 - 1) as usize;
 
         // Check coverage for each potentially affected cell
         for row in start_row..=end_row {
             for col in start_col..=end_col {
-                if row < GRID_ROWS && col < GRID_COLS {
+                if row < self.config.rows && col < self.config.cols {
                     // Calculate the exact bounds of this grid cell
                     let cell_rect = RECT {
                         left: left + (col as i32 * cell_width),
@@ -272,13 +310,17 @@ impl MonitorGrid {
 
     pub fn update_grid(&mut self, windows: &HashMap<HWND, WindowInfo>) {
         // Reset grid to empty
-        self.grid = [[CellState::Empty; GRID_COLS]; GRID_ROWS];
+        for row in 0..self.config.rows {
+            for col in 0..self.config.cols {
+                self.grid[row][col] = CellState::Empty;
+            }
+        }
 
         // Place windows on the grid
         for (hwnd, window_info) in windows {
             let grid_cells = self.window_to_grid_cells(&window_info.rect);
             for (row, col) in grid_cells {
-                if row < GRID_ROWS && col < GRID_COLS {
+                if row < self.config.rows && col < self.config.cols {
                     self.grid[row][col] = CellState::Occupied(*hwnd);
                 }
             }
@@ -288,14 +330,14 @@ impl MonitorGrid {
     pub fn print_grid(&self) {
         // Column headers
         print!("    ");
-        for col in 0..GRID_COLS {
+        for col in 0..self.config.cols {
             print!(" {:2}", col);
         }
         println!();
 
-        for row in 0..GRID_ROWS {
+        for row in 0..self.config.rows {
             print!("{:2}: ", row);
-            for col in 0..GRID_COLS {
+            for col in 0..self.config.cols {
                 match self.grid[row][col] {
                     CellState::Empty => print!(" . "),
                     CellState::Occupied(hwnd) => {
@@ -324,7 +366,8 @@ pub struct WindowInfo {
 pub struct WindowTracker {
     pub windows: HashMap<HWND, WindowInfo>,
     pub monitor_rect: RECT,  // Virtual screen rect
-    pub grid: [[CellState; GRID_COLS]; GRID_ROWS], // Virtual grid
+    pub config: GridConfig,  // Dynamic grid configuration
+    pub grid: Vec<Vec<CellState>>, // Virtual grid (dynamic)
     pub monitor_grids: Vec<MonitorGrid>, // Individual monitor grids
     pub enum_counter: usize,
     pub active_animations: HashMap<HWND, WindowAnimation>, // Active window animations
@@ -333,6 +376,10 @@ pub struct WindowTracker {
 
 impl WindowTracker {
     pub fn new() -> Self {
+        Self::new_with_config(GridConfig::default())
+    }
+    
+    pub fn new_with_config(config: GridConfig) -> Self {
         // Get the virtual screen dimensions (all monitors combined)
         let rect = unsafe {
             RECT {
@@ -343,10 +390,12 @@ impl WindowTracker {
             }
         };
 
+        let grid = vec![vec![CellState::Empty; config.cols]; config.rows];
         let mut tracker = Self {
             windows: HashMap::new(),
             monitor_rect: rect,
-            grid: [[CellState::Empty; GRID_COLS]; GRID_ROWS],
+            config: config.clone(),
+            grid,
             monitor_grids: Vec::new(),
             enum_counter: 0,
             active_animations: HashMap::new(),
@@ -363,7 +412,7 @@ impl WindowTracker {
         let monitors = self.get_actual_monitor_bounds();
         
         for (index, monitor_rect) in monitors.iter().enumerate() {
-            let monitor_grid = MonitorGrid::new(index, *monitor_rect);
+            let monitor_grid = MonitorGrid::new_with_config(index, *monitor_rect, self.config.clone());
             self.monitor_grids.push(monitor_grid);
         }
         
@@ -465,8 +514,8 @@ impl WindowTracker {
             return cells;
         }
 
-        let cell_width = (self.monitor_rect.right - self.monitor_rect.left) / GRID_COLS as i32;
-        let cell_height = (self.monitor_rect.bottom - self.monitor_rect.top) / GRID_ROWS as i32;
+        let cell_width = (self.monitor_rect.right - self.monitor_rect.left) / self.config.cols as i32;
+        let cell_height = (self.monitor_rect.bottom - self.monitor_rect.top) / self.config.rows as i32;
 
         if cell_width <= 0 || cell_height <= 0 {
             return cells;
@@ -474,19 +523,19 @@ impl WindowTracker {
 
         // Calculate potential range of cells that might be affected
         let start_col = ((rect.left - self.monitor_rect.left) / cell_width).max(0) as usize;
-        let end_col = ((rect.right - self.monitor_rect.left) / cell_width).min(GRID_COLS as i32 - 1) as usize;
+        let end_col = ((rect.right - self.monitor_rect.left) / cell_width).min(self.config.cols as i32 - 1) as usize;
         let start_row = ((rect.top - self.monitor_rect.top) / cell_height).max(0) as usize;
-        let end_row = ((rect.bottom - self.monitor_rect.top) / cell_height).min(GRID_ROWS as i32 - 1) as usize;
+        let end_row = ((rect.bottom - self.monitor_rect.top) / cell_height).min(self.config.rows as i32 - 1) as usize;
 
         // Additional bounds checking
-        if start_col >= GRID_COLS || start_row >= GRID_ROWS {
+        if start_col >= self.config.cols || start_row >= self.config.rows {
             return cells;
         }
 
         // Check coverage for each potentially affected cell
         for row in start_row..=end_row {
             for col in start_col..=end_col {
-                if row < GRID_ROWS && col < GRID_COLS {
+                if row < self.config.rows && col < self.config.cols {
                     // Calculate the exact bounds of this grid cell
                     let cell_rect = RECT {
                         left: self.monitor_rect.left + (col as i32 * cell_width),
@@ -508,8 +557,8 @@ impl WindowTracker {
 
     pub fn update_grid(&mut self) {
         // Reset grid to initial state (keeping off-screen cells marked)
-        for row in 0..GRID_ROWS {
-            for col in 0..GRID_COLS {
+        for row in 0..self.config.rows {
+            for col in 0..self.config.cols {
                 match self.grid[row][col] {
                     CellState::OffScreen => {
                         // Keep off-screen cells as they are
@@ -525,7 +574,7 @@ impl WindowTracker {
         // Place windows on the grid
         for (hwnd, window_info) in &self.windows {
             for (row, col) in &window_info.grid_cells {
-                if *row < GRID_ROWS && *col < GRID_COLS {
+                if *row < self.config.rows && *col < self.config.cols {
                     self.grid[*row][*col] = CellState::Occupied(*hwnd);
                 }
             }
@@ -582,7 +631,7 @@ impl WindowTracker {
     pub fn print_grid(&self) {
         println!();
         println!("{}", "=".repeat(60));
-        println!("Window Grid Tracker - {}x{} Grid ({} windows)", GRID_ROWS, GRID_COLS, self.windows.len());
+        println!("Window Grid Tracker - {}x{} Grid ({} windows)", self.config.rows, self.config.cols, self.windows.len());
         println!("Monitor: {}x{} px", 
             self.monitor_rect.right - self.monitor_rect.left,
             self.monitor_rect.bottom - self.monitor_rect.top);
@@ -590,16 +639,16 @@ impl WindowTracker {
 
         // Print column headers
         print!("   ");
-        for col in 0..GRID_COLS {
+        for col in 0..self.config.cols {
             print!("{:2} ", col);
         }
         println!();
 
         // Print grid with different symbols for different states
-        for row in 0..GRID_ROWS {
+        for row in 0..self.config.rows {
             print!("{:2} ", row);
             
-            for col in 0..GRID_COLS {
+            for col in 0..self.config.cols {
                 match self.grid[row][col] {
                     CellState::Occupied(_hwnd) => {
                         print!("## ");
@@ -641,15 +690,15 @@ impl WindowTracker {
         
         // Print column headers
         print!("   ");
-        for col in 0..GRID_COLS {
+        for col in 0..self.config.cols {
             print!("{:2} ", col);
         }
         println!();
         
         // Print grid rows
-        for row in 0..GRID_ROWS {
+        for row in 0..self.config.rows {
             print!("{:2} ", row);
-            for col in 0..GRID_COLS {
+            for col in 0..self.config.cols {
                 match self.grid[row][col] {
                     CellState::Occupied(_hwnd) => {
                         print!("## ");
@@ -692,15 +741,15 @@ impl WindowTracker {
             
             // Print column headers
             print!("   ");
-            for col in 0..GRID_COLS {
+            for col in 0..monitor_grid.config.cols {
                 print!("{:2} ", col);
             }
             println!();
             
             // Print grid rows
-            for row in 0..GRID_ROWS {
+            for row in 0..monitor_grid.config.rows {
                 print!("{:2} ", row);
-                for col in 0..GRID_COLS {
+                for col in 0..monitor_grid.config.cols {
                     match monitor_grid.grid[row][col] {
                         CellState::Occupied(_hwnd) => {
                             print!("## ");
@@ -746,12 +795,12 @@ impl WindowTracker {
         // Get actual monitor bounds (not virtual screen)
         let actual_monitors = self.get_actual_monitor_bounds();
         
-        let cell_width = (self.monitor_rect.right - self.monitor_rect.left) / GRID_COLS as i32;
-        let cell_height = (self.monitor_rect.bottom - self.monitor_rect.top) / GRID_ROWS as i32;
+        let cell_width = (self.monitor_rect.right - self.monitor_rect.left) / self.config.cols as i32;
+        let cell_height = (self.monitor_rect.bottom - self.monitor_rect.top) / self.config.rows as i32;
         
         // Initialize all cells based on whether they're on an actual monitor
-        for row in 0..GRID_ROWS {
-            for col in 0..GRID_COLS {
+        for row in 0..self.config.rows {
+            for col in 0..self.config.cols {
                 let cell_left = self.monitor_rect.left + (col as i32 * cell_width);
                 let cell_top = self.monitor_rect.top + (row as i32 * cell_height);
                 let cell_right = cell_left + cell_width;
@@ -879,8 +928,8 @@ impl WindowTracker {
         let mut animations_started = 0;
         
         // Apply virtual grid layout
-        for row in 0..GRID_ROWS {
-            for col in 0..GRID_COLS {
+        for row in 0..layout.config.rows {
+            for col in 0..layout.config.cols {
                 if let Some(target_hwnd) = layout.virtual_grid[row][col] {
                     // Calculate target position from grid coordinates
                     if let Some(target_rect) = self.virtual_cell_to_window_rect(row, col) {
@@ -914,15 +963,15 @@ impl WindowTracker {
     }
     
     fn virtual_cell_to_window_rect(&self, row: usize, col: usize) -> Option<RECT> {
-        if row >= GRID_ROWS || col >= GRID_COLS {
+        if row >= self.config.rows || col >= self.config.cols {
             return None;
         }
         
         let grid_width = self.monitor_rect.right - self.monitor_rect.left;
         let grid_height = self.monitor_rect.bottom - self.monitor_rect.top;
         
-        let cell_width = grid_width / GRID_COLS as i32;
-        let cell_height = grid_height / GRID_ROWS as i32;
+        let cell_width = grid_width / self.config.cols as i32;
+        let cell_height = grid_height / self.config.rows as i32;
         
         let left = self.monitor_rect.left + (col as i32 * cell_width);
         let top = self.monitor_rect.top + (row as i32 * cell_height);
@@ -934,7 +983,7 @@ impl WindowTracker {
     
     /// Move a window to a specific grid cell
     pub fn move_window_to_cell(&mut self, hwnd: HWND, target_row: usize, target_col: usize) -> Result<(), String> {
-        if target_row >= GRID_ROWS || target_col >= GRID_COLS {
+        if target_row >= self.config.rows || target_col >= self.config.cols {
             return Err(format!("Invalid grid coordinates: ({}, {})", target_row, target_col));
         }
         
@@ -957,13 +1006,13 @@ impl WindowTracker {
 
     /// Assign a window to a virtual grid cell (tracking only, no movement)
     pub fn assign_window_to_virtual_cell(&mut self, hwnd: HWND, target_row: usize, target_col: usize) -> Result<(), String> {
-        if target_row >= GRID_ROWS || target_col >= GRID_COLS {
+        if target_row >= self.config.rows || target_col >= self.config.cols {
             return Err(format!("Invalid grid coordinates: ({}, {})", target_row, target_col));
         }
         
         // Clear the old position
-        for row in 0..GRID_ROWS {
-            for col in 0..GRID_COLS {
+        for row in 0..self.config.rows {
+            for col in 0..self.config.cols {
                 if let CellState::Occupied(existing_hwnd) = self.grid[row][col] {
                     if existing_hwnd == hwnd {
                         self.grid[row][col] = CellState::Empty;
@@ -990,14 +1039,14 @@ impl WindowTracker {
             return Err(format!("Invalid monitor ID: {}", monitor_id));
         }
         
-        if target_row >= GRID_ROWS || target_col >= GRID_COLS {
+        if target_row >= self.config.rows || target_col >= self.config.cols {
             return Err(format!("Invalid monitor grid coordinates: ({}, {}) for monitor {}", target_row, target_col, monitor_id));
         }
         
         // Clear the old position in all monitor grids
         for grid in &mut self.monitor_grids {
-            for row in 0..GRID_ROWS {
-                for col in 0..GRID_COLS {
+            for row in 0..grid.config.rows {
+                for col in 0..grid.config.cols {
                     if let CellState::Occupied(existing_hwnd) = grid.grid[row][col] {
                         if existing_hwnd == hwnd {
                             grid.grid[row][col] = CellState::Empty;
@@ -1091,8 +1140,15 @@ mod tests {
     }
 
     #[test]
-    fn test_grid_dimensions() {
-        assert_eq!(GRID_ROWS, 8);
-        assert_eq!(GRID_COLS, 12);
+    fn test_grid_config() {
+        let config = GridConfig::default();
+        assert_eq!(config.rows, 8);
+        assert_eq!(config.cols, 12);
+        assert_eq!(config.cell_count(), 96);
+        
+        let custom_config = GridConfig::new(4, 4);
+        assert_eq!(custom_config.rows, 4);
+        assert_eq!(custom_config.cols, 4);
+        assert_eq!(custom_config.cell_count(), 16);
     }
 }

@@ -1,5 +1,5 @@
-use crate::ipc;
-use crate::{CellState, GRID_ROWS, GRID_COLS};
+use crate::ipc::{self, WindowCommand};
+use crate::GridConfig;
 use iceoryx2::prelude::*;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
@@ -60,14 +60,16 @@ impl From<ipc::WindowDetails> for ClientWindowInfo {
 }
 
 pub struct GridClient {
+    // Configuration
+    config: GridConfig,
+    
     // IPC components - only keep what we need for sending commands
     command_publisher: Publisher<Service, ipc::WindowCommand, ()>,
-    
-    // Local grid state
+      // Local grid state
     windows: Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
-    virtual_grid: Arc<Mutex<[[ClientCellState; GRID_COLS]; GRID_ROWS]>>,
+    virtual_grid: Arc<Mutex<Vec<Vec<ClientCellState>>>>,
     
-    // Monitor information - store complete monitor grids
+    // Monitor information - store complete monitor grids  
     monitors: Arc<Mutex<Vec<MonitorGridInfo>>>,
     
     // Control flags
@@ -76,16 +78,23 @@ pub struct GridClient {
 }
 
 #[derive(Clone, Debug)]
-pub struct MonitorGridInfo {
-    pub monitor_id: u32,
+pub struct MonitorGridInfo {    pub monitor_id: u32,  
     pub width: i32,
     pub height: i32,
     pub x: i32,
     pub y: i32,
-    pub grid: [[Option<u64>; GRID_COLS]; GRID_ROWS],
+    pub grid: Vec<Vec<Option<u64>>>,
 }
 
 impl GridClient {
+    /// Request grid configuration from server before creating client
+    fn request_grid_config_from_server() -> Result<GridConfig, Box<dyn std::error::Error>> {
+        // For now, return a default config
+        // TODO: Implement actual IPC request to server
+        println!("⚙️ Using default grid configuration (TODO: implement server request)");
+        Ok(GridConfig::new(4, 6)) // Default 4x6 grid
+    }
+    
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let node = NodeBuilder::new().create::<Service>()?;
 
@@ -94,26 +103,61 @@ impl GridClient {
             .service_builder(&ServiceName::new(ipc::GRID_COMMANDS_SERVICE)?)
             .publish_subscribe::<ipc::WindowCommand>()
             .open()?;
-        let command_publisher = command_service.publisher_builder().create()?;        let mut client = Self {
+        let command_publisher = command_service.publisher_builder().create()?;
+
+        // First, get the grid configuration from the server
+        let config = Self::request_grid_config_from_server()?;
+        
+        // Now initialize with the dynamic config
+        let virtual_grid = vec![vec![ClientCellState::Empty; config.cols]; config.rows];
+        
+        let client = Self {
+            config,
             command_publisher,
             windows: Arc::new(Mutex::new(HashMap::new())),
-            virtual_grid: Arc::new(Mutex::new([[ClientCellState::Empty; GRID_COLS]; GRID_ROWS])),
+            virtual_grid: Arc::new(Mutex::new(virtual_grid)),
             monitors: Arc::new(Mutex::new(Vec::new())),
             auto_display: Arc::new(Mutex::new(true)),
             running: Arc::new(Mutex::new(true)),
         };
 
+        println!("✅ Client initialized with grid size: {}x{}", client.config.rows, client.config.cols);
+
         // Initialize grid with off-screen areas marked
         client.initialize_client_grid()?;
 
         Ok(client)
-    }    
+    }    pub fn request_grid_config(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let command = WindowCommand {
+            command_type: 8, // New command type for GetGridConfig
+            hwnd: 0,
+            target_row: 0,
+            target_col: 0,
+            monitor_id: 0,
+            layout_id: 1001, // Use layout_id as command identifier
+            animation_duration_ms: 0,
+            easing_type: 0,
+        };
+        self.command_publisher.send_copy(command)?;
+        println!("🔧 Requested grid configuration from server...");
+        Ok(())
+    }
+    fn process_responses(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // TODO: Implement response subscriber for config updates
+        // For now this is a placeholder
+        Ok(())
+    }    pub fn wait_for_config(&mut self, timeout_ms: u64) -> Result<GridConfig, Box<dyn std::error::Error>> {
+        // For now, just return the current config
+        // TODO: Implement actual waiting for server response
+        Ok(self.config.clone())
+    }
     
     fn initialize_client_grid(&self) -> Result<(), Box<dyn std::error::Error>> {
         // Get virtual screen dimensions
         let virtual_rect = Self::get_virtual_screen_rect();
         let actual_monitors = Self::get_actual_monitor_bounds();
-          println!("🔍 DEBUG: Client virtual screen: {}x{} at ({},{})", 
+        
+        println!("🔍 DEBUG: Client virtual screen: {}x{} at ({},{})", 
             virtual_rect.2 - virtual_rect.0, virtual_rect.3 - virtual_rect.1,
             virtual_rect.0, virtual_rect.1);
         println!("🔍 DEBUG: Client found {} monitors", actual_monitors.len());
@@ -122,7 +166,8 @@ impl GridClient {
                 monitor.2 - monitor.0, monitor.3 - monitor.1,
                 monitor.0, monitor.1);
         }
-          // Store monitor information for display
+        
+        // Store monitor information for display
         if let Ok(mut monitors_lock) = self.monitors.lock() {
             monitors_lock.clear();
             for (i, monitor) in actual_monitors.iter().enumerate() {
@@ -132,20 +177,20 @@ impl GridClient {
                     height: monitor.3 - monitor.1,
                     x: monitor.0,
                     y: monitor.1,
-                    grid: [[None; GRID_COLS]; GRID_ROWS],
+                    grid: vec![vec![None; self.config.cols]; self.config.rows],
                 };
                 monitors_lock.push(monitor_info);
             }
             println!("🔍 DEBUG: Stored {} monitor grid structures", monitors_lock.len());
         }
         
-        let cell_width = (virtual_rect.2 - virtual_rect.0) / GRID_COLS as i32;
-        let cell_height = (virtual_rect.3 - virtual_rect.1) / GRID_ROWS as i32;
+        let cell_width = (virtual_rect.2 - virtual_rect.0) / self.config.cols as i32;
+        let cell_height = (virtual_rect.3 - virtual_rect.1) / self.config.rows as i32;
         
         if let Ok(mut grid) = self.virtual_grid.lock() {
-            // Initialize all cells based on whether they're on an actual monitor
-            for row in 0..GRID_ROWS {
-                for col in 0..GRID_COLS {
+            // Initialize all cells based on whether they're on an actual monitor  
+            for row in 0..self.config.rows {
+                for col in 0..self.config.cols {
                     let cell_left = virtual_rect.0 + (col as i32 * cell_width);
                     let cell_top = virtual_rect.1 + (row as i32 * cell_height);
                     let cell_right = cell_left + cell_width;
@@ -212,14 +257,13 @@ impl GridClient {
         }
         
         monitors
-    }
-
-    pub fn start_background_monitoring(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    }    pub fn start_background_monitoring(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let windows = self.windows.clone();
         let virtual_grid = self.virtual_grid.clone();
         let monitors = self.monitors.clone();
         let auto_display = self.auto_display.clone();
         let running = self.running.clone();
+        let config = self.config.clone(); // Clone the config for the background thread
         
         thread::spawn(move || {
             // Create new node and subscribers for the background thread
@@ -234,7 +278,7 @@ impl GridClient {
                         while let Some(event_sample) = event_subscriber.receive().unwrap_or(None) {
                             let event = *event_sample;
                             events_received += 1;
-                            Self::handle_window_event(&event, &windows, &virtual_grid, &monitors, &auto_display);
+                            Self::handle_window_event(&event, &windows, &virtual_grid, &monitors, &auto_display, &config);
                         }                        // Process window details updates
                         let mut batch_count = 0;
                         while let Some(details_sample) = window_details_subscriber.receive().unwrap_or(None) {
@@ -259,7 +303,7 @@ impl GridClient {
                                 details.monitor_row_start, details.monitor_col_start,
                                 details.monitor_row_end, details.monitor_col_end);
                             
-                            Self::handle_window_details(&details, &windows, &virtual_grid, &monitors, &auto_display);
+                            Self::handle_window_details(&details, &windows, &virtual_grid, &monitors, &auto_display, &config);
                             
                             // Print current window count and brief grid after each window
                             let current_window_count = windows.lock().unwrap().len();
@@ -297,10 +341,9 @@ impl GridClient {
                                             title.chars().take(40).collect::<String>(),
                                             window_info.x, window_info.y, window_info.width, window_info.height);
                                     }
-                                    
-                                    // Also show current grid state
+                                      // Also show current grid state
                                     println!("\n📊 Current Client Grid State:");
-                                    Self::display_complete_grid(&virtual_grid, &windows, &monitors);
+                                    Self::display_virtual_grid(&virtual_grid, &windows, &config);
                                 }
                                 
                                 LAST_STATUS_TIME = std::time::Instant::now();
@@ -355,14 +398,13 @@ impl GridClient {
             .publish_subscribe::<ipc::WindowDetails>()
             .open()?;
         let window_details_subscriber = window_details_service.subscriber_builder().create()?;        Ok((event_subscriber, window_details_subscriber))
-    }
-
-    fn handle_window_event(
+    }    fn handle_window_event(
         event: &ipc::WindowEvent,
         windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
-        virtual_grid: &Arc<Mutex<[[ClientCellState; GRID_COLS]; GRID_ROWS]>>,
+        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
         monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
         auto_display: &Arc<Mutex<bool>>,
+        config: &GridConfig,
     ) {
         let event_name = match event.event_type {
             0 => "CREATED",
@@ -399,21 +441,19 @@ impl GridClient {
                 EVENT_DISPLAY_INITIALIZED = true;
             }
             
-            if *auto_display.lock().unwrap() && 
-               (event.event_type == 0 || event.event_type == 1) && // Only for create/destroy
+            if *auto_display.lock().unwrap() &&               (event.event_type == 0 || event.event_type == 1) && // Only for create/destroy
                LAST_EVENT_DISPLAY.elapsed().as_millis() > 500 { // Max twice per second
                 println!("   📊 Displaying grid after {} event...", event_name);
-                Self::display_complete_grid(&virtual_grid, &windows, &monitors);
+                Self::display_virtual_grid(&virtual_grid, &windows, &config);
                 LAST_EVENT_DISPLAY = std::time::Instant::now();
             }
         }
     }
-    
-    /// Remove a window from all client state
+      /// Remove a window from all client state
     fn remove_window_from_client(
         hwnd: u64,
         windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
-        virtual_grid: &Arc<Mutex<[[ClientCellState; GRID_COLS]; GRID_ROWS]>>,
+        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
         monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
     ) {
         // Remove from window cache
@@ -423,8 +463,8 @@ impl GridClient {
         
         // Remove from virtual grid
         if let Ok(mut grid) = virtual_grid.lock() {
-            for row in 0..GRID_ROWS {
-                for col in 0..GRID_COLS {
+            for row in 0..grid.len() {
+                for col in 0..grid[row].len() {
                     if let ClientCellState::Occupied(existing_hwnd) = grid[row][col] {
                         if existing_hwnd == hwnd {
                             grid[row][col] = ClientCellState::Empty;
@@ -433,12 +473,11 @@ impl GridClient {
                 }
             }
         }
-        
-        // Remove from monitor grids
+          // Remove from monitor grids
         if let Ok(mut monitors_lock) = monitors.lock() {
             for monitor in monitors_lock.iter_mut() {
-                for row in 0..GRID_ROWS {
-                    for col in 0..GRID_COLS {
+                for row in 0..monitor.grid.len() {
+                    for col in 0..monitor.grid[row].len() {
                         if monitor.grid[row][col] == Some(hwnd) {
                             monitor.grid[row][col] = None;
                         }
@@ -447,14 +486,13 @@ impl GridClient {
             }
         }
     }
-    
-    
-    fn handle_window_details(
+        fn handle_window_details(
         details: &ipc::WindowDetails,
         windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
-        virtual_grid: &Arc<Mutex<[[ClientCellState; GRID_COLS]; GRID_ROWS]>>,
+        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
         monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
         auto_display: &Arc<Mutex<bool>>,
+        config: &GridConfig,
     ) {
         println!("📊 [WINDOW UPDATE] HWND {} at ({}, {}) size {}x{}", 
             details.hwnd, details.x, details.y, details.width, details.height);
@@ -474,9 +512,8 @@ impl GridClient {
         
         // Update virtual grid
         Self::update_virtual_grid(&details, &virtual_grid);
-        
-        // Update monitor grids
-        Self::update_monitor_grids(&details, &monitors);        // Auto-display grid if enabled (but not too frequently)
+          // Update monitor grids
+        Self::update_monitor_grids(&details, &monitors, config);// Auto-display grid if enabled (but not too frequently)
         if *auto_display.lock().unwrap() {
             static mut LAST_AUTO_DISPLAY: std::time::Instant = unsafe { std::mem::zeroed() };
             static mut AUTO_DISPLAY_INITIALIZED: bool = false;
@@ -486,11 +523,10 @@ impl GridClient {
                     LAST_AUTO_DISPLAY = std::time::Instant::now();
                     AUTO_DISPLAY_INITIALIZED = true;
                 }
-                
-                // Only auto-display if it's been at least 1 second since last display
+                  // Only auto-display if it's been at least 1 second since last display
                 if LAST_AUTO_DISPLAY.elapsed().as_millis() > 1000 {
                     println!("   🔄 Auto-displaying updated grid...");
-                    Self::display_complete_grid(&virtual_grid, &windows, &monitors);
+                    Self::display_virtual_grid(&virtual_grid, &windows, config);
                     println!("   ─────────────────────────────────────");
                     LAST_AUTO_DISPLAY = std::time::Instant::now();
                 } else {
@@ -500,17 +536,16 @@ impl GridClient {
             }
         }
     }    
-    
-    fn update_virtual_grid(
+      fn update_virtual_grid(
         details: &ipc::WindowDetails,
-        virtual_grid: &Arc<Mutex<[[ClientCellState; GRID_COLS]; GRID_ROWS]>>,
+        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
     ) {
         if let Ok(mut grid) = virtual_grid.lock() {
             let hwnd = details.hwnd;
             
             // Clear previous positions for this window
-            for row in 0..GRID_ROWS {
-                for col in 0..GRID_COLS {
+            for row in 0..grid.len() {
+                for col in 0..grid[row].len() {
                     if let ClientCellState::Occupied(existing_hwnd) = grid[row][col] {
                         if existing_hwnd == hwnd {
                             grid[row][col] = ClientCellState::Empty;
@@ -522,7 +557,7 @@ impl GridClient {
             // Set new positions
             for row in details.virtual_row_start..=details.virtual_row_end {
                 for col in details.virtual_col_start..=details.virtual_col_end {
-                    if row < GRID_ROWS as u32 && col < GRID_COLS as u32 {
+                    if row < grid.len() as u32 && col < grid[0].len() as u32 {
                         // Only update if it's not an off-screen cell
                         if let ClientCellState::OffScreen = grid[row as usize][col as usize] {
                             // Don't overwrite off-screen markers
@@ -534,31 +569,31 @@ impl GridClient {
             }
         }
     }    
-    
-    fn display_virtual_grid(
-        virtual_grid: &Arc<Mutex<[[ClientCellState; GRID_COLS]; GRID_ROWS]>>,
+      fn display_virtual_grid(
+        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
         windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
+        config: &GridConfig,
     ) {
         println!("\n🔥 REAL-TIME GRID UPDATE:");
         println!("{}", "=".repeat(60));
         
         let window_count = windows.lock().unwrap().len();
-        println!("Client Grid Viewer - {}x{} Grid ({} windows)", GRID_ROWS, GRID_COLS, window_count);
+        println!("Client Grid Viewer - {}x{} Grid ({} windows)", config.rows, config.cols, window_count);
         println!("{}", "=".repeat(60));
 
         // Print column headers
         print!("   ");
-        for col in 0..GRID_COLS {
+        for col in 0..config.cols {
             print!("{:2} ", col);
         }
         println!();
 
         // Print grid
         if let Ok(grid) = virtual_grid.lock() {
-            for row in 0..GRID_ROWS {
+            for row in 0..config.rows {
                 print!("{:2} ", row);
                 
-                for col in 0..GRID_COLS {
+                for col in 0..config.cols {
                     match grid[row][col] {
                         ClientCellState::Occupied(_hwnd) => print!("## "),
                         ClientCellState::Empty => print!(".. "),
@@ -572,10 +607,10 @@ impl GridClient {
         println!("{}", "=".repeat(60));
         println!();
     }
-    
-    fn update_monitor_grids(
+      fn update_monitor_grids(
         details: &ipc::WindowDetails,
         monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
+        config: &GridConfig,
     ) {        
         if let Ok(mut monitors_lock) = monitors.lock() {
             // Ensure we have enough monitor grid entries
@@ -588,15 +623,15 @@ impl GridClient {
                     height: 0, 
                     x: 0,
                     y: 0,
-                    grid: [[None; GRID_COLS]; GRID_ROWS],
+                    grid: vec![vec![None; config.cols]; config.rows],
                 });
             }
             
             let monitor = &mut monitors_lock[details.monitor_id as usize];
             
             // Clear previous positions for this window in this monitor
-            for row in 0..GRID_ROWS {
-                for col in 0..GRID_COLS {
+            for row in 0..monitor.grid.len() {
+                for col in 0..monitor.grid[row].len() {
                     if monitor.grid[row][col] == Some(details.hwnd) {
                         monitor.grid[row][col] = None;
                     }
@@ -606,7 +641,7 @@ impl GridClient {
             // Set new positions in monitor grid
             for row in details.monitor_row_start..=details.monitor_row_end {
                 for col in details.monitor_col_start..=details.monitor_col_end {
-                    if row < GRID_ROWS as u32 && col < GRID_COLS as u32 {
+                    if row < config.rows as u32 && col < config.cols as u32 {
                         monitor.grid[row as usize][col as usize] = Some(details.hwnd);
                     }
                 }
@@ -624,9 +659,9 @@ impl GridClient {
             }        
         }
     }
-    
-    fn display_complete_grid(
-        virtual_grid: &Arc<Mutex<[[ClientCellState; GRID_COLS]; GRID_ROWS]>>,
+      fn display_complete_grid(
+        &self,
+        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
         windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
         monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
     ) {
@@ -644,21 +679,20 @@ impl GridClient {
         let virtual_height = virtual_rect.3 - virtual_rect.1;
         
         println!("\n============================================================");
-        println!("Window Grid Tracker - {}x{} Grid ({} windows)", GRID_ROWS, GRID_COLS, window_count);
+        println!("Window Grid Tracker - {}x{} Grid ({} windows)", self.config.rows, self.config.cols, window_count);
         println!("Monitor: {}x{} px", virtual_width, virtual_height);
         println!("============================================================");        // Print column headers
         print!("    ");
-        for col in 0..GRID_COLS {
+        for col in 0..self.config.cols {
             print!("{:2} ", col);
         }
         println!();
-        
-        // Print virtual grid with window representation (like server)
+          // Print virtual grid with window representation (like server)
         if let Ok(grid) = virtual_grid.try_lock() {
-            for row in 0..GRID_ROWS {
+            for row in 0..self.config.rows {
                 print!(" {}: ", row);
                 
-                for col in 0..GRID_COLS {
+                for col in 0..self.config.cols {
                     match grid[row][col] {
                         ClientCellState::Occupied(hwnd) => {
                             // Display last 2 decimal digits of HWND in hex format like the server
@@ -674,7 +708,7 @@ impl GridClient {
                     }
                 }
                 println!();
-            }        }
+            }}
         
         println!();
         
@@ -689,16 +723,16 @@ impl GridClient {
                         }
                         // Print column headers
                         print!("      ");
-                        for col in 0..GRID_COLS {
+                        for col in 0..self.config.cols {
                             print!("{:2} ", col);
                         }
                         println!();
                         
                         // Print monitor grid
-                        for row in 0..GRID_ROWS {
+                        for row in 0..self.config.rows {
                             print!(" {}:  ", row);
                             
-                            for col in 0..GRID_COLS {
+                            for col in 0..self.config.cols {
                                 match monitor.grid[row][col] {                                    
                                     Some(hwnd) => {
                                         // Display last 2 decimal digits of HWND in hex format like server
@@ -783,9 +817,8 @@ impl GridClient {
         };
         self.send_command(command)
     }
-    
-    pub fn display_current_grid(&self) {
-        Self::display_complete_grid(&self.virtual_grid, &self.windows, &self.monitors);
+      pub fn display_current_grid(&self) {
+        self.display_complete_grid(&self.virtual_grid, &self.windows, &self.monitors);
     }
     
     pub fn display_window_list(&self) {
@@ -850,5 +883,12 @@ impl GridClient {
 impl Drop for GridClient {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+impl GridClient {
+    /// Get the current grid configuration
+    pub fn get_config(&self) -> &GridConfig {
+        &self.config
     }
 }

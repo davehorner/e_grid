@@ -1,3 +1,4 @@
+use crate::GridConfig;
 use crate::{WindowTracker, ipc};
 use iceoryx2::prelude::*;
 use iceoryx2::port::publisher::Publisher;
@@ -15,7 +16,7 @@ use winapi::um::winuser::{
     EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND,
     WINEVENT_OUTOFCONTEXT, OBJID_WINDOW, CHILDID_SELF, SM_CXSCREEN, SM_CYSCREEN
 };
-
+use crate::ipc::GridResponse;
 // Global state for the IPC server instance - needed for WinEvent callbacks
 static mut GLOBAL_IPC_SERVER: Option<*mut GridIpcServer> = None;
 
@@ -28,7 +29,7 @@ static mut GLOBAL_IPC_SERVER: Option<*mut GridIpcServer> = None;
 pub struct GridIpcServer {
     // Core window tracker
     tracker: Arc<Mutex<WindowTracker>>,
-    
+    config: GridConfig, 
     // IPC Publishers
     event_publisher: Option<Publisher<Service, ipc::WindowEvent, ()>>,
     response_publisher: Option<Publisher<Service, ipc::WindowResponse, ()>>,
@@ -51,9 +52,17 @@ pub struct GridIpcServer {
     event_hooks: Vec<winapi::shared::windef::HWINEVENTHOOK>,
 }
 
-impl GridIpcServer {    /// Create a new IPC server instance
-    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Result<Self, Box<dyn std::error::Error>> {        Ok(Self {
+impl GridIpcServer {
+    /// Create a new IPC server instance
+    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Result<Self, Box<dyn std::error::Error>> {    
+                // Get the config from the tracker once during initialization
+        let config = {
+            let tracker_guard = tracker.lock().unwrap();
+            tracker_guard.config.clone()
+        };
+            Ok(Self {
             tracker,
+            config, 
             event_publisher: None,
             response_publisher: None,
             window_details_publisher: None,
@@ -224,7 +233,10 @@ impl GridIpcServer {    /// Create a new IPC server instance
 
     /// Handle a grid command and return a response
     pub fn handle_command(&mut self, command: ipc::GridCommand) -> Result<ipc::GridResponse, Box<dyn std::error::Error>> {
-        match command {
+        match command {            ipc::GridCommand::GetGridConfig => {
+                self.send_response(GridResponse::GridConfig(self.config.clone()))?;
+                Ok(GridResponse::GridConfig(self.config.clone()))
+            }
             ipc::GridCommand::GetGridState => {
                 if let Ok(tracker) = self.tracker.lock() {
                     let total_windows = tracker.windows.len();
@@ -457,32 +469,31 @@ impl GridIpcServer {    /// Create a new IPC server instance
         // Get screen dimensions for proper grid calculation
         let screen_width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
         let screen_height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-        
         // Calculate proper virtual grid position based on actual screen dimensions
-        let cell_width = screen_width / crate::GRID_COLS as i32;
-        let cell_height = screen_height / crate::GRID_ROWS as i32;
+        let cell_width = screen_width / self.config.cols as i32;
+        let cell_height = screen_height / self.config.rows as i32;
         
         let virtual_row = if cell_height > 0 && rect.top >= 0 {
-            ((rect.top / cell_height).max(0).min(crate::GRID_ROWS as i32 - 1)) as u32
+            ((rect.top / cell_height).max(0).min(self.config.rows as i32 - 1)) as u32
         } else {
             0
         };
         
         let virtual_col = if cell_width > 0 && rect.left >= 0 {
-            ((rect.left / cell_width).max(0).min(crate::GRID_COLS as i32 - 1)) as u32
+            ((rect.left / cell_width).max(0).min(self.config.cols as i32 - 1)) as u32
         } else {
             0
         };
         
         // Calculate end positions based on window size
         let virtual_row_end = if cell_height > 0 && rect.bottom > rect.top {
-            ((rect.bottom / cell_height).max(virtual_row as i32).min(crate::GRID_ROWS as i32)) as u32
+            ((rect.bottom / cell_height).max(virtual_row as i32).min(self.config.rows as i32)) as u32
         } else {
             virtual_row + 1
         };
         
         let virtual_col_end = if cell_width > 0 && rect.right > rect.left {
-            ((rect.right / cell_width).max(virtual_col as i32).min(crate::GRID_COLS as i32)) as u32
+            ((rect.right / cell_width).max(virtual_col as i32).min(self.config.cols as i32)) as u32
         } else {
             virtual_col + 1
         };
@@ -524,6 +535,11 @@ impl GridIpcServer {    /// Create a new IPC server instance
     pub fn stop(&mut self) {
         self.is_running = false;
         println!("🛑 E-Grid IPC server stopped");
+    }
+
+    /// Get the current grid configuration
+    pub fn get_config(&self) -> &GridConfig {
+        &self.config
     }
 
     // Convenience methods for publishing specific events
@@ -757,8 +773,7 @@ impl GridIpcServer {    /// Create a new IPC server instance
                 error_code: 0,
                 window_count: layout_names.len() as u32,
                 ..Default::default()
-            },
-            ipc::GridResponse::AnimationStatus { statuses } => ipc::WindowResponse {
+            },            ipc::GridResponse::AnimationStatus { statuses } => ipc::WindowResponse {
                 response_type: 5,
                 error_code: 0,
                 window_count: statuses.len() as u32,
@@ -767,6 +782,13 @@ impl GridIpcServer {    /// Create a new IPC server instance
                 } else {
                     [0, 0, 0, 0]
                 },
+                ..Default::default()
+            },
+            ipc::GridResponse::GridConfig(config) => ipc::WindowResponse {
+                response_type: 6, // Grid config response type
+                error_code: 0,
+                window_count: 0, // Not used for config
+                data: [config.rows as u64, config.cols as u64, 0, 0],
                 ..Default::default()
             },
         }

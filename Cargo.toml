@@ -8,6 +8,7 @@ winapi = { version = "0.3", features = ["winuser", "libloaderapi", "processthrea
 crossterm = "0.27"
 iceoryx2 = "0.6.1"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 rand = "0.8"
 
 [[bin]]
@@ -73,3 +74,19 @@ path = "src/grid_layout_client_demo.rs"
 [[bin]]
 name = "test_new_features"
 path = "src/test_new_features.rs"
+
+[[bin]]
+name = "test_dynamic_grid"
+path = "src/test_dynamic_grid.rs"
+
+[[bin]]
+name = "test_dynamic_transitions"
+path = "src/test_dynamic_transitions.rs"
+
+[[bin]]
+name = "test_dynamic_transitions_fixed"
+path = "src/test_dynamic_transitions_fixed.rs"
+
+[[bin]]
+name = "test_animated_transitions"
+path = "src/test_animated_transitions.rs"
