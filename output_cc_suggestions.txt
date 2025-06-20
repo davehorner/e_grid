@@ -1,0 +1,63 @@
+
+----------------------
+feat: add window tracking functionality with multi-monitor support and grid display
+
+- Added .gitignore to exclude target folder.
+- Initialized Cargo.toml and created initial project structure.
+- Implemented WindowTracker for managing windows and their positions on an 8x12 grid.
+- Created example binaries for basic usage and testing. 
+- Added event monitoring for real-time updates on window state changes.
+- Developed documentation in LIBRARY.md and README.md.
+
+
+----------------------
+feat: enhance window tracking with grid cell states
+
+- Introduced CellState enum to represent the state of grid cells in src/lib.rs.
+- Updated WindowTracker to use CellState instead of Option<HWND> for the grid.
+- Implemented methods to initialize grid cells based on actual monitor bounds.
+
+
+----------------------
+feat: add MonitorGrid and CellState structs for managing window states on multiple monitors
+
+
+----------------------
+feat: add MonitorGrid and cell management for window tracking functionality in lib.rs
+
+
+----------------------
+feat: add monitor grid management and window tracking functionality in lib.rs
+
+
+----------------------
+feat: add monitor grid management and enhance window tracking functionality in lib.rs
+
+
+----------------------
+refactor(window_events): improve static mut access safety and cleanup in lib.rs
+
+
+----------------------
+chore: update Cargo dependencies and remove unused window event code in lib.rs
+
+
+----------------------
+chore: update Cargo.lock and Cargo.toml with new dependencies and add IPC demo files
+
+
+----------------------
+chore: update Cargo.lock and Cargo.toml for iceoryx2 integration, add IPC support in new src/ipc.rs and demo files
+
+
+----------------------
+chore: update Cargo.lock and Cargo.toml to include new dependencies and enhance IPC functionality
+
+
+----------------------
+chore: update Cargo.lock and Cargo.toml for new IPC features and dependencies, add ipc module and demo files
+
+
+----------------------
+chore: update dependencies and add dynamic grid support in Cargo.toml and Cargo.lock, implement new animated transition tests and demo scripts, enhance IPC communication with GridConfig, and refine window management logic in src/ipc.rs and src/ipc_client.rs
+

@@ -29,7 +29,8 @@ fn main() {
     println!("\nDetailed Window Analysis:");
     println!("{}", "=".repeat(80));
 
-    for (hwnd, window_info) in &tracker.windows {
+    for entry in &tracker.windows {
+        let (hwnd, window_info) = entry.pair();
         let rect = &window_info.rect;
         let width = rect.right - rect.left;
         let height = rect.bottom - rect.top;
@@ -77,7 +78,8 @@ fn main() {
     tracker.scan_existing_windows();
 
     println!("\nUpdated window positions:");
-    for (hwnd, window_info) in &tracker.windows {
+    for entry in &tracker.windows {
+        let (_, window_info) = entry.pair();
         let rect = &window_info.rect;
         if rect.left >= 5120 {
             println!(

@@ -1,0 +1,163 @@
+
+----------------------
+To generate a better conventional commit message based on the changes you made, consider using the following refined prompt:
+
+---
+
+**Prompt:**
+
+Generate a conventional commit message based on the following changes made in the specified files. Ensure that the message adheres to the conventional commit specifications, including the type, a concise description, and references to the affected files or components.
+
+**Changed Files:**
+- `src/lib.rs`
+
+**Changes:**
+- Introduced a new enum `CellState` to represent different states of grid cells (Empty, Occupied, OffScreen).
+- Created a struct `MonitorGrid` to manage the layout of windows on each monitor.
+- Implemented methods for `MonitorGrid`, including initialization and updating grid cells based on window locations.
+- Modified `WindowTracker` to include individual `MonitorGrid` instances for each monitor and updated how windows are managed across multiple monitors.
+- Improved the grid display with representations for different states of cells.
+
+---
+
+This prompt provides all necessary context to help generate a coherent and complete conventional commit message that accurately reflects the changes made.
+
+
+----------------------
+To generate a clearer conventional commit message that aligns with the specifications, use the following prompt:
+
+**Prompt:**
+
+"Please write a conventional commit message that summarizes the changes made in the recent commit, including references to the modified files. The message should include a type (e.g., feat, fix, chore), a subject line that describes the changes in a concise manner, and detail any specific functionality introduced or bugs fixed related to the changes in `src/lib.rs`. Remember to follow the proper format, starting with the type and scope (if applicable), followed by a colon and a brief description." 
+
+**Example Format:**
+`<type>[optional scope]: <subject>`
+
+---
+Make sure to adapt the prompt as needed for other programming contexts or specific conventions you might want to highlight!
+
+
+----------------------
+To generate a better conventional commit message, it's helpful to provide context about the nature of the changes made in the code. Here’s an improved prompt to obtain a commit message that adheres to conventional commit specifications:
+
+---
+
+**Prompt:**
+
+Please write a conventional commit message that includes a summary of the changes, references the modified files, and categorizes the update according to the conventional commit format (e.g., feat, fix, chore). 
+
+Consider the following context from the changes made in the code:
+
+- A new data structure `MonitorGrid` was introduced to manage the arrangement of windows across multiple monitors.
+- Added methods to initialize monitor grids and update window positions on these grids.
+- Introduced a new enum `CellState` to represent the state of each cell within the grid (i.e., `Empty`, `Occupied`, `OffScreen`).
+- Enhanced the `WindowTracker` struct to maintain individual grids for each monitor.
+
+The modified files include:
+- `src/lib.rs`
+
+---
+
+With this improved prompt, the focus is placed on the specific types of changes that have been made, encouraging a commit message that is descriptive and follows the conventional style. This will assist in maintaining a clear and consistent commit history.
+
+
+----------------------
+Here’s an improved prompt to generate a more informative conventional commit message that follows the conventional commit specifications:
+
+---
+
+**Prompt:**
+
+Please provide a conventional commit message detailing your changes to the files based on the provided `diff`. Ensure that your message adheres to the conventional commit specification, which typically includes:
+
+1. **Type**: Specify the type of change (e.g., `feat`, `fix`, `chore`, `docs`, `style`, `refactor`, `perf`, `test`).
+2. **Scope**: Optionally, include the scope of the change in parentheses (e.g., `package`, `component`).
+3. **Description**: A brief description summarizing the change.
+4. **Breaking Changes**: If applicable, mention any breaking changes.
+5. **Reference**: Include references to any relevant issues or further context.
+
+For instance, if you are updating dependencies in the `Cargo.lock` file and modifying associated modules, your commit message could look like this:
+
+```
+feat(deps): update dependencies in Cargo.lock
+
+Updated the version of several crates including `iceoryx2`, `serde`, and others in `Cargo.lock`, improving functionality and performance. This change may affect associated modules that depend on these updates.
+
+Refer to [issue #123](link_to_issue) for more details.
+```
+
+Using the information from the `diff`, please generate an appropriate conventional commit message.
+
+--- 
+
+This prompt instructs the user on how to format the message diligently while providing an example. It helps ensure clarity and adherence to the conventional commit guidelines.
+
+
+----------------------
+To ensure the generation of a conventional commit message that adheres to the conventional commit specifications and accurately references the changes made in the files, you can use the following improved prompt:
+
+---
+
+**Prompt:**
+
+"Create a conventional commit message that summarizes the changes made in the `Cargo.lock`, `Cargo.toml`, and new files in the `src` directory. The changes include updates to dependencies, added IPC functionality in `ipc.rs`, and the introduction of additional features in `ipc_demo.rs` and `ipc_demo_new.rs`. Follow the conventional commit format, such as `feat`, `fix`, or `chore`, and ensure to mention the added and updated packages as well as any significant new functionalities or modifications introduced in the code files."
+
+---
+
+This prompt encourages the generation of a clear and descriptive commit message that adheres to the guidelines and captures the important aspects of the changes made.
+
+
+----------------------
+To create an effective conventional commit message from the provided code changes, it's important to adhere to the conventional commits specification format. This format includes a type, an optional scope, and a description of the change. 
+
+Your prompt should provide clear guidance on how to frame a commit message based on the changes made in the code. Here’s an improved prompt:
+
+---
+
+### Improved Commit Message Prompt
+
+**Please create a conventional commit message based on the following changes in the code:**
+
+1. **Added new dependencies in `Cargo.toml`:**
+   - `iceoryx2` version 0.6.1
+   - `serde` with derive feature for serialization and deserialization.
+
+2. **Modified `Cargo.lock`:** 
+   - Updated various dependencies, including `winapi`, `serde`, and added many new packages such as `either`, `bitflags`, `cc`, etc.
+
+3. **Created new source files:** 
+   - `src/ipc.rs`: New IPC functionality with Iceoryx integration to manage window events using a publisher/subscriber model.
+   - `src/ipc_demo.rs`: Demo client for IPC, subscribing to services.
+   - `src/ipc_demo_new.rs`: An enhanced demo client with improved command input handling.
+   - Introduced `src/ipc_test.rs` for testing IPC functionality.
+
+4. **Refactored other existing files** to improve the organization and make events handling more modular under `src/window_events.rs`.
+
+**Make sure to include the type (e.g., `feat`, `fix`, `chore`), a succinct description, and reference any relevant files or packages that were modified.**
+
+### Expected Message Format
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+
+[optional footer]
+```
+---
+
+### Example Commit Message Based on the Expected Prompt
+
+```
+feat(ipc): integrate Iceoryx for window event management
+
+- Added iceoryx2 as a dependency for IPC communication.
+- Created IPC manager in src/ipc.rs for handling window events.
+- Introduced new demo clients in src/ipc_demo.rs and src/ipc_demo_new.rs.
+- Refactored window events handling into src/window_events.rs.
+```
+
+---
+
+Using this prompt will result in clearer, more structured commit messages that adhere to the conventional commit specification, aiding in better project management and code comprehension.
+

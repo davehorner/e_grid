@@ -146,33 +146,33 @@ fn transition_to_grid(
     
     let max_windows = windows.len().min(grid_rows * grid_cols);
     let mut moved_count = 0;
-    
-    for (i, window) in windows.iter_mut().enumerate().take(max_windows) {
+      for (i, window) in windows.iter_mut().enumerate().take(max_windows) {
         // Calculate target position based on window order
         let target_row = i / grid_cols;
         let target_col = i % grid_cols;
-          // Simple direct assignment for this demonstration
+        
+        // Simple direct assignment for this demonstration
         let available_row = target_row;
         let available_col = target_col;
-            window.grid_row = available_row;
-            window.grid_col = available_col;
-            window.target_rect = calculate_grid_position(monitor_rect, available_row, available_col, grid_rows, grid_cols);
-            window.is_moving = true;
-            
-            println!("  📦 Window {}: '{}' → Cell [{},{}]", 
-                i + 1,
-                if window.title.len() > 25 { &window.title[..25] } else { &window.title },
-                available_row, 
-                available_col
-            );
-              move_window_to_position(window.hwnd, &window.target_rect);
-            
-            moved_count += 1;
-            
-            // Small delay between window movements to avoid conflicts
-            thread::sleep(Duration::from_millis(100));        } else {
-            println!("  ⚠️  No available cell for window: '{}'", window.title);
-        }
+        
+        window.grid_row = available_row;
+        window.grid_col = available_col;
+        window.target_rect = calculate_grid_position(monitor_rect, available_row, available_col, grid_rows, grid_cols);
+        window.is_moving = true;
+        
+        println!("  📦 Window {}: '{}' → Cell [{},{}]", 
+            i + 1,
+            if window.title.len() > 25 { &window.title[..25] } else { &window.title },
+            available_row, 
+            available_col
+        );
+        
+        move_window_to_position(window.hwnd, &window.target_rect);
+        
+        moved_count += 1;
+        
+        // Small delay between window movements to avoid conflicts
+        thread::sleep(Duration::from_millis(100));
     }
     
     println!("   ✅ Moved {} windows to {}x{} grid", moved_count, grid_rows, grid_cols);

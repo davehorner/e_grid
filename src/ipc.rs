@@ -19,6 +19,9 @@ pub const GRID_CELL_ASSIGNMENTS_SERVICE: &str = "e_grid_cell_assignments"; // Ce
 pub const ANIMATION_COMMANDS_SERVICE: &str = "e_grid_animations"; // Animation control
 pub const ANIMATION_STATUS_SERVICE: &str = "e_grid_animation_status"; // Animation status updates
 
+// NEW: Focus events service for e_midi integration
+pub const GRID_FOCUS_EVENTS_SERVICE: &str = "e_grid_focus_events"; // Window focus/defocus events
+
 // Zero-copy compatible data types for iceoryx2
 // Using only basic types that work with iceoryx2's zero-copy requirements
 #[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
@@ -95,6 +98,33 @@ impl Default for WindowResponse {
             error_code: 0,
             window_count: 0,
             data: [0; 4],
+        }
+    }
+}
+
+// NEW: Focus event structure for e_midi integration
+#[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
+#[repr(C)]
+pub struct WindowFocusEvent {
+    pub event_type: u8,        // 0=focused, 1=defocused
+    pub hwnd: u64,             // Window handle
+    pub process_id: u32,       // Process ID
+    pub timestamp: u64,        // Event timestamp
+    pub app_name_hash: u64,    // Hash of application name for quick comparison
+    pub window_title_hash: u64, // Hash of window title for quick comparison
+    pub reserved: [u32; 2],    // Reserved for future use
+}
+
+impl Default for WindowFocusEvent {
+    fn default() -> Self {
+        Self {
+            event_type: 0,
+            hwnd: 0,
+            process_id: 0,
+            timestamp: 0,
+            app_name_hash: 0,
+            window_title_hash: 0,
+            reserved: [0; 2],
         }
     }
 }
@@ -588,8 +618,8 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     // Create a simple grid summary
                     let mut grid_summary = format!("Grid: {} windows, {} occupied cells\n", total_windows, occupied_cells);
                     grid_summary.push_str("Windows:\n");
-                    
-                    for (hwnd, window) in tracker.windows.iter().take(10) { // Limit to first 10 for brevity
+                      for entry in tracker.windows.iter().take(10) { // Limit to first 10 for brevity
+                        let (hwnd, window) = entry.pair();
                         let title = if window.title.len() > 30 {
                             format!("{}...", &window.title[..30])
                         } else {
@@ -614,8 +644,8 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             }            GridCommand::GetWindowList => {
                 let hwnd_list = if let Ok(tracker) = self.tracker.lock() {
                     // Collect HWNDs for the window list response
-                    tracker.windows.keys()
-                        .map(|hwnd| *hwnd as u64)
+                    tracker.windows.iter()
+                        .map(|entry| *entry.key() as u64)
                         .collect::<Vec<u64>>()
                 } else {
                     return Ok(GridResponse::Error("Failed to access window tracker".to_string()));
@@ -674,9 +704,8 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             }
             GridCommand::GetSavedLayouts => {
                 println!("📋 Request for saved layouts list");
-                
-                if let Ok(tracker) = self.tracker.lock() {
-                    let layout_names: Vec<String> = tracker.list_saved_layouts().into_iter().cloned().collect();
+                  if let Ok(tracker) = self.tracker.lock() {
+                    let layout_names: Vec<String> = tracker.list_saved_layouts();
                     Ok(GridResponse::SavedLayouts { layout_names })
                 } else {
                     Ok(GridResponse::Error("Failed to access window tracker".to_string()))
@@ -699,10 +728,10 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             }            GridCommand::GetAnimationStatus { hwnd } => {
                 println!("📊 Request for animation status of window {}", hwnd);
                 
-                if let Ok(tracker) = self.tracker.lock() {
-                    let statuses = if hwnd == 0 {
+                if let Ok(tracker) = self.tracker.lock() {                    let statuses = if hwnd == 0 {
                         // Get status for all active animations
-                        tracker.active_animations.iter().map(|(h, anim)| {
+                        tracker.active_animations.iter().map(|entry| {
+                            let (h, anim) = entry.pair();
                             let progress = if anim.is_completed() { 1.0 } else {
                                 anim.start_time.elapsed().as_secs_f32() / anim.duration.as_secs_f32()
                             };
@@ -751,9 +780,8 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             } else {
                 return Err(format!("Window with HWND {} not found in tracker", hwnd).into());
             };
-            
-            // Now we can safely modify the window
-            if let Some(window) = tracker.windows.get_mut(&(hwnd as winapi::shared::windef::HWND)) {
+              // Now we can safely modify the window
+            if let Some(mut window) = tracker.windows.get_mut(&(hwnd as winapi::shared::windef::HWND)) {
                 // Clear existing grid assignments for this window
                 window.grid_cells.clear();
                 
@@ -843,9 +871,8 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 return Err(format!("Monitor {} does not exist. Available monitors: 0-{}", 
                     monitor_id, tracker.monitor_grids.len() - 1).into());
             }
-            
-            // Now we can safely modify the window
-            if let Some(window) = tracker.windows.get_mut(&(hwnd as winapi::shared::windef::HWND)) {
+              // Now we can safely modify the window
+            if let Some(mut window) = tracker.windows.get_mut(&(hwnd as winapi::shared::windef::HWND)) {
                 // Clear existing monitor assignments for this window
                 window.monitor_cells.clear();
                 
@@ -919,15 +946,15 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         } else {
             Err("Failed to acquire window tracker lock".into())
         }
-    }
-
-    fn count_occupied_cells(&self, tracker: &WindowTracker) -> usize {
+    }    fn count_occupied_cells(&self, tracker: &WindowTracker) -> usize {
         let mut occupied = std::collections::HashSet::new();
-        for window in tracker.windows.values() {
+        for entry in &tracker.windows {
+            let (_, window) = entry.pair();
             for &(row, col) in &window.grid_cells {
                 occupied.insert((row, col));
             }
-        }        occupied.len()
+        }
+        occupied.len()
     }
 
     // Conversion functions between high-level and zero-copy types
@@ -1109,10 +1136,9 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
     }
 
     // Publish individual window details for real-time client updates
-    pub fn publish_window_details(&mut self, hwnd: HWND) -> Result<(), Box<dyn std::error::Error>> {
-        if let Ok(tracker) = self.tracker.lock() {
+    pub fn publish_window_details(&mut self, hwnd: HWND) -> Result<(), Box<dyn std::error::Error>> {        if let Ok(tracker) = self.tracker.lock() {
             if let Some(window_info) = tracker.windows.get(&hwnd) {
-                let details = self.window_info_to_details(hwnd, window_info);
+                let details = self.window_info_to_details(hwnd, &*window_info);
                   if let Some(ref mut publisher) = self.window_details_publisher {
                     publisher.send_copy(details)?;
                     println!("📤 Published window details for HWND {:?}", hwnd);
@@ -1129,9 +1155,9 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         if let Ok(tracker) = self.tracker.lock() {
             let window_count = tracker.windows.len();
             println!("📤 Publishing details for {} windows...", window_count);
-            
-            for (&hwnd, window_info) in &tracker.windows {
-                let details = self.window_info_to_details(hwnd, window_info);
+              for entry in &tracker.windows {
+                let (hwnd, window_info) = entry.pair();
+                let details = self.window_info_to_details(*hwnd, &*window_info);
                 
                 if let Some(ref mut publisher) = self.window_details_publisher {
                     publisher.send_copy(details)?;
@@ -1231,10 +1257,9 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 println!("🔧 Moved window {} to position ({}, {}) with size {}x{}", hwnd, left, top, width, height);                // Rescan the grid to update internal tracking after the window move
                 if let Ok(mut tracker) = self.tracker.lock() {
                     println!("🔄 Rescanning grid after window movement...");
-                    
-                    // Update the window's rectangle in our tracking
+                      // Update the window's rectangle in our tracking
                     if let Some(new_rect) = crate::WindowTracker::get_window_rect(hwnd_handle) {
-                        if let Some(window) = tracker.windows.get_mut(&hwnd_handle) {
+                        if let Some(mut window) = tracker.windows.get_mut(&hwnd_handle) {
                             window.rect = new_rect;
                             println!("   📍 Updated window {} rect to ({}, {}) - ({}, {})", 
                                 hwnd, new_rect.left, new_rect.top, new_rect.right, new_rect.bottom);
@@ -1243,9 +1268,8 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                         // Now recalculate grid cells after releasing the mutable reference
                         let grid_cells = tracker.window_to_grid_cells(&new_rect);
                         let monitor_cells = tracker.calculate_monitor_cells(&new_rect);
-                        
-                        // Update the window with the new grid assignments
-                        if let Some(window) = tracker.windows.get_mut(&hwnd_handle) {
+                          // Update the window with the new grid assignments
+                        if let Some(mut window) = tracker.windows.get_mut(&hwnd_handle) {
                             window.grid_cells = grid_cells;
                             window.monitor_cells = monitor_cells;
                             
@@ -1341,7 +1365,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
     // Grid Layout and Animation Methods
       pub fn apply_saved_layout(&mut self, layout_name: &str, duration_ms: u32, easing_type: crate::EasingType) -> Result<usize, Box<dyn std::error::Error>> {
         if let Ok(mut tracker) = self.tracker.lock() {
-            if let Some(layout) = tracker.get_saved_layout(layout_name).cloned() {
+            if let Some(layout) = tracker.get_saved_layout(layout_name) {
                 let duration = std::time::Duration::from_millis(duration_ms as u64);
                 tracker.apply_grid_layout(&layout, duration, easing_type)
                     .map_err(|e| e.into())
@@ -1502,7 +1526,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     }
                 },
                 1 => { // stop_animation
-                    if let Ok(mut tracker) = self.tracker.lock() {
+                    if let Ok(tracker) = self.tracker.lock() {
                         if anim_cmd.hwnd == 0 {
                             tracker.active_animations.clear();
                             println!("🛑 Stopped all animations");

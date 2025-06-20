@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use winapi::um::winuser::{
-    DispatchMessageW, GetMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
+    DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -47,9 +47,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Print a summary of what's being tracked
     if let Ok(tracker) = tracker.lock() {
         println!("📊 Server tracking {} windows total", tracker.windows.len());
-        for (i, (hwnd, window_info)) in tracker.windows.iter().enumerate() {
+        for (i, entry) in tracker.windows.iter().enumerate() {
             if i < 10 {
                 // Show first 10 windows
+                let (hwnd, window_info) = entry.pair();
                 println!(
                     "   Window {}: HWND {:02X} - '{}'",
                     i + 1,
@@ -71,7 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📊 Server Statistics:");
     if let Ok(tracker) = tracker.lock() {
         println!("  Windows tracked: {}", tracker.windows.len());
-        println!("  Grid size: {}x{}", server.config.rows, server.config.cols);
+        println!("  Grid size: {}x{}", tracker.config.rows, tracker.config.cols);
         println!("  Monitors: {}", tracker.monitor_grids.len());
     }
     println!();
@@ -209,7 +210,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Show recent window activity
                 if !tracker.windows.is_empty() {
                     println!("  📋 Recent windows:");
-                    for (i, (_hwnd, window)) in tracker.windows.iter().take(5).enumerate() {
+                    for (i, entry) in tracker.windows.iter().take(5).enumerate() {
+                        let (_hwnd, window) = entry.pair();
                         let title = if window.title.len() > 40 {
                             format!("{}...", &window.title[..40])
                         } else {

@@ -3,3 +3,5 @@ simple_grid_new
 simple_grid_new
 test_new_features
 test_new_features
+test_comprehensive_window_management
+test_comprehensive_window_management

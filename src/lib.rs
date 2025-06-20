@@ -1,9 +1,18 @@
 use std::collections::HashMap;
 use std::ptr;
 use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use dashmap::DashMap;
 use winapi::shared::minwindef::LPARAM;
 use winapi::shared::windef::{HWND, RECT};
 use winapi::um::winuser::*;
+use winapi::um::errhandlingapi::GetLastError;
+
+// Import our error handling module
+pub mod grid_client_errors;
+pub use grid_client_errors::{GridClientError, GridClientResult, RetryConfig, 
+                             retry_with_backoff, validate_grid_coordinates, 
+                             safe_lock, safe_arc_lock};
 
 // Coverage threshold: percentage of cell area that must be covered by window
 // to consider the window as occupying that cell (0.0 to 1.0)
@@ -308,7 +317,7 @@ impl MonitorGrid {
         cells
     }
 
-    pub fn update_grid(&mut self, windows: &HashMap<HWND, WindowInfo>) {
+    pub fn update_grid(&mut self, windows: &DashMap<HWND, WindowInfo>) {
         // Reset grid to empty
         for row in 0..self.config.rows {
             for col in 0..self.config.cols {
@@ -317,7 +326,8 @@ impl MonitorGrid {
         }
 
         // Place windows on the grid
-        for (hwnd, window_info) in windows {
+        for entry in windows {
+            let (hwnd, window_info) = entry.pair();
             let grid_cells = self.window_to_grid_cells(&window_info.rect);
             for (row, col) in grid_cells {
                 if row < self.config.rows && col < self.config.cols {
@@ -364,14 +374,15 @@ pub struct WindowInfo {
 }
 
 pub struct WindowTracker {
-    pub windows: HashMap<HWND, WindowInfo>,
+    pub windows: DashMap<HWND, WindowInfo>, // Lock-free concurrent HashMap
     pub monitor_rect: RECT,  // Virtual screen rect
     pub config: GridConfig,  // Dynamic grid configuration
     pub grid: Vec<Vec<CellState>>, // Virtual grid (dynamic)
     pub monitor_grids: Vec<MonitorGrid>, // Individual monitor grids
-    pub enum_counter: usize,
-    pub active_animations: HashMap<HWND, WindowAnimation>, // Active window animations
-    pub saved_layouts: HashMap<String, GridLayout>, // Saved grid layouts
+    pub enum_counter: AtomicUsize, // Atomic counter for lock-free access
+    pub active_animations: DashMap<HWND, WindowAnimation>, // Lock-free animations
+    pub saved_layouts: DashMap<String, GridLayout>, // Lock-free layouts
+    pub event_callbacks: Vec<WindowEventCallbackBox>, // Event callbacks
 }
 
 impl WindowTracker {
@@ -392,14 +403,15 @@ impl WindowTracker {
 
         let grid = vec![vec![CellState::Empty; config.cols]; config.rows];
         let mut tracker = Self {
-            windows: HashMap::new(),
+            windows: DashMap::new(),
             monitor_rect: rect,
             config: config.clone(),
             grid,
             monitor_grids: Vec::new(),
-            enum_counter: 0,
-            active_animations: HashMap::new(),
-            saved_layouts: HashMap::new(),
+            enum_counter: AtomicUsize::new(0),
+            active_animations: DashMap::new(),
+            saved_layouts: DashMap::new(),
+            event_callbacks: Vec::new(),
         };
 
         // Initialize individual monitor grids
@@ -417,6 +429,68 @@ impl WindowTracker {
         }
         
         println!("Initialized {} individual monitor grids", self.monitor_grids.len());
+    }
+
+    // Event callback management
+    pub fn register_event_callback(&mut self, callback: WindowEventCallbackBox) {
+        self.event_callbacks.push(callback);
+    }
+    
+    pub fn clear_event_callbacks(&mut self) {
+        self.event_callbacks.clear();
+    }
+    
+    // Call event callbacks
+    fn trigger_window_created(&self, hwnd: HWND, window_info: &WindowInfo) {
+        for callback in &self.event_callbacks {
+            callback.on_window_created(hwnd, window_info);
+        }
+    }
+    
+    fn trigger_window_destroyed(&self, hwnd: HWND) {
+        for callback in &self.event_callbacks {
+            callback.on_window_destroyed(hwnd);
+        }
+    }
+    
+    fn trigger_window_moved(&self, hwnd: HWND, window_info: &WindowInfo) {
+        for callback in &self.event_callbacks {
+            callback.on_window_moved(hwnd, window_info);
+        }
+    }
+    
+    fn trigger_window_activated(&self, hwnd: HWND, window_info: &WindowInfo) {
+        for callback in &self.event_callbacks {
+            callback.on_window_activated(hwnd, window_info);
+        }
+    }
+    
+    fn trigger_window_minimized(&self, hwnd: HWND) {
+        for callback in &self.event_callbacks {
+            callback.on_window_minimized(hwnd);
+        }
+    }
+    
+    fn trigger_window_restored(&self, hwnd: HWND, window_info: &WindowInfo) {
+        for callback in &self.event_callbacks {
+            callback.on_window_restored(hwnd, window_info);
+        }
+    }
+    
+    // Internal message processing for WinEvent hooks (main thread only)
+    pub fn process_windows_messages(&self) {
+        use winapi::um::winuser::{PeekMessageW, TranslateMessage, DispatchMessageW, PM_REMOVE, MSG};
+        
+        unsafe {
+            let mut msg: std::mem::MaybeUninit<MSG> = std::mem::MaybeUninit::uninit();
+            
+            // Process all available messages without blocking
+            while PeekMessageW(msg.as_mut_ptr(), std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                let msg = msg.assume_init();
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
     }
 
     pub fn get_window_title(hwnd: HWND) -> String {
@@ -572,13 +646,82 @@ impl WindowTracker {
         }
 
         // Place windows on the grid
-        for (hwnd, window_info) in &self.windows {
+        for entry in &self.windows {
+            let (hwnd, window_info) = entry.pair();
             for (row, col) in &window_info.grid_cells {
                 if *row < self.config.rows && *col < self.config.cols {
                     self.grid[*row][*col] = CellState::Occupied(*hwnd);
                 }
             }
         }
+    }
+
+    /// Get the primary monitor rectangle for window positioning
+    fn get_primary_monitor_rect(&self) -> RECT {
+        if !self.monitor_grids.is_empty() {
+            // Find the monitor at (0,0) - this is the true primary monitor
+            for monitor_grid in &self.monitor_grids {
+                if monitor_grid.monitor_rect.0 == 0 && monitor_grid.monitor_rect.1 == 0 {
+                    let rect = RECT {
+                        left: monitor_grid.monitor_rect.0,
+                        top: monitor_grid.monitor_rect.1,
+                        right: monitor_grid.monitor_rect.2,
+                        bottom: monitor_grid.monitor_rect.3,
+                    };
+                    println!("🖥️  Using true primary monitor at (0,0): ({}, {}) to ({}, {})", 
+                        rect.left, rect.top, rect.right, rect.bottom);
+                    return rect;
+                }
+            }
+            
+            // Fallback to first monitor if no monitor at (0,0) found
+            let primary_monitor = &self.monitor_grids[0];
+            let rect = RECT {
+                left: primary_monitor.monitor_rect.0,
+                top: primary_monitor.monitor_rect.1,
+                right: primary_monitor.monitor_rect.2,
+                bottom: primary_monitor.monitor_rect.3,
+            };
+            println!("🖥️  Fallback to first monitor: ({}, {}) to ({}, {})", 
+                rect.left, rect.top, rect.right, rect.bottom);
+            rect
+        } else {
+            // Fallback to virtual screen if no monitor grids
+            println!("⚠️  No monitor grids available, using virtual screen: ({}, {}) to ({}, {})",
+                self.monitor_rect.left, self.monitor_rect.top, self.monitor_rect.right, self.monitor_rect.bottom);
+            self.monitor_rect
+        }
+    }
+
+    /// Convert grid cell to window rectangle on primary monitor
+    fn primary_monitor_cell_to_rect(&self, row: usize, col: usize) -> Option<RECT> {
+        if row >= self.config.rows || col >= self.config.cols {
+            println!("❌ Invalid cell coordinates: ({}, {}) for grid ({}x{})", 
+                row, col, self.config.rows, self.config.cols);
+            return None;
+        }
+        
+        let monitor_rect = self.get_primary_monitor_rect();
+        let grid_width = monitor_rect.right - monitor_rect.left;
+        let grid_height = monitor_rect.bottom - monitor_rect.top;
+        
+        let cell_width = grid_width / self.config.cols as i32;
+        let cell_height = grid_height / self.config.rows as i32;
+        
+        println!("🧮 Cell calculation for ({}, {}):", row, col);
+        println!("   Monitor rect: ({}, {}) to ({}, {})", 
+            monitor_rect.left, monitor_rect.top, monitor_rect.right, monitor_rect.bottom);
+        println!("   Grid dimensions: {}x{} ({}x{} cells)", grid_width, grid_height, self.config.cols, self.config.rows);
+        println!("   Cell size: {}x{}", cell_width, cell_height);
+        
+        let left = monitor_rect.left + (col as i32 * cell_width);
+        let top = monitor_rect.top + (row as i32 * cell_height);
+        let right = left + cell_width;
+        let bottom = top + cell_height;
+        
+        println!("   Calculated cell rect: ({}, {}) to ({}, {})", left, top, right, bottom);
+        
+        Some(RECT { left, top, right, bottom })
     }
 
     pub fn add_window(&mut self, hwnd: HWND) -> bool {
@@ -595,9 +738,13 @@ impl WindowTracker {
                 monitor_cells,
             };
 
-            self.windows.insert(hwnd, window_info);
+            self.windows.insert(hwnd, window_info.clone());
             self.update_grid();
             self.update_monitor_grids();
+            
+            // Trigger callback
+            self.trigger_window_created(hwnd, &window_info);
+            
             return true;
         }
         false
@@ -607,6 +754,10 @@ impl WindowTracker {
         if self.windows.remove(&hwnd).is_some() {
             self.update_grid();
             self.update_monitor_grids();
+            
+            // Trigger callback
+            self.trigger_window_destroyed(hwnd);
+            
             return true;
         }
         false
@@ -616,12 +767,26 @@ impl WindowTracker {
         if let Some(rect) = Self::get_window_rect(hwnd) {
             let grid_cells = self.window_to_grid_cells(&rect);
             let monitor_cells = self.calculate_monitor_cells(&rect);
-            if let Some(window_info) = self.windows.get_mut(&hwnd) {
-                window_info.rect = rect;
-                window_info.grid_cells = grid_cells;
-                window_info.monitor_cells = monitor_cells;
+            
+            // Update the window info
+            let updated = if let Some(mut window_entry) = self.windows.get_mut(&hwnd) {
+                window_entry.rect = rect;
+                window_entry.grid_cells = grid_cells;
+                window_entry.monitor_cells = monitor_cells;
+                true
+            } else {
+                false
+            };
+            
+            if updated {
                 self.update_grid();
                 self.update_monitor_grids();
+                
+                // Get the updated window info for callback
+                if let Some(window_info) = self.windows.get(&hwnd) {
+                    self.trigger_window_moved(hwnd, &*window_info);
+                }
+                
                 return true;
             }
         }
@@ -732,7 +897,8 @@ impl WindowTracker {
             
             // Count windows on this monitor
             let mut windows_on_monitor = 0;
-            for (_, window_info) in &self.windows {
+            for entry in &self.windows {
+                let (_, window_info) = entry.pair();
                 if window_info.monitor_cells.contains_key(&monitor_grid.monitor_id) {
                     windows_on_monitor += 1;
                 }
@@ -774,7 +940,7 @@ impl WindowTracker {
         // Initialize grid with off-screen areas marked
         self.initialize_grid();
         
-        self.enum_counter = 0; // Reset counter
+        self.enum_counter.store(0, Ordering::SeqCst); // Reset counter
         unsafe {
             let result = EnumWindows(Some(enum_windows_proc), self as *mut _ as LPARAM);
             println!("EnumWindows completed with result: {}", result);
@@ -894,23 +1060,28 @@ impl WindowTracker {
     pub fn update_animations(&mut self) -> Vec<HWND> {
         let mut completed_animations = Vec::new();
         
-        for (hwnd, animation) in &mut self.active_animations {
-            if animation.is_completed() {
-                completed_animations.push(*hwnd);
-            } else {
-                let current_rect = animation.get_current_rect();
-                // Move window to current animation position
-                unsafe {
-                    use winapi::um::winuser::{SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE};
-                    SetWindowPos(
-                        *hwnd,
-                        std::ptr::null_mut(),
-                        current_rect.left,
-                        current_rect.top,
-                        current_rect.right - current_rect.left,
-                        current_rect.bottom - current_rect.top,
-                        SWP_NOZORDER | SWP_NOACTIVATE,
-                    );
+        // Collect keys that need to be processed
+        let animation_keys: Vec<HWND> = self.active_animations.iter().map(|entry| *entry.key()).collect();
+        
+        for hwnd in animation_keys {
+            if let Some(animation_entry) = self.active_animations.get_mut(&hwnd) {
+                if animation_entry.is_completed() {
+                    completed_animations.push(hwnd);
+                } else {
+                    let current_rect = animation_entry.get_current_rect();
+                    // Move window to current animation position
+                    unsafe {
+                        use winapi::um::winuser::{SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE};
+                        SetWindowPos(
+                            hwnd,
+                            std::ptr::null_mut(),
+                            current_rect.left,
+                            current_rect.top,
+                            current_rect.right - current_rect.left,
+                            current_rect.bottom - current_rect.top,
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                    }
                 }
             }
         }
@@ -954,12 +1125,12 @@ impl WindowTracker {
         println!("💾 Saved current grid layout as '{}'", name);
     }
     
-    pub fn get_saved_layout(&self, name: &str) -> Option<&GridLayout> {
-        self.saved_layouts.get(name)
+    pub fn get_saved_layout(&self, name: &str) -> Option<GridLayout> {
+        self.saved_layouts.get(name).map(|layout_ref| layout_ref.clone())
     }
     
-    pub fn list_saved_layouts(&self) -> Vec<&String> {
-        self.saved_layouts.keys().collect()
+    pub fn list_saved_layouts(&self) -> Vec<String> {
+        self.saved_layouts.iter().map(|entry| entry.key().clone()).collect()
     }
     
     fn virtual_cell_to_window_rect(&self, row: usize, col: usize) -> Option<RECT> {
@@ -987,9 +1158,52 @@ impl WindowTracker {
             return Err(format!("Invalid grid coordinates: ({}, {})", target_row, target_col));
         }
         
-        if let Some(target_rect) = self.virtual_cell_to_window_rect(target_row, target_col) {
+        // Validate window handle first
+        unsafe {
+            if IsWindow(hwnd) == 0 {
+                return Err(format!("Invalid window handle: {:?}", hwnd));
+            }
+        }
+        
+        // Check if window is manageable
+        if !Self::is_manageable_window(hwnd) {
+            return Err(format!("Window {:?} is not manageable", hwnd));
+        }
+        
+        // Debug: Show all monitors before positioning
+        self.list_all_monitors();
+        
+        // Get target rectangle on primary monitor instead of virtual grid
+        if let Some(target_rect) = self.primary_monitor_cell_to_rect(target_row, target_col) {
+            let primary_rect = self.get_primary_monitor_rect();
+            println!("🖥️  Using primary monitor: left={}, top={}, right={}, bottom={}", 
+                primary_rect.left, primary_rect.top, primary_rect.right, primary_rect.bottom);
+            println!("🖥️  Primary monitor dimensions: {}x{}", 
+                primary_rect.right - primary_rect.left, primary_rect.bottom - primary_rect.top);
+            println!("🎯 Target cell ({}, {}) of grid ({}x{})", target_row, target_col, self.config.rows, self.config.cols);
+            println!("🎯 Calculated target rect: left={}, top={}, width={}, height={}", 
+                target_rect.left, target_rect.top, 
+                target_rect.right - target_rect.left, 
+                target_rect.bottom - target_rect.top);
+            
+            // Validate that the target rectangle is within primary monitor bounds
+            if target_rect.left < primary_rect.left || target_rect.top < primary_rect.top ||
+               target_rect.right > primary_rect.right || target_rect.bottom > primary_rect.bottom {
+                println!("⚠️  WARNING: Target rectangle is outside primary monitor bounds!");
+                println!("   Target: ({}, {}) to ({}, {})", target_rect.left, target_rect.top, target_rect.right, target_rect.bottom);
+                println!("   Monitor: ({}, {}) to ({}, {})", primary_rect.left, primary_rect.top, primary_rect.right, primary_rect.bottom);
+            } else {
+                println!("✅ Target rectangle is within primary monitor bounds");
+            }
+            
+            println!("🎯 Moving window {:?} to rect: left={}, top={}, width={}, height={}", 
+                hwnd, target_rect.left, target_rect.top, 
+                target_rect.right - target_rect.left, 
+                target_rect.bottom - target_rect.top);
+            
+            // Safely move the window (this operation doesn't need the tracker lock)
             unsafe {
-                SetWindowPos(
+                let result = SetWindowPos(
                     hwnd,
                     ptr::null_mut(),
                     target_rect.left,
@@ -998,7 +1212,25 @@ impl WindowTracker {
                     target_rect.bottom - target_rect.top,
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
+                
+                if result == 0 {
+                    let error = GetLastError();
+                    return Err(format!("SetWindowPos failed with error: {}", error));
+                }
             }
+            
+            println!("✅ Successfully moved window {:?}", hwnd);
+            
+            // Update the grid tracking (keep this lock brief)
+            self.assign_window_to_virtual_cell(hwnd, target_row, target_col)?;
+            
+            // Trigger callback notification if the window is tracked
+            if let Some(window_info) = self.windows.get(&hwnd) {
+                // Use a reference instead of cloning to avoid potential issues
+                self.trigger_window_moved(hwnd, &*window_info);
+            }
+        } else {
+            return Err(format!("Could not calculate target rectangle for cell ({}, {})", target_row, target_col));
         }
         
         Ok(())
@@ -1025,9 +1257,9 @@ impl WindowTracker {
         self.grid[target_row][target_col] = CellState::Occupied(hwnd);
         
         // Update the window info if it exists
-        if let Some(window_info) = self.windows.get_mut(&hwnd) {
-            window_info.grid_cells.clear();
-            window_info.grid_cells.push((target_row, target_col));
+        if let Some(mut window_entry) = self.windows.get_mut(&hwnd) {
+            window_entry.grid_cells.clear();
+            window_entry.grid_cells.push((target_row, target_col));
         }
         
         Ok(())
@@ -1060,14 +1292,56 @@ impl WindowTracker {
         self.monitor_grids[monitor_id].grid[target_row][target_col] = CellState::Occupied(hwnd);
         
         // Update the window info if it exists
-        if let Some(window_info) = self.windows.get_mut(&hwnd) {
+        if let Some(mut window_entry) = self.windows.get_mut(&hwnd) {
             let cells = vec![(target_row, target_col)];
-            window_info.monitor_cells.insert(monitor_id, cells);
+            window_entry.monitor_cells.insert(monitor_id, cells);
         }
         
         Ok(())
     }
+
+    /// Get monitor information by monitor ID for debugging
+    pub fn get_monitor_info_by_id(&self, monitor_id: usize) -> Option<(i32, i32, i32, i32)> {
+        if monitor_id < self.monitor_grids.len() {
+            let monitor = &self.monitor_grids[monitor_id];
+            Some((
+                monitor.monitor_rect.0,
+                monitor.monitor_rect.1,
+                monitor.monitor_rect.2,
+                monitor.monitor_rect.3,
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// List all monitor configurations for debugging
+    pub fn list_all_monitors(&self) {
+        println!("🖥️  All Monitor Configurations:");
+        for (id, monitor) in self.monitor_grids.iter().enumerate() {
+            println!("   Monitor {}: ({}, {}) to ({}, {}) - Size: {}x{}", 
+                id,
+                monitor.monitor_rect.0, monitor.monitor_rect.1,
+                monitor.monitor_rect.2, monitor.monitor_rect.3,
+                monitor.monitor_rect.2 - monitor.monitor_rect.0,
+                monitor.monitor_rect.3 - monitor.monitor_rect.1
+            );
+        }
+    }
 }
+
+// Event callback system for WindowTracker
+pub trait WindowEventCallback: Send + Sync {
+    fn on_window_created(&self, hwnd: HWND, window_info: &WindowInfo);
+    fn on_window_destroyed(&self, hwnd: HWND);
+    fn on_window_moved(&self, hwnd: HWND, window_info: &WindowInfo);
+    fn on_window_activated(&self, hwnd: HWND, window_info: &WindowInfo);
+    fn on_window_minimized(&self, hwnd: HWND);
+    fn on_window_restored(&self, hwnd: HWND, window_info: &WindowInfo);
+}
+
+// Box wrapper for dynamic dispatch
+pub type WindowEventCallbackBox = Box<dyn WindowEventCallback>;
 
 // Helper function to calculate intersection area between two rectangles
 fn calculate_intersection_area(rect1: &RECT, rect2: &RECT) -> i32 {
@@ -1104,6 +1378,7 @@ pub mod ipc;
 
 // Client module for real-time grid reconstruction and monitoring
 pub mod ipc_client;
+pub use ipc_client::GridClient;
 
 // Server module for IPC server functionality
 pub mod ipc_server;
@@ -1111,11 +1386,11 @@ pub mod ipc_server;
 // Window enumeration callback function
 unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
     let tracker = &mut *(lparam as *mut WindowTracker);
-    tracker.enum_counter += 1;
+    let counter = tracker.enum_counter.fetch_add(1, Ordering::SeqCst) + 1;
     
     if WindowTracker::is_manageable_window(hwnd) {
         let title = WindowTracker::get_window_title(hwnd);
-        println!("Checking window #{}: {}", tracker.enum_counter, 
+        println!("Checking window #{}: {}", counter, 
             if title.is_empty() { "<No Title>" } else { &title });
         println!("  -> Adding manageable window: {}", title);
         if tracker.add_window(hwnd) {
@@ -1136,7 +1411,7 @@ mod tests {
     fn test_window_tracker_creation() {
         let tracker = WindowTracker::new();
         assert_eq!(tracker.windows.len(), 0);
-        assert_eq!(tracker.enum_counter, 0);
+        assert_eq!(tracker.enum_counter.load(Ordering::SeqCst), 0);
     }
 
     #[test]

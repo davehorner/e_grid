@@ -1,0 +1,1301 @@
+🚀 E-Grid IPC Server Demo - Integrated WinEvent Mode
+====================================================
+Starting server with integrated WinEvent monitoring:
+  🔔 Real-time window event detection (create, move, destroy)
+  📤 Automatic publishing of window details to clients
+  📨 Processing client commands automatically
+  🔄 No polling - pure event-driven architecture
+
+Initialized 2 individual monitor grids
+📊 Initializing window tracking...
+Starting window enumeration...
+Checking window #1: LOGI_RAWINPUT_WND
+  -> Skipping non-manageable window
+Checking window #2: <No Title>
+  -> Skipping non-manageable window
+Checking window #3: Task Switching
+  -> Skipping non-manageable window
+Checking window #4: <No Title>
+  -> Skipping non-manageable window
+Checking window #5: <No Title>
+  -> Skipping non-manageable window
+Checking window #6: <No Title>
+  -> Skipping non-manageable window
+Checking window #7: <No Title>
+  -> Skipping non-manageable window
+Checking window #8: PopupHost
+  -> Skipping non-manageable window
+Checking window #9: <No Title>
+  -> Skipping non-manageable window
+Checking window #10: <No Title>
+  -> Skipping non-manageable window
+Checking window #11: Battery Meter
+  -> Skipping non-manageable window
+Checking window #12: <No Title>
+  -> Skipping non-manageable window
+Checking window #13: <No Title>
+  -> Skipping non-manageable window
+Checking window #14: <No Title>
+  -> Skipping non-manageable window
+Checking window #15: System tray overflow window.
+  -> Skipping non-manageable window
+Checking window #16: <No Title>
+  -> Skipping non-manageable window
+Checking window #17: logioptionsplus_agent
+  -> Skipping non-manageable window
+Checking window #18: <No Title>
+  -> Skipping non-manageable window
+Checking window #19: <No Title>
+  -> Skipping non-manageable window
+Checking window #20: <No Title>
+  -> Skipping non-manageable window
+Checking window #21: ipc_server_demo.rs - e_grid - Visual Studio Code
+🔍 DEBUG: Checking client-related window: 'ipc_server_demo.rs - e_grid - Visual Studio Code'
+   HWND: 0xd512e8
+   IsWindow: 1
+   IsWindowVisible: 1
+   IsIconic: 0
+   ExStyle: 0x100
+   WS_EX_TOOLWINDOW: false
+   WS_EX_APPWINDOW: false
+   ✅ Window passed all filters - will be tracked
+  -> Adding manageable window: ipc_server_demo.rs - e_grid - Visual Studio Code
+  -> Added successfully
+Checking window #22: x64 Native Tools Command Prompt for VS 2022
+  -> Adding manageable window: x64 Native Tools Command Prompt for VS 2022
+  -> Added successfully
+Checking window #23: DesktopWindowXamlSource
+  -> Skipping non-manageable window
+Checking window #24: <No Title>
+  -> Skipping non-manageable window
+Checking window #25: <No Title>
+  -> Skipping non-manageable window
+Checking window #26: <No Title>
+  -> Skipping non-manageable window
+Checking window #27: Sell Your Dope (C-Mix) - YouTube - Google Chrome
+  -> Adding manageable window: Sell Your Dope (C-Mix) - YouTube - Google Chrome
+  -> Added successfully
+Checking window #28: <No Title>
+  -> Skipping non-manageable window
+Checking window #29: <No Title>
+  -> Skipping non-manageable window
+Checking window #30: <No Title>
+  -> Skipping non-manageable window
+Checking window #31: <No Title>
+  -> Skipping non-manageable window
+Checking window #32: <No Title>
+  -> Skipping non-manageable window
+Checking window #33: <No Title>
+  -> Skipping non-manageable window
+Checking window #34: <No Title>
+  -> Skipping non-manageable window
+Checking window #35: GDI+ Window (VCTIP.EXE)
+  -> Skipping non-manageable window
+Checking window #36: .NET-BroadcastEventWindow.4.0.0.0.156ba37.0
+  -> Skipping non-manageable window
+Checking window #37: <No Title>
+  -> Skipping non-manageable window
+Checking window #38: (2) Top job picks for you | LinkedIn - Google Chro
+  -> Adding manageable window: (2) Top job picks for you | LinkedIn - Google Chro
+  -> Added successfully
+Checking window #39: <No Title>
+  -> Skipping non-manageable window
+Checking window #40: <No Title>
+  -> Skipping non-manageable window
+Checking window #41: <No Title>
+  -> Skipping non-manageable window
+Checking window #42: <No Title>
+  -> Skipping non-manageable window
+Checking window #43: <No Title>
+  -> Skipping non-manageable window
+Checking window #44: <No Title>
+  -> Skipping non-manageable window
+Checking window #45: <No Title>
+  -> Skipping non-manageable window
+Checking window #46: <No Title>
+  -> Skipping non-manageable window
+Checking window #47: <No Title>
+  -> Skipping non-manageable window
+Checking window #48: <No Title>
+  -> Skipping non-manageable window
+Checking window #49: <No Title>
+  -> Skipping non-manageable window
+Checking window #50: <No Title>
+  -> Skipping non-manageable window
+Checking window #51: <No Title>
+  -> Skipping non-manageable window
+Checking window #52: C:\w\demos\cuneus\e_obs_startt_cargo-e-cuneus-no-s
+🔍 DEBUG: Checking client-related window: 'C:\w\demos\cuneus\e_obs_startt_cargo-e-cuneus-no-s'
+   HWND: 0x7c0f86
+   IsWindow: 1
+   IsWindowVisible: 1
+   IsIconic: 0
+   ExStyle: 0x110
+   WS_EX_TOOLWINDOW: false
+   WS_EX_APPWINDOW: false
+   ✅ Window passed all filters - will be tracked
+  -> Adding manageable window: C:\w\demos\cuneus\e_obs_startt_cargo-e-cuneus-no-s
+  -> Added successfully
+Checking window #53: iceoryx2 - Rust - Google Chrome
+  -> Adding manageable window: iceoryx2 - Rust - Google Chrome
+  -> Added successfully
+Checking window #54: <No Title>
+  -> Skipping non-manageable window
+Checking window #55: Task Manager
+  -> Adding manageable window: Task Manager
+  -> Added successfully
+Checking window #56: <No Title>
+  -> Skipping non-manageable window
+Checking window #57: <No Title>
+  -> Skipping non-manageable window
+Checking window #58: Sylvan Esso: NPR Music Tiny Desk Concert - YouTube
+  -> Adding manageable window: Sylvan Esso: NPR Music Tiny Desk Concert - YouTube
+  -> Added successfully
+Checking window #59: VisualHostingHelper
+  -> Skipping non-manageable window
+Checking window #60: ClientVisualWindow
+🔍 DEBUG: Checking client-related window: 'ClientVisualWindow'
+   HWND: 0x1440034
+   IsWindow: 1
+   IsWindowVisible: 0
+   IsIconic: 0
+   ExStyle: 0x82800A0
+   WS_EX_TOOLWINDOW: true
+   WS_EX_APPWINDOW: false
+  -> Skipping non-manageable window
+Checking window #61: VisualHostingHelper
+  -> Skipping non-manageable window
+Checking window #62: <No Title>
+  -> Skipping non-manageable window
+Checking window #63: <No Title>
+  -> Skipping non-manageable window
+Checking window #64: Pay Me - YouTube - Google Chrome
+  -> Adding manageable window: Pay Me - YouTube - Google Chrome
+  -> Added successfully
+Checking window #65: PopupHost
+  -> Skipping non-manageable window
+Checking window #66: <No Title>
+  -> Skipping non-manageable window
+Checking window #67: C:\w\c - File Explorer
+  -> Adding manageable window: C:\w\c - File Explorer
+  -> Added successfully
+Checking window #68: <No Title>
+  -> Skipping non-manageable window
+Checking window #69: BluetoothNotificationAreaIconWindowClass
+  -> Skipping non-manageable window
+Checking window #70: <No Title>
+  -> Skipping non-manageable window
+Checking window #71: .NET-BroadcastEventWindow.21af1a5.0
+  -> Skipping non-manageable window
+Checking window #72: WUIconWindow
+  -> Skipping non-manageable window
+Checking window #73: <No Title>
+  -> Skipping non-manageable window
+Checking window #74: MainWindow
+  -> Skipping non-manageable window
+Checking window #75: Hidden Window
+  -> Skipping non-manageable window
+Checking window #76: 87% complete
+  -> Skipping non-manageable window
+Checking window #77: QTrayIconMessageWindow
+  -> Skipping non-manageable window
+Checking window #78: WebSocket Server Settings
+  -> Skipping non-manageable window
+Checking window #79: Output Timer
+  -> Skipping non-manageable window
+Checking window #80: Stats
+  -> Skipping non-manageable window
+Checking window #81: OBS 31.0.3 - Profile: t1 - Scenes: Untitled
+  -> Skipping non-manageable window
+Checking window #82: GDI+ Window (obs64.exe)
+  -> Skipping non-manageable window
+Checking window #83: <No Title>
+  -> Skipping non-manageable window
+Checking window #84: PopupHost
+  -> Skipping non-manageable window
+Checking window #85: PopupHost
+  -> Skipping non-manageable window
+Checking window #86: PopupHost
+  -> Skipping non-manageable window
+Checking window #87: <No Title>
+  -> Skipping non-manageable window
+Checking window #88: C:\Users\dhorner\Videos\e_obs\nu-ansi-term_2025-06
+  -> Skipping non-manageable window
+Checking window #89: <No Title>
+  -> Skipping non-manageable window
+Checking window #90: <No Title>
+  -> Skipping non-manageable window
+Checking window #91: <No Title>
+  -> Skipping non-manageable window
+Checking window #92: <No Title>
+  -> Skipping non-manageable window
+Checking window #93: <No Title>
+  -> Skipping non-manageable window
+Checking window #94: <No Title>
+  -> Skipping non-manageable window
+Checking window #95: <No Title>
+  -> Skipping non-manageable window
+Checking window #96: pjtatlow/jammdb: Just Another Memory Mapped Databa
+  -> Skipping non-manageable window
+Checking window #97: symless/multi-build: VS Code extension to switch a
+  -> Skipping non-manageable window
+Checking window #98: spacecowb0y/screenlogs: Rust-based tool that captu
+  -> Skipping non-manageable window
+Checking window #99: Really Small Rust - Cliff L. Biffle - YouTube - Go
+  -> Skipping non-manageable window
+Checking window #100: Advanced Scene Switcher | OBS Forums - Google Chro
+  -> Skipping non-manageable window
+Checking window #101: <No Title>
+  -> Skipping non-manageable window
+Checking window #102: <No Title>
+  -> Skipping non-manageable window
+Checking window #103: <No Title>
+  -> Skipping non-manageable window
+Checking window #104: t
+  -> Skipping non-manageable window
+Checking window #105: t
+  -> Skipping non-manageable window
+Checking window #106: t
+  -> Skipping non-manageable window
+Checking window #107: <No Title>
+  -> Skipping non-manageable window
+Checking window #108: <No Title>
+  -> Skipping non-manageable window
+Checking window #109: <No Title>
+  -> Skipping non-manageable window
+Checking window #110: <No Title>
+  -> Skipping non-manageable window
+Checking window #111: <No Title>
+  -> Skipping non-manageable window
+Checking window #112: <No Title>
+  -> Skipping non-manageable window
+Checking window #113: <No Title>
+  -> Skipping non-manageable window
+Checking window #114: <No Title>
+  -> Skipping non-manageable window
+Checking window #115: <No Title>
+  -> Skipping non-manageable window
+Checking window #116: RemoteApp
+  -> Skipping non-manageable window
+Checking window #117: Logi_Devio_MainWindow
+  -> Skipping non-manageable window
+Checking window #118: <No Title>
+  -> Skipping non-manageable window
+Checking window #119: <No Title>
+  -> Skipping non-manageable window
+Checking window #120: <No Title>
+  -> Skipping non-manageable window
+Checking window #121: <No Title>
+  -> Skipping non-manageable window
+Checking window #122: <No Title>
+  -> Skipping non-manageable window
+Checking window #123: t
+  -> Skipping non-manageable window
+Checking window #124: Free - Command line tool for obs-websocket plugin 
+  -> Skipping non-manageable window
+Checking window #125: <No Title>
+  -> Skipping non-manageable window
+Checking window #126: <No Title>
+  -> Skipping non-manageable window
+Checking window #127: <No Title>
+  -> Skipping non-manageable window
+Checking window #128: notify/examples at main · notify-rs/notify - Googl
+  -> Skipping non-manageable window
+Checking window #129: Administrator: posh~git ~ wgpu [(75c3ada...)]
+  -> Skipping non-manageable window
+Checking window #130: The Soggy Bottom Boys – I Am a Man of Constant Sor
+  -> Skipping non-manageable window
+Checking window #131: Ukulele chords Man Of Constant Sorrow, Soggy Botto
+  -> Skipping non-manageable window
+Checking window #132: feat: auto-detect cargo and cmake projects on sync
+🔍 DEBUG: Checking client-related window: 'feat: auto-detect cargo and cmake projects on sync'
+   HWND: 0x11f0ad4
+   IsWindow: 1
+   IsWindowVisible: 1
+   IsIconic: 1
+   ExStyle: 0x100
+   WS_EX_TOOLWINDOW: false
+   WS_EX_APPWINDOW: false
+  -> Skipping non-manageable window
+Checking window #133: microsoft/windows-rs: Rust for Windows - Google Ch
+  -> Skipping non-manageable window
+Checking window #134: Program Man of Sorrow - Google Chrome
+  -> Skipping non-manageable window
+Checking window #135: trickster0/OffensiveRust: Rust Weaponization for R
+  -> Skipping non-manageable window
+Checking window #136: microsoft/windows-rs: Rust for Windows - Google Ch
+  -> Skipping non-manageable window
+Checking window #137: WindowFromPoint Overview - Google Chrome
+  -> Skipping non-manageable window
+Checking window #138: DesktopWindowXamlSource
+  -> Skipping non-manageable window
+Checking window #139: Inbox (9,106) - daveydave1234@gmail.com - Gmail - 
+  -> Skipping non-manageable window
+Checking window #140: <No Title>
+  -> Skipping non-manageable window
+Checking window #141: <No Title>
+  -> Skipping non-manageable window
+Checking window #142: <No Title>
+  -> Skipping non-manageable window
+Checking window #143: Dashboard - crates.io: Rust Package Registry - Goo
+  -> Skipping non-manageable window
+Checking window #144: <No Title>
+  -> Skipping non-manageable window
+Checking window #145: Task Host Window
+  -> Skipping non-manageable window
+Checking window #146: GDI+ Window (Explorer.EXE)
+  -> Skipping non-manageable window
+Checking window #147: <No Title>
+  -> Skipping non-manageable window
+Checking window #148: <No Title>
+  -> Skipping non-manageable window
+Checking window #149: <No Title>
+  -> Skipping non-manageable window
+Checking window #150: <No Title>
+  -> Skipping non-manageable window
+Checking window #151: C:\Program Files\WSL\wslhost.exe
+  -> Skipping non-manageable window
+Checking window #152: C:\Program Files\WSL\wslhost.exe
+  -> Skipping non-manageable window
+Checking window #153: C:\Program Files\WSL\wslhost.exe
+  -> Skipping non-manageable window
+Checking window #154: C:\Program Files\WSL\wslhost.exe
+  -> Skipping non-manageable window
+Checking window #155: <No Title>
+  -> Skipping non-manageable window
+Checking window #156: <No Title>
+  -> Skipping non-manageable window
+Checking window #157: <No Title>
+  -> Skipping non-manageable window
+Checking window #158: <No Title>
+  -> Skipping non-manageable window
+Checking window #159: Menu
+  -> Skipping non-manageable window
+Checking window #160: <No Title>
+  -> Skipping non-manageable window
+Checking window #161: <No Title>
+  -> Skipping non-manageable window
+Checking window #162: <No Title>
+  -> Skipping non-manageable window
+Checking window #163: <No Title>
+  -> Skipping non-manageable window
+Checking window #164: <No Title>
+  -> Skipping non-manageable window
+Checking window #165: <No Title>
+  -> Skipping non-manageable window
+Checking window #166: <No Title>
+  -> Skipping non-manageable window
+Checking window #167: LDEVICEMGR_WINDOW_{49DCDDA1-BF03-46BC-B469-59A0616
+  -> Skipping non-manageable window
+Checking window #168: <No Title>
+  -> Skipping non-manageable window
+Checking window #169: t
+  -> Skipping non-manageable window
+Checking window #170: <No Title>
+  -> Skipping non-manageable window
+Checking window #171: NordVPN 
+  -> Skipping non-manageable window
+Checking window #172: <No Title>
+  -> Skipping non-manageable window
+Checking window #173: <No Title>
+  -> Skipping non-manageable window
+Checking window #174: <No Title>
+  -> Skipping non-manageable window
+Checking window #175: <No Title>
+  -> Skipping non-manageable window
+Checking window #176: <No Title>
+  -> Skipping non-manageable window
+Checking window #177: <No Title>
+  -> Skipping non-manageable window
+Checking window #178: <No Title>
+  -> Skipping non-manageable window
+Checking window #179: <No Title>
+  -> Skipping non-manageable window
+Checking window #180: <No Title>
+  -> Skipping non-manageable window
+Checking window #181: <No Title>
+  -> Skipping non-manageable window
+Checking window #182: <No Title>
+  -> Skipping non-manageable window
+Checking window #183: <No Title>
+  -> Skipping non-manageable window
+Checking window #184: <No Title>
+  -> Skipping non-manageable window
+Checking window #185: <No Title>
+  -> Skipping non-manageable window
+Checking window #186: <No Title>
+  -> Skipping non-manageable window
+Checking window #187: <No Title>
+  -> Skipping non-manageable window
+Checking window #188: <No Title>
+  -> Skipping non-manageable window
+Checking window #189: <No Title>
+  -> Skipping non-manageable window
+Checking window #190: <No Title>
+  -> Skipping non-manageable window
+Checking window #191: <No Title>
+  -> Skipping non-manageable window
+Checking window #192: <No Title>
+  -> Skipping non-manageable window
+Checking window #193: <No Title>
+  -> Skipping non-manageable window
+Checking window #194: <No Title>
+  -> Skipping non-manageable window
+Checking window #195: <No Title>
+  -> Skipping non-manageable window
+Checking window #196: <No Title>
+  -> Skipping non-manageable window
+Checking window #197: <No Title>
+  -> Skipping non-manageable window
+Checking window #198: Steam
+  -> Skipping non-manageable window
+Checking window #199: <No Title>
+  -> Skipping non-manageable window
+Checking window #200: Untitled
+  -> Skipping non-manageable window
+Checking window #201: <No Title>
+  -> Skipping non-manageable window
+Checking window #202: <No Title>
+  -> Skipping non-manageable window
+Checking window #203: MediaContextNotificationWindow
+  -> Skipping non-manageable window
+Checking window #204: GDI+ Window (NordVPN.exe)
+  -> Skipping non-manageable window
+Checking window #205: .NET-BroadcastEventWindow.3103103.0
+  -> Skipping non-manageable window
+Checking window #206: .NET-BroadcastEventWindow.bf7771.0
+  -> Skipping non-manageable window
+Checking window #207: <No Title>
+  -> Skipping non-manageable window
+Checking window #208: <No Title>
+  -> Skipping non-manageable window
+Checking window #209: <No Title>
+  -> Skipping non-manageable window
+Checking window #210: <No Title>
+  -> Skipping non-manageable window
+Checking window #211: SystemResourceNotifyWindow
+  -> Skipping non-manageable window
+Checking window #212: <No Title>
+  -> Skipping non-manageable window
+Checking window #213: <No Title>
+  -> Skipping non-manageable window
+Checking window #214: C:\Users\dhorner\AppData\Local\Keybase\keybase.exe
+  -> Skipping non-manageable window
+Checking window #215: <No Title>
+  -> Skipping non-manageable window
+Checking window #216: Hidden Window
+  -> Skipping non-manageable window
+Checking window #217: Hidden Window
+  -> Skipping non-manageable window
+Checking window #218: Hidden Window
+  -> Skipping non-manageable window
+Checking window #219: Hidden Window
+  -> Skipping non-manageable window
+Checking window #220: Hidden Window
+  -> Skipping non-manageable window
+Checking window #221: Hidden Window
+  -> Skipping non-manageable window
+Checking window #222: .NET-BroadcastEventWindow.4.0.0.0.3ddfb6e.0
+  -> Skipping non-manageable window
+Checking window #223: Hidden Window
+  -> Skipping non-manageable window
+Checking window #224: <No Title>
+  -> Skipping non-manageable window
+Checking window #225: LogiOptionsMgr
+  -> Skipping non-manageable window
+Checking window #226: MediaContextNotificationWindow
+  -> Skipping non-manageable window
+Checking window #227: SystemResourceNotifyWindow
+  -> Skipping non-manageable window
+Checking window #228: <No Title>
+  -> Skipping non-manageable window
+Checking window #229: thekogans_util_SystemRunLoop_Window
+  -> Skipping non-manageable window
+Checking window #230: LogiOptionsAppBroker
+  -> Skipping non-manageable window
+Checking window #231: <No Title>
+  -> Skipping non-manageable window
+Checking window #232: <No Title>
+  -> Skipping non-manageable window
+Checking window #233: <No Title>
+  -> Skipping non-manageable window
+Checking window #234: <No Title>
+  -> Skipping non-manageable window
+Checking window #235: <No Title>
+  -> Skipping non-manageable window
+Checking window #236: <No Title>
+  -> Skipping non-manageable window
+Checking window #237: <No Title>
+  -> Skipping non-manageable window
+Checking window #238: <No Title>
+  -> Skipping non-manageable window
+Checking window #239: <No Title>
+  -> Skipping non-manageable window
+Checking window #240: <No Title>
+  -> Skipping non-manageable window
+Checking window #241: <No Title>
+  -> Skipping non-manageable window
+Checking window #242: <No Title>
+  -> Skipping non-manageable window
+Checking window #243: <No Title>
+  -> Skipping non-manageable window
+Checking window #244: <No Title>
+  -> Skipping non-manageable window
+Checking window #245: RealtekAudioBackgroundProcessClass
+  -> Skipping non-manageable window
+Checking window #246: <No Title>
+  -> Skipping non-manageable window
+Checking window #247: <No Title>
+  -> Skipping non-manageable window
+Checking window #248: <No Title>
+  -> Skipping non-manageable window
+Checking window #249: <No Title>
+  -> Skipping non-manageable window
+Checking window #250: Windows Input Experience
+  -> Skipping non-manageable window
+Checking window #251: <No Title>
+  -> Skipping non-manageable window
+Checking window #252: SecurityHealthSystray
+  -> Skipping non-manageable window
+Checking window #253: <No Title>
+  -> Skipping non-manageable window
+Checking window #254: C:\Program Files (x86)\ASUS\AI Suite III\DIP4\DIPA
+  -> Skipping non-manageable window
+Checking window #255: <No Title>
+  -> Skipping non-manageable window
+Checking window #256: <No Title>
+  -> Skipping non-manageable window
+Checking window #257: <No Title>
+  -> Skipping non-manageable window
+Checking window #258: <No Title>
+  -> Skipping non-manageable window
+Checking window #259: <No Title>
+  -> Skipping non-manageable window
+Checking window #260: <No Title>
+  -> Skipping non-manageable window
+Checking window #261: <No Title>
+  -> Skipping non-manageable window
+Checking window #262: NvSvc
+  -> Skipping non-manageable window
+Checking window #263: UxdService
+  -> Skipping non-manageable window
+Checking window #264: UxdService
+  -> Skipping non-manageable window
+Checking window #265: BroadcastListenerWindow
+  -> Skipping non-manageable window
+Checking window #266: BroadcastListenerWindow
+  -> Skipping non-manageable window
+Checking window #267: BroadcastListenerWindow
+  -> Skipping non-manageable window
+Checking window #268: BroadcastListenerWindow
+  -> Skipping non-manageable window
+Checking window #269: BroadcastListenerWindow
+  -> Skipping non-manageable window
+Checking window #270: MiracastConnectionWindow
+  -> Skipping non-manageable window
+Checking window #271: MS_WebcheckMonitor
+  -> Skipping non-manageable window
+Checking window #272: <No Title>
+  -> Skipping non-manageable window
+Checking window #273: <No Title>
+  -> Skipping non-manageable window
+Checking window #274: DDE Server Window
+  -> Skipping non-manageable window
+Checking window #275: BroadcastListenerWindow
+  -> Skipping non-manageable window
+Checking window #276: BroadcastListenerWindow
+  -> Skipping non-manageable window
+Checking window #277: BroadcastListenerWindow
+  -> Skipping non-manageable window
+Checking window #278: <No Title>
+  -> Skipping non-manageable window
+Checking window #279: <No Title>
+  -> Skipping non-manageable window
+Checking window #280: <No Title>
+  -> Skipping non-manageable window
+Checking window #281: <No Title>
+  -> Skipping non-manageable window
+Checking window #282: <No Title>
+  -> Skipping non-manageable window
+Checking window #283: <No Title>
+  -> Skipping non-manageable window
+Checking window #284: <No Title>
+  -> Skipping non-manageable window
+Checking window #285: <No Title>
+  -> Skipping non-manageable window
+Checking window #286: <No Title>
+  -> Skipping non-manageable window
+Checking window #287: <No Title>
+  -> Skipping non-manageable window
+Checking window #288: <No Title>
+  -> Skipping non-manageable window
+Checking window #289: <No Title>
+  -> Skipping non-manageable window
+Checking window #290: DesktopWindowXamlSource
+  -> Skipping non-manageable window
+Checking window #291: <No Title>
+  -> Skipping non-manageable window
+Checking window #292: DesktopWindowXamlSource
+  -> Skipping non-manageable window
+Checking window #293: <No Title>
+  -> Skipping non-manageable window
+Checking window #294: <No Title>
+  -> Skipping non-manageable window
+Checking window #295: <No Title>
+  -> Skipping non-manageable window
+Checking window #296: <No Title>
+  -> Skipping non-manageable window
+Checking window #297: <No Title>
+  -> Skipping non-manageable window
+Checking window #298: Windows Push Notifications Platform
+  -> Skipping non-manageable window
+Checking window #299: <No Title>
+  -> Skipping non-manageable window
+Checking window #300: <No Title>
+  -> Skipping non-manageable window
+Checking window #301: Task Host Window
+  -> Skipping non-manageable window
+Checking window #302: NvContainerWindowClass00002DF4
+  -> Skipping non-manageable window
+Checking window #303: NvContainerWindowClass00001B68
+  -> Skipping non-manageable window
+Checking window #304: NvContainerWindowClass000025C8
+  -> Skipping non-manageable window
+Checking window #305: DWM Notification Window
+  -> Skipping non-manageable window
+Checking window #306: <No Title>
+  -> Skipping non-manageable window
+Checking window #307: Widgets
+  -> Skipping non-manageable window
+Checking window #308: jvoigts/bonsai_rtsp_source: source node that can r
+  -> Skipping non-manageable window
+Checking window #309: GDI+ Window (OneDrive.exe)
+  -> Skipping non-manageable window
+Checking window #310: <No Title>
+  -> Skipping non-manageable window
+Checking window #311: DDE Server Window
+  -> Skipping non-manageable window
+Checking window #312: <No Title>
+  -> Skipping non-manageable window
+Checking window #313: <No Title>
+  -> Skipping non-manageable window
+Checking window #314: <No Title>
+  -> Skipping non-manageable window
+Checking window #315: OneDrive - Personal
+  -> Skipping non-manageable window
+Checking window #316: <No Title>
+  -> Skipping non-manageable window
+Checking window #317: <No Title>
+  -> Skipping non-manageable window
+Checking window #318: <No Title>
+  -> Skipping non-manageable window
+Checking window #319: Keybase: People
+  -> Skipping non-manageable window
+Checking window #320: Keybase
+  -> Skipping non-manageable window
+Checking window #321: <No Title>
+  -> Skipping non-manageable window
+Checking window #322: <No Title>
+  -> Skipping non-manageable window
+Checking window #323: <No Title>
+  -> Skipping non-manageable window
+Checking window #324: <No Title>
+  -> Skipping non-manageable window
+Checking window #325: Logi_Devio_MainWindow
+  -> Skipping non-manageable window
+Checking window #326: <No Title>
+  -> Skipping non-manageable window
+Checking window #327: Program Manager
+  -> Skipping non-manageable window
+Checking window #328: Default IME
+  -> Skipping non-manageable window
+Checking window #329: Default IME
+  -> Skipping non-manageable window
+Checking window #330: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #331: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #332: Default IME
+  -> Skipping non-manageable window
+Checking window #333: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #334: Default IME
+  -> Skipping non-manageable window
+Checking window #335: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #336: Default IME
+  -> Skipping non-manageable window
+Checking window #337: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #338: Default IME
+  -> Skipping non-manageable window
+Checking window #339: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #340: Default IME
+  -> Skipping non-manageable window
+Checking window #341: Default IME
+  -> Skipping non-manageable window
+Checking window #342: Default IME
+  -> Skipping non-manageable window
+Checking window #343: Default IME
+  -> Skipping non-manageable window
+Checking window #344: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #345: Default IME
+  -> Skipping non-manageable window
+Checking window #346: Default IME
+  -> Skipping non-manageable window
+Checking window #347: Default IME
+  -> Skipping non-manageable window
+Checking window #348: Default IME
+  -> Skipping non-manageable window
+Checking window #349: Default IME
+  -> Skipping non-manageable window
+Checking window #350: Default IME
+  -> Skipping non-manageable window
+Checking window #351: Default IME
+  -> Skipping non-manageable window
+Checking window #352: Default IME
+  -> Skipping non-manageable window
+Checking window #353: Default IME
+  -> Skipping non-manageable window
+Checking window #354: Default IME
+  -> Skipping non-manageable window
+Checking window #355: Default IME
+  -> Skipping non-manageable window
+Checking window #356: Default IME
+  -> Skipping non-manageable window
+Checking window #357: Default IME
+  -> Skipping non-manageable window
+Checking window #358: Default IME
+  -> Skipping non-manageable window
+Checking window #359: Default IME
+  -> Skipping non-manageable window
+Checking window #360: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #361: Default IME
+  -> Skipping non-manageable window
+Checking window #362: Default IME
+  -> Skipping non-manageable window
+Checking window #363: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #364: Default IME
+  -> Skipping non-manageable window
+Checking window #365: Default IME
+  -> Skipping non-manageable window
+Checking window #366: Default IME
+  -> Skipping non-manageable window
+Checking window #367: Default IME
+  -> Skipping non-manageable window
+Checking window #368: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #369: Default IME
+  -> Skipping non-manageable window
+Checking window #370: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #371: Default IME
+  -> Skipping non-manageable window
+Checking window #372: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #373: Default IME
+  -> Skipping non-manageable window
+Checking window #374: Default IME
+  -> Skipping non-manageable window
+Checking window #375: Default IME
+  -> Skipping non-manageable window
+Checking window #376: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #377: Default IME
+  -> Skipping non-manageable window
+Checking window #378: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #379: Default IME
+  -> Skipping non-manageable window
+Checking window #380: Default IME
+  -> Skipping non-manageable window
+Checking window #381: Default IME
+  -> Skipping non-manageable window
+Checking window #382: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #383: Default IME
+  -> Skipping non-manageable window
+Checking window #384: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #385: Default IME
+  -> Skipping non-manageable window
+Checking window #386: Default IME
+  -> Skipping non-manageable window
+Checking window #387: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #388: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #389: Default IME
+  -> Skipping non-manageable window
+Checking window #390: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #391: Default IME
+  -> Skipping non-manageable window
+Checking window #392: Default IME
+  -> Skipping non-manageable window
+Checking window #393: Default IME
+  -> Skipping non-manageable window
+Checking window #394: Default IME
+  -> Skipping non-manageable window
+Checking window #395: Default IME
+  -> Skipping non-manageable window
+Checking window #396: Default IME
+  -> Skipping non-manageable window
+Checking window #397: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #398: Default IME
+  -> Skipping non-manageable window
+Checking window #399: Default IME
+  -> Skipping non-manageable window
+Checking window #400: Default IME
+  -> Skipping non-manageable window
+Checking window #401: Default IME
+  -> Skipping non-manageable window
+Checking window #402: Default IME
+  -> Skipping non-manageable window
+Checking window #403: Default IME
+  -> Skipping non-manageable window
+Checking window #404: Default IME
+  -> Skipping non-manageable window
+Checking window #405: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #406: Default IME
+  -> Skipping non-manageable window
+Checking window #407: Default IME
+  -> Skipping non-manageable window
+Checking window #408: Default IME
+  -> Skipping non-manageable window
+Checking window #409: Default IME
+  -> Skipping non-manageable window
+Checking window #410: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #411: Default IME
+  -> Skipping non-manageable window
+Checking window #412: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #413: Default IME
+  -> Skipping non-manageable window
+Checking window #414: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #415: Default IME
+  -> Skipping non-manageable window
+Checking window #416: Default IME
+  -> Skipping non-manageable window
+Checking window #417: Default IME
+  -> Skipping non-manageable window
+Checking window #418: Default IME
+  -> Skipping non-manageable window
+Checking window #419: CiceroUIWndFrame
+  -> Skipping non-manageable window
+Checking window #420: CiceroUIWndFrame
+  -> Skipping non-manageable window
+Checking window #421: Default IME
+  -> Skipping non-manageable window
+Checking window #422: Default IME
+  -> Skipping non-manageable window
+Checking window #423: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #424: Default IME
+  -> Skipping non-manageable window
+Checking window #425: Default IME
+  -> Skipping non-manageable window
+Checking window #426: Default IME
+  -> Skipping non-manageable window
+Checking window #427: Default IME
+  -> Skipping non-manageable window
+Checking window #428: Default IME
+  -> Skipping non-manageable window
+Checking window #429: Default IME
+  -> Skipping non-manageable window
+Checking window #430: Default IME
+  -> Skipping non-manageable window
+Checking window #431: CiceroUIWndFrame
+  -> Skipping non-manageable window
+Checking window #432: Default IME
+  -> Skipping non-manageable window
+Checking window #433: Default IME
+  -> Skipping non-manageable window
+Checking window #434: Default IME
+  -> Skipping non-manageable window
+Checking window #435: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #436: Default IME
+  -> Skipping non-manageable window
+Checking window #437: Default IME
+  -> Skipping non-manageable window
+Checking window #438: CiceroUIWndFrame
+  -> Skipping non-manageable window
+Checking window #439: Default IME
+  -> Skipping non-manageable window
+Checking window #440: Default IME
+  -> Skipping non-manageable window
+Checking window #441: Default IME
+  -> Skipping non-manageable window
+Checking window #442: Default IME
+  -> Skipping non-manageable window
+Checking window #443: Default IME
+  -> Skipping non-manageable window
+Checking window #444: Default IME
+  -> Skipping non-manageable window
+Checking window #445: Default IME
+  -> Skipping non-manageable window
+Checking window #446: Default IME
+  -> Skipping non-manageable window
+Checking window #447: Default IME
+  -> Skipping non-manageable window
+Checking window #448: Default IME
+  -> Skipping non-manageable window
+Checking window #449: Default IME
+  -> Skipping non-manageable window
+Checking window #450: Default IME
+  -> Skipping non-manageable window
+Checking window #451: Default IME
+  -> Skipping non-manageable window
+Checking window #452: Default IME
+  -> Skipping non-manageable window
+Checking window #453: Default IME
+  -> Skipping non-manageable window
+Checking window #454: Default IME
+  -> Skipping non-manageable window
+Checking window #455: Default IME
+  -> Skipping non-manageable window
+Checking window #456: Default IME
+  -> Skipping non-manageable window
+Checking window #457: Default IME
+  -> Skipping non-manageable window
+Checking window #458: Default IME
+  -> Skipping non-manageable window
+Checking window #459: Default IME
+  -> Skipping non-manageable window
+Checking window #460: Default IME
+  -> Skipping non-manageable window
+Checking window #461: Default IME
+  -> Skipping non-manageable window
+Checking window #462: Default IME
+  -> Skipping non-manageable window
+Checking window #463: Default IME
+  -> Skipping non-manageable window
+Checking window #464: Default IME
+  -> Skipping non-manageable window
+Checking window #465: Default IME
+  -> Skipping non-manageable window
+Checking window #466: Default IME
+  -> Skipping non-manageable window
+Checking window #467: Default IME
+  -> Skipping non-manageable window
+Checking window #468: Default IME
+  -> Skipping non-manageable window
+Checking window #469: Default IME
+  -> Skipping non-manageable window
+Checking window #470: Default IME
+  -> Skipping non-manageable window
+Checking window #471: Default IME
+  -> Skipping non-manageable window
+Checking window #472: Default IME
+  -> Skipping non-manageable window
+Checking window #473: Default IME
+  -> Skipping non-manageable window
+Checking window #474: Default IME
+  -> Skipping non-manageable window
+Checking window #475: Default IME
+  -> Skipping non-manageable window
+Checking window #476: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #477: Default IME
+  -> Skipping non-manageable window
+Checking window #478: Default IME
+  -> Skipping non-manageable window
+Checking window #479: Default IME
+  -> Skipping non-manageable window
+Checking window #480: Default IME
+  -> Skipping non-manageable window
+Checking window #481: Default IME
+  -> Skipping non-manageable window
+Checking window #482: Default IME
+  -> Skipping non-manageable window
+Checking window #483: Default IME
+  -> Skipping non-manageable window
+Checking window #484: MSCTFIME UI
+  -> Skipping non-manageable window
+Checking window #485: Default IME
+  -> Skipping non-manageable window
+EnumWindows completed with result: 1
+Window enumeration finished. Found 10 windows.
+
+============================================================
+Window Grid Tracker - 8x12 Grid (10 windows)
+Monitor: 7040x2452 px
+============================================================
+    0  1  2  3  4  5  6  7  8  9 10 11 
+ 0 XX XX XX XX XX XX XX XX .. .. .. .. 
+ 1 XX XX XX XX XX XX XX XX .. .. .. .. 
+ 2 XX XX XX XX XX XX XX XX .. .. .. ## 
+ 3 .. ## .. .. .. .. .. .. .. .. .. .. 
+ 4 ## ## ## ## ## ## ## ## ## XX XX XX 
+ 5 ## ## ## ## ## ## ## ## ## XX XX XX 
+ 6 ## ## ## ## ## ## ## ## ## XX XX XX 
+ 7 ## ## ## ## ## ## ## ## ## XX XX XX 
+
+
+
+🔧 Setting up IPC server...
+🔧 Setting up E-Grid IPC server services...
+        0 [W] "Config::global_config()" 
+| No config file was loaded, a config with default values will be used. 
+< Win32 API error > C:\Users\dhorner\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\iceoryx2-pal-posix-0.6.1\src\windows\unistd.rs:323 RemoveDirectoryA(pathname as*const u8) 
+ [ 145 ] The directory is not empty.
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
+✅ E-Grid IPC server services initialized successfully
+   📡 Event service: e_grid_events
+   📨 Command service: e_grid_commands
+   📤 Response service: e_grid_responses
+   📋 Window details service: e_grid_window_details
+
+🔄 Starting IPC server monitoring...
+🔄 E-Grid IPC server background monitoring enabled
+📨 Server will process commands in the main event loop
+
+🔗 Setting up integrated WinEvent monitoring...
+🔧 Setting up WinEvent hooks for real-time monitoring...
+✅ Successfully set up hook for Window Creation
+✅ Successfully set up hook for Window Destruction
+✅ Successfully set up hook for Window Move/Resize
+✅ Successfully set up hook for Window Activation
+✅ Successfully set up hook for Window Minimize
+✅ Successfully set up hook for Window Restore
+🚀 Successfully set up 6 WinEvent hooks!
+📢 Now listening for real-time window events and publishing updates!
+
+📤 Publishing initial window state...
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+✅ Initial window state published successfully
+📊 Server tracking 10 windows total
+   Window 1: HWND 14 - 'C:\w\c - File Explorer'
+   Window 2: HWND 28 - 'x64 Native Tools Command Promp'
+   Window 3: HWND 26 - 'C:\w\demos\cuneus\e_obs_startt'
+   Window 4: HWND 08 - 'ipc_server_demo.rs - e_grid - '
+   Window 5: HWND 60 - 'Task Manager'
+   Window 6: HWND 24 - '(2) Top job picks for you | Li'
+   Window 7: HWND 46 - 'iceoryx2 - Rust - Google Chrom'
+   Window 8: HWND 46 - 'Pay Me - YouTube - Google Chro'
+   Window 9: HWND 38 - 'Sell Your Dope (C-Mix) - YouTu'
+   Window 10: HWND 4C - 'Sylvan Esso: NPR Music Tiny De'
+
+✅ IPC server is now running with integrated WinEvent monitoring!
+  📨 Client commands (GetWindowList, GetGridState, AssignWindow, etc.)
+  🔔 Real-time window events (create, move, destroy) via WinEvents
+  📤 Automatic publishing of updates to connected clients
+
+📊 Server Statistics:
+  Windows tracked: 10
+  Grid size: 8x12
+  Monitors: 2
+
+🎯 To test the server:
+  1. Run the client demo: cargo run --bin grid_client_demo
+  2. Move windows around to see real-time updates
+  3. Use client commands to assign windows to grid cells
+
+Press Ctrl+C to stop the server...
+🔄 Starting Windows message loop for WinEvent processing...
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+🔄 Grid updated: 10 windows tracked
+
+============================================================
+Window Grid Tracker - 8x12 Grid (10 windows)
+Monitor: 7040x2452 px
+============================================================
+    0  1  2  3  4  5  6  7  8  9 10 11 
+ 0 XX XX XX XX XX XX XX XX .. .. .. .. 
+ 1 XX XX XX XX XX XX XX XX .. .. .. .. 
+ 2 XX XX XX XX XX XX XX XX .. .. .. ## 
+ 3 .. ## .. .. .. .. .. .. .. .. .. .. 
+ 4 ## ## ## ## ## ## ## ## ## XX XX XX 
+ 5 ## ## ## ## ## ## ## ## ## XX XX XX 
+ 6 ## ## ## ## ## ## ## ## ## XX XX XX 
+ 7 ## ## ## ## ## ## ## ## ## XX XX XX 
+
+
+🖥️ Monitor Grids:
+  Monitor 0: 5120x1440
+      0  1  2  3  4  5  6  7  8  9 10 11
+ 0:  . 60 60 60  .  .  .  .  .  .  .  . 
+ 1: 60 60 60 60  . 26 26 26 24 38 38 38 
+ 2: 60 60 4C 4C 4C 4C 4C 46 24 38 38 38 
+ 3: 60 60 4C 4C 4C 4C 4C 46 46 38 38 38 
+ 4: 60 60 4C 4C 4C 4C 4C 46 46 38 38 38 
+ 5: 60 60 4C 4C 4C 4C 4C 46 46 38 38 38 
+ 6: 60 60 4C 4C 4C 4C 4C 46 46 38 38 38 
+ 7:  . 60 4C 4C 4C 4C 4C 46 46  .  .  . 
+  Monitor 1: 1920x1080
+      0  1  2  3  4  5  6  7  8  9 10 11
+ 0:  .  .  .  .  .  .  .  .  .  .  .  . 
+ 1:  .  .  .  .  .  .  .  .  .  .  .  . 
+ 2:  .  .  .  .  .  .  .  .  .  .  .  . 
+ 3:  .  .  .  .  .  .  .  .  .  .  .  . 
+ 4:  .  .  .  .  .  .  .  .  .  .  .  . 
+ 5:  .  .  .  .  .  .  . 28 28 28 28  . 
+ 6:  .  .  .  .  .  .  . 28 28 28 28  . 
+ 7:  .  .  .  .  .  .  . 28 28 28  .  . 
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+🔄 Grid updated: 10 windows tracked
+
+============================================================
+Window Grid Tracker - 8x12 Grid (10 windows)
+Monitor: 7040x2452 px
+============================================================
+    0  1  2  3  4  5  6  7  8  9 10 11 
+ 0 XX XX XX XX XX XX XX XX .. .. .. .. 
+ 1 XX XX XX XX XX XX XX XX .. .. .. .. 
+ 2 XX XX XX XX XX XX XX XX .. .. .. ## 
+ 3 .. ## .. .. .. .. .. .. .. .. .. .. 
+ 4 ## ## ## ## ## ## ## ## ## XX XX XX 
+ 5 ## ## ## ## ## ## ## ## ## XX XX XX 
+ 6 ## ## ## ## ## ## ## ## ## XX XX XX 
+ 7 ## ## ## ## ## ## ## ## ## XX XX XX 
+
+
+🖥️ Monitor Grids:
+  Monitor 0: 5120x1440
+      0  1  2  3  4  5  6  7  8  9 10 11
+ 0:  . 60 60 60  .  .  .  .  .  .  .  . 
+ 1: 60 60 60 60  . 26 26 26 24 38 38 38 
+ 2: 60 60 4C 4C 4C 4C 4C 46 24 38 38 38 
+ 3: 60 60 4C 4C 4C 4C 4C 46 46 38 38 38 
+ 4: 60 60 4C 4C 4C 4C 4C 46 46 38 38 38 
+ 5: 60 60 4C 4C 4C 4C 4C 46 46 38 38 38 
+ 6: 60 60 4C 4C 4C 4C 4C 46 46 38 38 38 
+ 7:  . 60 4C 4C 4C 4C 4C 46 46  .  .  . 
+  Monitor 1: 1920x1080
+      0  1  2  3  4  5  6  7  8  9 10 11
+ 0:  .  .  .  .  .  .  .  .  .  .  .  . 
+ 1:  .  .  .  .  .  .  .  .  .  .  .  . 
+ 2:  .  .  .  .  .  .  .  .  .  .  .  . 
+ 3:  .  .  .  .  .  .  .  .  .  .  .  . 
+ 4:  .  .  .  .  .  .  .  .  .  .  .  . 
+ 5:  .  .  .  .  .  .  . 28 28 28 28  . 
+ 6:  .  .  .  .  .  .  . 28 28 28 28  . 
+ 7:  .  .  .  .  .  .  . 28 28 28  .  . 
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+🔔 WinEvent: DESTROYED - HWND: 5570790 - ''
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+📤 Publishing details for 10 windows (already filtered by is_manageable_window)...
+   ✅ Published window 80811320 (#1/10): 'C:\w\c - File Explorer'
+   ✅ Published window 22615240 (#2/10): 'x64 Native Tools Command Prompt for VS 2'
+   ✅ Published window 8130438 (#3/10): 'C:\w\demos\cuneus\e_obs_startt_cargo-e-c'
+   ✅ Published window 13964008 (#4/10): 'ipc_server_demo.rs - e_grid - Visual Stu'
+   ✅ Published window 26217596 (#5/10): 'Task Manager'
+   ✅ Published window 6755776 (#10/10): 'Sylvan Esso: NPR Music Tiny Desk Concert'
+✅ Successfully published details for 10/10 windows (failed: 0)
+^C

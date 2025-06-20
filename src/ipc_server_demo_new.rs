@@ -109,7 +109,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Show recent window activity
                 if !tracker.windows.is_empty() {
                     println!("  📋 Recent windows:");
-                    for (i, (_hwnd, window)) in tracker.windows.iter().take(5).enumerate() {
+                    for (i, entry) in tracker.windows.iter().take(5).enumerate() {
+                        let (_hwnd, window) = entry.pair();
                         let title = if window.title.len() > 40 {
                             format!("{}...", &window.title[..40])
                         } else {

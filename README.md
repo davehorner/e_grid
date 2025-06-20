@@ -2,6 +2,55 @@
 
 A comprehensive, event-driven window management system that provides real-time window tracking, grid-based positioning, and efficient IPC-based communication across multiple monitors.
 
+## 🎯 **NEW: Unified E-Grid Binary**
+
+**Major Update**: E-Grid now provides a single, intelligent `e_grid` binary that auto-detects your needs!
+
+✨ **Smart Auto-Detection:**
+- **No server running?** → Starts server + detached client automatically
+- **Server already running?** → Connects as interactive client
+- **Force specific mode** → Use `e_grid server` or `e_grid client`
+
+```bash
+# One command does it all - auto-detects and starts appropriate mode
+cargo run --bin e_grid
+
+# Or use the built binary directly
+./target/debug/e_grid
+```
+
+**🎯 What you get:**
+- **Full server** with focus tracking, multi-monitor grids, animations, layouts
+- **Detached client** for real-time grid visualization  
+- **Interactive mode** for live grid monitoring
+- **Smart detection** - no manual server/client coordination needed
+
+[📖 **Jump to Quick Start**](#-quick-start---unified-binary)
+
+---
+
+## 🎯 **NEW: Focus Event Tracking Integration**
+
+**Major Update**: E-Grid now includes comprehensive window focus tracking directly integrated into the main server!
+
+✨ **Key Highlights:**
+- **Complete Focus Coverage**: Both FOCUSED and DEFOCUSED events in real-time
+- **Zero Setup**: No separate focus server needed - it's built into the main e_grid server
+- **Production Ready**: Full integration with existing grid management features
+- **Multi-Client Support**: Up to 8 applications can subscribe to focus events simultaneously
+- **Rich Event Data**: Process ID, window titles, hash-based identification, precise timestamps
+
+```bash
+# Quick Test - Focus Events with Main Server
+cargo run --bin e_grid                   # Auto-starts server + client
+cargo run --example simple_focus_demo    # Terminal 2: Focus tracking client
+# Now click between windows to see real-time FOCUSED/DEFOCUSED events!
+```
+
+[📖 **Jump to Focus Event Documentation**](#-focus-event-tracking)
+
+---
+
 ## 🎯 Core Features
 
 ### Event-Driven Real-Time Window Tracking
@@ -17,6 +66,20 @@ A comprehensive, event-driven window management system that provides real-time w
 - **Live Synchronization**: Server publishes individual window details for efficient updates
 - **Command Processing**: GetWindowList, GetGridState, window assignment commands
 - **Background Monitoring**: Client receives real-time updates and maintains matching grid state
+
+### 🎯 **NEW: Focus Event Tracking System**
+- **Real-Time Focus Detection**: Track window focus/defocus events as they happen
+- **Complete Event Coverage**: Both FOCUSED (gained focus) and DEFOCUSED (lost focus) events
+- **Rich Event Data**: Process ID, window title, app hash, and precise timestamps
+- **Multi-Client Support**: Up to 8 simultaneous focus event subscribers
+- **Hash-Based Identification**: Efficient app and window identification for filtering
+- **Production Ready**: Integrated into main server, no separate focus server needed
+
+**Focus Event Types:**
+- **FOCUSED (0)**: When a window gains focus (user clicks on it)
+- **DEFOCUSED (1)**: When a window loses focus (user clicks elsewhere)
+- **Window Details**: Process ID, window title, calculated hashes for identification
+- **Timing**: Microsecond-precision timestamps for event ordering
 
 ### Smart Window Detection & Assignment
 - **Coverage-Based Algorithm**: Only marks cells as occupied when windows cover ≥30% of cell area
@@ -128,51 +191,196 @@ cargo run --bin ipc_demo
 ```
 Original combined server/client for interactive window assignment.
 
+## 🎯 Focus Event Tracking
+
+E-Grid now includes comprehensive focus event tracking integrated directly into the main server. This allows applications to monitor window focus changes in real-time without needing a separate focus tracking server.
+
+### Features
+
+- **✅ Complete Focus Coverage**: Both FOCUSED and DEFOCUSED events
+- **✅ Real-Time Detection**: Uses Windows WinEvent hooks for instant focus change detection  
+- **✅ Rich Event Data**: Process ID, window title, app hash, timestamps
+- **✅ Multi-Client Support**: Up to 8 simultaneous focus event subscribers
+- **✅ Production Ready**: Integrated into main e_grid server infrastructure
+- **✅ Hash-Based Filtering**: Efficient app and window identification
+
+### Focus Event Structure
+
+```rust
+pub struct WindowFocusEvent {
+    pub event_type: u8,           // 0 = FOCUSED, 1 = DEFOCUSED
+    pub hwnd: u64,               // Window handle
+    pub process_id: u32,         // Process ID
+    pub timestamp: u64,          // Unix timestamp
+    pub app_name_hash: u64,      // Hash of "Process_{pid}" for identification
+    pub window_title_hash: u64,  // Hash of window title for identification
+    pub reserved: [u8; 2],       // Future expansion
+}
+```
+
+### Quick Start - Focus Tracking
+
+#### Method 1: Using Main Server (Recommended)
+```bash
+# Terminal 1: Start main server with focus events
+cargo run --bin ipc_server_demo
+
+# Terminal 2: Start focus demo client  
+cargo run --example simple_focus_demo
+```
+
+#### Method 2: Using Test Scripts
+```bash
+# Windows - Automated setup
+test_focus_defocus.bat
+
+# Or comprehensive integration test
+test_focus_integration.bat
+```
+
+### Focus Event Examples
+
+The system includes several focus tracking examples:
+
+- **`simple_focus_demo`**: Basic focus event monitoring with clear output
+- **`comprehensive_focus_demo`**: Advanced focus tracking with filtering and statistics
+- **`focus_tracking_demo`**: Demonstrates focus event callback patterns
+- **`focus_music_demo`**: Example integration with MIDI/music applications
+
+### Integration with Applications
+
+```rust
+use e_grid::GridClient;
+
+let mut client = GridClient::new()?;
+
+// Set up focus callback
+client.set_focus_callback(|focus_event| {
+    match focus_event.event_type {
+        0 => println!("Window {} gained focus", focus_event.hwnd),
+        1 => println!("Window {} lost focus", focus_event.hwnd),
+        _ => {}
+    }
+})?;
+
+// Start monitoring
+client.start_background_monitoring()?;
+```
+
 ### Architecture Overview
 
 ```
 ┌─────────────────────┐    WinEvents     ┌──────────────────────┐
 │   Windows System    │ ──────────────→  │   IPC Server Demo    │
-│   (Window Events)   │                  │  - Minimal callbacks │
-└─────────────────────┘                  │  - Main loop logic   │
-                                         │  - Window rescanning │
-                                         │  - IPC publishing    │
+│ - Window Creation   │                  │  - Minimal callbacks │
+│ - Window Movement   │                  │  - Main loop logic   │
+│ - Focus Changes     │                  │  - Window rescanning │
+│ - Window Destroy    │                  │  - IPC publishing    │
+└─────────────────────┘                  │  - Focus tracking    │
                                          └──────────┬───────────┘
                                                     │ iceoryx2 IPC
-                                                    │ (Events + Details)
+                                                    │ Multi-Service:
+                                                    │ • Grid Events
+                                                    │ • Window Details  
+                                                    │ • Focus Events ⭐
+                                                    │ • Commands
+                                                    │ • Responses
                                                     ▼
-                                         ┌──────────────────────┐
-                                         │  Grid Client Demo    │
-                                         │  - Real-time updates │
-                                         │  - Throttled display │
-                                         │  - Non-blocking UI   │
-                                         │  - Event processing  │
-                                         └──────────────────────┘
+                          ┌─────────────────────────────────────────┐
+                          │              Client Applications         │
+                          ├─────────────────────┬───────────────────┤
+                          │  Grid Client Demo   │  Focus Demo Apps  │
+                          │  - Real-time grids  │  - Focus tracking │
+                          │  - Window details   │  - Event logging  │
+                          │  - Throttled UI     │  - App filtering  │
+                          │  - Non-blocking     │  - Multi-client   │
+                          └─────────────────────┴───────────────────┘
 ```
 
 **Key Architecture Features:**
+- **🎯 NEW: Focus Event Integration**: Real-time focus/defocus event publishing
 - **Deadlock Prevention**: WinEvent callbacks only log events, no lock acquisition
 - **Main Loop Processing**: All heavy work done in server main loop (every 2 seconds)
+- **Multi-Service IPC**: Separate channels for different event types
 - **Non-blocking Client**: Uses try_lock and display throttling for responsive UI
 - **Event-Driven Updates**: Server publishes incremental changes, not full state dumps
 - **Efficient IPC**: Large buffer sizes (64KB) prevent message loss
-This starts both the server and an interactive client for testing window assignments.
 
-#### 2. Manual Server/Client Setup
+## 📡 IPC Services
+
+The e_grid server provides multiple IPC services for different types of communication:
+
+| Service | Purpose | Message Type | Description |
+|---------|---------|--------------|-------------|
+| **Grid Events** | Window lifecycle | `WindowEvent` | Window creation, destruction, movement |
+| **Window Details** | Window information | `WindowDetails` | Position, size, grid coordinates, titles |
+| **🎯 Focus Events** | Focus tracking | `WindowFocusEvent` | Focus/defocus with process info ⭐ |
+| **Commands** | Client requests | `WindowCommand` | Window assignment, grid requests |
+| **Responses** | Server replies | `WindowResponse` | Command acknowledgments, data |
+| **Layout** | Grid layouts | `GridLayoutMessage` | Save/restore window arrangements |
+| **Animations** | Window animations | `AnimationCommand` | Smooth window transitions |
+
+**Multi-Client Support**: Each service supports up to 8 concurrent subscribers with individual message buffers.
+
+## 🛠️ Available Demos & Tools
+
+### Server Applications
 ```bash
-# Terminal 1 - Start the server
-cargo run --bin ipc_demo
+# Main server (recommended for all use cases)
+cargo run --bin ipc_server_demo
 
-# Terminal 2 - Start interactive client
-cargo run --bin ipc_demo -- --client
+# Legacy interactive server/client combo
+cargo run --bin ipc_demo
 ```
 
-#### 3. Other Testing Tools
+### Grid Client Applications  
+```bash
+# Real-time grid visualization
+cargo run --bin grid_client_demo
+
+# Enhanced grid client with better error handling
+cargo run --example enhanced_grid_client
+
+# Robust grid client with reconnection
+cargo run --example robust_grid_client
+```
+
+### 🎯 Focus Tracking Applications
+```bash
+# Simple focus event monitoring (great for testing)
+cargo run --example simple_focus_demo
+
+# Comprehensive focus tracking with filtering
+cargo run --example comprehensive_focus_demo
+
+# Focus event callback patterns
+cargo run --example focus_tracking_demo
+
+# Focus integration with music/MIDI applications
+cargo run --example focus_music_demo
+
+# Focus callback demonstration
+cargo run --example focus_callback_example
+```
+
+### Test Scripts
+```bash
+# Test both FOCUSED and DEFOCUSED events
+test_focus_defocus.bat
+
+# End-to-end integration testing
+test_focus_integration.bat
+
+# Standard grid demos
+run_demos.bat
+```
+
+### Legacy Tools
 ```bash
 # Simple grid display (legacy)
 cargo run --bin simple_grid
 
-# Debug window positions
+# Debug window positions  
 cargo run --bin debug_positions
 
 # Basic grid tracking
@@ -211,6 +419,63 @@ Enter target column (0-based): 5
 [CLIENT] > grid
 📤 Sent GetGridState command
 📊 Grid State: 12 windows, 8 occupied cells
+```
+
+## 🎯 Focus Event Tracking Examples
+
+### Simple Focus Demo (`simple_focus_demo`)
+**Perfect for testing and learning focus events**
+
+```bash
+cargo run --example simple_focus_demo
+```
+
+**Output Example:**
+```
+🎯 Simple Focus Event Demo
+==========================
+🟢 FOCUSED - Window: 123456 (PID: 5678) at timestamp: 1640995200
+   📱 App Hash: 0x8a2f3c1b5d4e6789
+   🪟 Title Hash: 0x1b2c3d4e5f6a7890
+   ─────────────────────────────
+
+🔴 DEFOCUSED - Window: 123456 (PID: 5678) at timestamp: 1640995205
+   📱 App Hash: 0x8a2f3c1b5d4e6789
+   🪟 Title Hash: 0x1b2c3d4e5f6a7890
+   ─────────────────────────────
+```
+
+### Comprehensive Focus Demo (`comprehensive_focus_demo`)
+**Advanced focus tracking with filtering and statistics**
+
+- Process-based filtering
+- Focus duration tracking
+- Application switching patterns
+- Statistical analysis
+
+### Focus Music Demo (`focus_music_demo`)
+**Integration example for music/MIDI applications**
+
+- Demonstrates focus event integration with audio applications
+- Shows how to use app hash filtering
+- Perfect template for e_midi integration
+
+### Focus Tracking Architecture
+
+```
+Windows Focus Event
+         ↓
+EVENT_SYSTEM_FOREGROUND (WinEvent)
+         ↓
+GridIpcServer::handle_window_event()
+         ↓
+1. Send DEFOCUSED for previous window
+2. Update last_focused_window tracking  
+3. Send FOCUSED for current window
+         ↓
+GRID_FOCUS_EVENTS_SERVICE (IPC)
+         ↓
+Client Applications (up to 8 simultaneous)
 ```
 
 ## 🖥️ Server Commands
@@ -292,6 +557,31 @@ Active Windows:
 - **Resource Cleanup**: Proper cleanup of hooks, handles, and IPC resources
 - **Thread Safety**: All shared state protected by mutexes with non-blocking try_lock patterns
 - **IPC Reliability**: Large buffer sizes (64KB) and error recovery prevent message loss
+
+## 🎬 Event-Driven Comprehensive Demo
+
+The `test_event_driven_demo` showcases E-Grid's event-driven architecture with real-time window management:
+
+### Key Features
+- **No Polling**: Uses Windows event hooks (SetWinEventHook) for true real-time window detection
+- **Extensible Callbacks**: Event system supports multiple callbacks for window events
+- **IPC Integration**: Demonstrates server/client communication for grid commands
+- **Main-Thread Safety**: All WinEvent processing on main thread to avoid HWND issues
+- **Manageable Window Filtering**: Only shows windows that can be meaningfully managed
+
+### Demo Phases
+1. **Animated Grid Layouts**: IPC commands to arrange windows in 2x2 grid with animations
+2. **Dynamic Window Rotation**: Windows rotate through grid positions with smooth transitions
+3. **Real-time Event Monitoring**: 30-second live monitoring of window create/move/destroy events
+
+### Running The Demo
+```bash
+# Build and run the event-driven demo
+cargo run --bin test_event_driven_demo
+
+# Or use the convenient batch file
+run_event_driven_demo.bat
+```
 
 ## 🚧 Future Enhancements
 

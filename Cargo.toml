@@ -10,9 +10,16 @@ iceoryx2 = "0.6.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rand = "0.8"
+dashmap = "5.5"
+once_cell = "1.19"
+ctrlc = "3.0"
 
 [[bin]]
-name = "grid_tracker"
+name = "e_grid"
+path = "src/e_grid.rs"
+
+[[bin]]
+name = "grid_tracker_legacy"
 path = "src/main.rs"
 
 [[bin]]
@@ -90,3 +97,36 @@ path = "src/test_dynamic_transitions_fixed.rs"
 [[bin]]
 name = "test_animated_transitions"
 path = "src/test_animated_transitions.rs"
+
+[[bin]]
+name = "test_comprehensive_window_management"
+path = "src/test_comprehensive_window_management.rs"
+
+[[bin]]
+name = "test_event_driven_demo"
+path = "src/test_event_driven_demo.rs"
+
+# Focus tracking examples
+[[example]]
+name = "simple_focus_demo"
+path = "examples/simple_focus_demo.rs"
+
+[[example]]
+name = "focus_tracking_demo"
+path = "examples/focus_tracking_demo.rs"
+
+[[example]]
+name = "focus_music_demo"
+path = "examples/focus_music_demo.rs"
+
+[[example]]
+name = "robust_grid_client"
+path = "examples/robust_grid_client.rs"
+
+[[example]]
+name = "comprehensive_focus_demo"
+path = "examples/comprehensive_focus_demo.rs"
+
+[[example]]
+name = "focus_demo_server"
+path = "examples/focus_demo_server.rs"
