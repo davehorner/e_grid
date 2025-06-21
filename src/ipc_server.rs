@@ -312,8 +312,10 @@ impl GridIpcServer {
                 })
             }
             IpcCommandType::GetMonitorList => {
-                // Example: fill in real monitor list here
-                let monitor_list = None; // TODO: populate real monitor list
+                // Enumerate monitors and build MonitorList
+                println!("🔍 [DEBUG] Handling GetMonitorList command, enumerating monitors...");
+                let monitor_list = Some(self.enumerate_monitors());
+                println!("🔍 [DEBUG] MonitorList to send: {:?}", monitor_list);
                 Ok(IpcResponse {
                     response_type: IpcResponseType::MonitorList,
                     grid_state: None,
@@ -1210,6 +1212,71 @@ impl GridIpcServer {
         }
         Ok(())
     }
+
+    /// Enumerate monitors and build a MonitorList (stub: single monitor for now)
+ fn enumerate_monitors(&self) -> crate::ipc_protocol::MonitorList {
+    use crate::ipc_protocol::{MonitorGridInfo, MonitorList, GridType};
+    use winapi::um::winuser::{EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW};
+    use winapi::shared::windef::{HDC, LPRECT, RECT};
+    use std::ptr;
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    struct MonitorEnumContext {
+        monitors: Vec<MonitorGridInfo>,
+        next_id: u32,
+    }
+    let mut context = MonitorEnumContext {
+        monitors: Vec::new(),
+        next_id: 0,
+    };
+
+    unsafe extern "system" fn monitor_enum_proc(
+        hmonitor: winapi::shared::windef::HMONITOR,
+        _hdc: HDC,
+        lprc: LPRECT,
+        lparam: isize,
+    ) -> i32 {
+        let context = &mut *(lparam as *mut MonitorEnumContext);
+        let mut mi: MONITORINFOEXW = std::mem::zeroed();
+        mi.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if GetMonitorInfoW(hmonitor, &mut mi as *mut _ as *mut _) != 0 {
+            let rect = mi.rcMonitor;
+            let width = rect.right - rect.left;
+            let height = rect.bottom - rect.top;
+            let name = OsString::from_wide(&mi.szDevice)
+                .to_string_lossy()
+                .trim_end_matches('\0')
+                .to_string();
+            context.monitors.push(MonitorGridInfo {
+                id: context.next_id,
+                grid_type: GridType::Physical,
+                width,
+                height,
+                x: rect.left,
+                y: rect.top,
+                rows: 1, // or your default
+                cols: 1, // or your default
+                name: Some(name),
+                grid: vec![vec![None; 1]; 1], // No grid data
+            });
+            context.next_id += 1;
+        }
+        1 // continue enumeration
+    }
+
+    unsafe {
+        EnumDisplayMonitors(
+            ptr::null_mut(),
+            ptr::null(),
+            Some(monitor_enum_proc),
+            &mut context as *mut _ as isize,
+        );
+    }
+
+    MonitorList { monitors: context.monitors }
+}
+
 }
 
 impl Drop for GridIpcServer {

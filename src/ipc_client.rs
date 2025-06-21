@@ -227,7 +227,7 @@ impl GridClient {
             while *running.lock().unwrap() {
                 // Try to create/recreate connection to server
                 match Self::create_background_subscribers() {
-                    Ok((event_subscriber, window_details_subscriber, focus_subscriber, heartbeat_subscriber)) => {                        if connection_retry_count > 0 {
+                    Ok((event_subscriber, window_details_subscriber, focus_subscriber, heartbeat_subscriber, response_subscriber)) => {                        if connection_retry_count > 0 {
                             info!("✅ Successfully reconnected to e_grid server (attempt {})", connection_retry_count + 1);
                         } else {
                             info!("🔍 Background monitoring started - listening for real-time updates + focus events...");
@@ -239,6 +239,7 @@ impl GridClient {
                             &window_details_subscriber, 
                             &focus_subscriber,
                             &heartbeat_subscriber,
+                            &response_subscriber,
                             &windows,
                             &virtual_grid,
                             &monitors,
@@ -298,10 +299,12 @@ impl GridClient {
           Ok(())
     }
 
-    fn run_monitoring_loop(        event_subscriber: &Subscriber<Service, WindowEvent, ()>,
+    fn run_monitoring_loop(
+        event_subscriber: &Subscriber<Service, WindowEvent, ()>,
         window_details_subscriber: &Subscriber<Service, WindowDetails, ()>,
         focus_subscriber: &Subscriber<Service, WindowFocusEvent, ()>,
         heartbeat_subscriber: &Subscriber<Service, HeartbeatMessage, ()>,
+        response_subscriber: &Subscriber<Service, IpcResponse, ()>,
         windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
         virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
         monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
@@ -365,6 +368,28 @@ impl GridClient {
                     return MonitoringResult::ServerDisconnected;
                 }
                 // No need to log every normal heartbeat, just reset the timer
+            }
+            
+            // Process IpcResponse messages (monitor list, etc)
+            while let Some(response_sample) = response_subscriber.receive().unwrap_or(None) {
+                let response = (*response_sample).clone();
+                had_activity = true;
+                if let Some(monitor_list) = response.monitor_list {
+                    if let Ok(mut monitors_lock) = monitors.lock() {
+                        monitors_lock.clear();
+                        for m in monitor_list.monitors {
+                            monitors_lock.push(MonitorGridInfo {
+                                monitor_id: m.id,
+                                width: m.width,
+                                height: m.height,
+                                x: m.x,
+                                y: m.y,
+                                grid: m.grid,
+                            });
+                        }
+                        debug!("[MONITOR LIST] Updated client monitor list: {} monitors", monitors_lock.len());
+                    }
+                }
             }
             
             // Connection health monitoring
@@ -498,7 +523,13 @@ impl GridClient {
 
 
 
-    fn create_background_subscribers() -> Result<(Subscriber<Service, WindowEvent, ()>, Subscriber<Service, WindowDetails, ()>, Subscriber<Service, WindowFocusEvent, ()>, Subscriber<Service, HeartbeatMessage, ()>), Box<dyn std::error::Error>> {
+    fn create_background_subscribers() -> Result<(
+        Subscriber<Service, WindowEvent, ()>,
+        Subscriber<Service, WindowDetails, ()>,
+        Subscriber<Service, WindowFocusEvent, ()>,
+        Subscriber<Service, HeartbeatMessage, ()>,
+        Subscriber<Service, IpcResponse, ()>
+    ), Box<dyn std::error::Error>> {
         let node = NodeBuilder::new().create::<Service>()?;
 
         // Create event subscriber
@@ -529,7 +560,14 @@ impl GridClient {
             .open()?;
         let heartbeat_subscriber = heartbeat_service.subscriber_builder().create()?;
 
-        Ok((event_subscriber, window_details_subscriber, focus_subscriber, heartbeat_subscriber))
+        // Create response subscriber for IpcResponse (monitor list, etc)
+        let response_service = node
+            .service_builder(&ServiceName::new(GRID_RESPONSE_SERVICE)?)
+            .publish_subscribe::<IpcResponse>()
+            .open()?;
+        let response_subscriber = response_service.subscriber_builder().create()?;
+
+        Ok((event_subscriber, window_details_subscriber, focus_subscriber, heartbeat_subscriber, response_subscriber))
     }
     
     fn handle_window_event(
@@ -1022,7 +1060,24 @@ impl GridClient {
     
     pub fn stop(&self) {
         *self.running.lock().unwrap() = false;
-        info!("🛑 Stopping grid client...");    }
+        info!("🛑 Stopping grid client...");    
+    }
+
+
+    pub fn request_monitor_list(&mut self) -> GridClientResult<()> {
+    let command = IpcCommand {
+        command_type: IpcCommandType::GetMonitorList,
+        hwnd: None,
+        target_row: None,
+        target_col: None,
+        monitor_id: None,
+        layout_id: None,
+        animation_duration_ms: None,
+        easing_type: None,
+        protocol_version: 1,
+    };
+    self.send_command(command)
+}
 }
 
 impl Drop for GridClient {
