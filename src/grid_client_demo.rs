@@ -18,6 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register window event callback to log all event types
     client.set_window_event_callback(|event| {
+        // Enhanced visually distinct log messages for move/resize START/STOP events
         let event_name = match event.event_type {
             0 => "CREATED",
             1 => "DESTROYED",
@@ -29,7 +30,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             7 => "RESIZE_STOP",
             _ => "UNKNOWN",
         };
-        println!("[WINDOW EVENT] {}: HWND {} at ({}, {})", event_name, event.hwnd, event.row, event.col);
+        match event.event_type {
+            4 => {
+                println!("\n\n🚦 MOVE START: {:?}", event);
+            },
+            5 => {
+                println!("🚦 MOVE STOP: {:?}\n\n", event);
+            },
+            6 => {
+                println!("\n\n📏 RESIZE START: {:?}", event);
+            },
+            7 => {
+                println!("📏 RESIZE STOP: {:?}\n\n", event);
+            },
+            _ => {
+                println!("[WINDOW EVENT] {}: HWND {} at ({}, {})", event_name, event.hwnd, event.row, event.col);
+            }
+        }
     })?;
 
     println!("📋 Registering focus callback...");
@@ -117,6 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => {
                 println!("🔍 Monitoring for real-time window changes...");
+                // Avoid mutable borrow of client in closure
                 demonstrate_auto_assignment(&mut client)?;
             }
         }

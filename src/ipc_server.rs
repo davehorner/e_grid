@@ -49,6 +49,8 @@ pub struct GridIpcServer {
     heartbeat_service: Option<HeartbeatService>,
     focus_event_receiver: Option<mpsc::Receiver<(u64, bool)>>,
     event_receiver: Option<mpsc::Receiver<crate::ipc_protocol::GridEvent>>, // NEW: for window events
+    // Add WindowEventSystem for move/resize event polling
+    window_event_system: Option<crate::WindowEventSystem>,
 }
 
 impl GridIpcServer {
@@ -79,6 +81,7 @@ impl GridIpcServer {
             heartbeat_service: None,
             focus_event_receiver: None,
             event_receiver: None,
+            window_event_system: None,
         })
     }
 
@@ -205,6 +208,11 @@ impl GridIpcServer {
         println!("🔄 Starting E-Grid IPC server event loop...");
         
         while self.is_running {
+            // --- NEW: poll move/resize events ---
+            if let Some(wes) = self.window_event_system.as_mut() {
+                wes.poll_move_resize_events();
+            }
+            // --- END NEW ---
             // Process incoming commands from clients
             self.process_commands()?;
             
@@ -423,11 +431,21 @@ impl GridIpcServer {
     pub fn publish_event(&mut self, event: GridEvent) -> Result<(), Box<dyn std::error::Error>> {
         // Convert high-level event to zero-copy format
         let window_event = self.grid_event_to_window_event(&event);
-        
+        // --- Enhanced visual logging for move/resize START/STOP events ---
+        match &event {
+            GridEvent::WindowMoveStart { .. } | GridEvent::WindowResizeStart { .. } => {
+                println!("\n\n📡 Published event: {:?}", event);
+            }
+            GridEvent::WindowMoveStop { .. } | GridEvent::WindowResizeStop { .. } => {
+                println!("📡 Published event: {:?}\n\n", event);
+            }
+            _ => {
+                println!("📡 Published event: {:?}", event);
+            }
+        }
         // Publish via iceoryx2
         if let Some(ref mut publisher) = self.event_publisher {
             publisher.send_copy(window_event)?;
-            println!("📡 Published event: {:?}", event);
         }
 
         // Notify local listeners
@@ -472,7 +490,8 @@ impl GridIpcServer {
         
         let total_window_count = windows_snapshot.len();
         let mut published_count = 0;
-        let mut failed_count = 0;          for entry in &windows_snapshot {
+        let mut failed_count = 0;
+          for entry in &windows_snapshot {
             let (hwnd, window_info) = entry.pair();
             // No additional filtering - windows in tracker are already pre-filtered by is_manageable_window
             // This ensures client and server see the same set of windows
@@ -865,6 +884,13 @@ impl GridIpcServer {
         }
     }
 
+    /// Poll move/resize events from the window event system (if present)
+    pub fn poll_move_resize_events(&mut self) {
+        if let Some(wes) = self.window_event_system.as_mut() {
+            wes.poll_move_resize_events();
+        }
+    }
+
     // Conversion helper methods
     fn grid_event_to_window_event(&self, event: &GridEvent) -> WindowEvent {
         let timestamp = std::time::SystemTime::now()
@@ -1018,29 +1044,26 @@ impl GridIpcServer {
     /// Setup window event monitoring using the new library-based system
     pub fn setup_window_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("🔗 Setting up integrated window event monitoring using library system...");
-        
         // Create a channel for focus events
         let (focus_sender, focus_receiver) = mpsc::channel::<(u64, bool)>();
         self.focus_event_receiver = Some(focus_receiver);
         // Create a channel for window move/resize events
         let (event_sender, event_receiver) = mpsc::channel::<crate::ipc_protocol::GridEvent>();
         self.event_receiver = Some(event_receiver);
+        // --- NEW: Setup WindowEventSystem for move/resize ---
+        let mut wes = crate::WindowEventSystem::new(self.tracker.clone());
+        let event_sender_for_wes = event_sender.clone();
+        wes.set_event_callback(move |event: crate::ipc_protocol::GridEvent| {
+            // Forward move/resize events to the same channel
+            let _ = event_sender_for_wes.send(event);
+        });
         // Create window event configuration with focus and event publishing callbacks
+        let event_sender_for_config = event_sender.clone();
         let config = WindowEventConfig {
             tracker: self.tracker.clone(),
             focus_callback: Some(Box::new(move |hwnd: HWND, is_focused: bool| {
-                println!("🎯 Focus event: HWND {} - {}", hwnd as u64, 
-                        if is_focused { "FOCUSED" } else { "DEFOCUSED" });
-                // Send focus event via channel (convert HWND to u64 for thread safety)
-                match focus_sender.send((hwnd as u64, is_focused)) {
-                    Ok(()) => {
-                        println!("✅ [DEBUG] Successfully sent focus event to channel: HWND {} - {}", 
-                                hwnd as u64, if is_focused { "FOCUSED" } else { "DEFOCUSED" });
-                    },
-                    Err(e) => {
-                        println!("❌ Failed to send focus event via channel: {:?}", e);
-                    }
-                }
+                println!("🎯 Focus event: HWND {} - {}", hwnd as u64, if is_focused { "FOCUSED" } else { "DEFOCUSED" });
+                let _ = focus_sender.send((hwnd as u64, is_focused));
             })),
             heartbeat_reset: Some(Box::new(|| {
                 // This callback will be called when window events occur
@@ -1050,16 +1073,19 @@ impl GridIpcServer {
                 // Debug: Log every event received by the callback
                 println!("[event_callback] Received event: {:?}", event);
                 // Send event to the main event loop via channel
-                if let Err(e) = event_sender.send(event.clone()) {
+                if let Err(e) = event_sender_for_config.send(event.clone()) {
                     println!("❌ Failed to send event via channel: {:?}", e);
                 }
             })),
             debug_mode: true,
+            move_resize_producer: Some(wes.producer.clone()),
+            move_resize_states: Some(wes.states.clone()),
         };
         // Setup window events using the new library system
         window_events::setup_window_events(config).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>)?;
         // Initialize heartbeat service with 30-second timeout
         self.heartbeat_service = Some(HeartbeatService::new(Duration::from_secs(30)));
+        self.window_event_system = Some(wes);
         println!("✅ Library-based window event monitoring is now active!");
         println!("🎯 Focus tracking and heartbeat services are operational");
         println!("📢 Focus events will be published through the main event loop");

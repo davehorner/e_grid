@@ -2,11 +2,14 @@ use std::collections::HashMap;
 use std::ptr;
 use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use dashmap::DashMap;
 use winapi::shared::minwindef::LPARAM;
 use winapi::shared::windef::{HWND, RECT};
 use winapi::um::winuser::*;
 use winapi::um::errhandlingapi::GetLastError;
+use ringbuf::{traits::*, HeapRb};
+use ringbuf::wrap::{Prod, Cons};
 
 // Import our error handling module
 pub mod grid_client_errors;
@@ -1320,6 +1323,42 @@ impl WindowTracker {
     }
 }
 
+// Move/resize detection state (per window)
+pub struct MoveResizeState {
+    pub last_event: Instant,
+    pub in_progress: bool,
+}
+
+// Move/resize tracker (shared across threads)
+pub struct MoveResizeTracker {
+    pub states: Arc<DashMap<isize, MoveResizeState>>, // Use Arc for sharing
+    pub timeout: Duration,
+}
+
+impl MoveResizeTracker {
+    pub fn new(timeout: Duration, states: Arc<DashMap<isize, MoveResizeState>>) -> Arc<Self> {
+        Arc::new(Self {
+            states: states.clone(),
+            timeout,
+        })
+    }
+
+    pub fn update_event(producer: &mut Prod<Arc<HeapRb<(isize, bool)>>>, states: &Arc<DashMap<isize, MoveResizeState>>, hwnd: HWND) {
+        let hwnd_val = hwnd as isize;
+        println!("[MoveResizeTracker::update_event] Called for HWND={:?}", hwnd); // DEBUG LOG
+        let mut entry = states.entry(hwnd_val).or_insert(MoveResizeState {
+            last_event: Instant::now(),
+            in_progress: false,
+        });
+        entry.last_event = Instant::now();
+        if !entry.in_progress {
+            println!("[MoveResizeTracker] Detected move/resize START for HWND={:?}", hwnd);
+            entry.in_progress = true;
+            let _ = producer.try_push((hwnd_val, true));
+        }
+    }
+}
+
 // Event callback system for WindowTracker
 pub trait WindowEventCallback: Send + Sync {
     fn on_window_created(&self, hwnd: HWND, window_info: &WindowInfo);
@@ -1328,6 +1367,9 @@ pub trait WindowEventCallback: Send + Sync {
     fn on_window_activated(&self, hwnd: HWND, window_info: &WindowInfo);
     fn on_window_minimized(&self, hwnd: HWND);
     fn on_window_restored(&self, hwnd: HWND, window_info: &WindowInfo);
+    // New: Move/Resize start/stop events
+    fn on_window_move_resize_start(&self, hwnd: HWND, window_info: &WindowInfo) {}
+    fn on_window_move_resize_stop(&self, hwnd: HWND, window_info: &WindowInfo) {}
 }
 
 // Box wrapper for dynamic dispatch
@@ -1415,5 +1457,140 @@ mod tests {
         assert_eq!(custom_config.rows, 4);
         assert_eq!(custom_config.cols, 4);
         assert_eq!(custom_config.cell_count(), 16);
+    }
+}
+
+pub struct WindowEventSystem {
+    pub move_resize_tracker: Arc<MoveResizeTracker>,
+    pub tracker: Arc<Mutex<WindowTracker>>, // Reference to main tracker for callbacks
+    pub producer: Arc<Mutex<Prod<Arc<HeapRb<(isize, bool)>>>>>,
+    pub consumer: Cons<Arc<HeapRb<(isize, bool)>>>,
+    pub states: Arc<DashMap<isize, MoveResizeState>>,
+    // Optional event callback for IPC publishing (GridEvent)
+    pub event_callback: Option<Box<dyn Fn(crate::ipc_protocol::GridEvent) + Send + Sync>>,
+}
+
+impl WindowEventSystem {
+    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Self {
+        let rb = Arc::new(HeapRb::<(isize, bool)>::new(256));
+        let producer = Arc::new(Mutex::new(Prod::new(rb.clone())));
+        let consumer = Cons::new(rb.clone());
+        let states = Arc::new(DashMap::new());
+        let move_resize_tracker = MoveResizeTracker::new(Duration::from_millis(200), states.clone());
+        // Spawn the background thread for move/resize stop detection, passing a reference to the producer
+        let states_ref = states.clone();
+        let producer_thread = producer.clone();
+        let timeout = Duration::from_millis(200);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(50));
+                let now = Instant::now();
+                let mut to_stop = Vec::new();
+                for mut entry in states_ref.iter_mut() {
+                    if entry.in_progress && now.duration_since(entry.last_event) > timeout {
+                        println!("[MoveResizeTracker] Detected move/resize STOP for HWND={:?}", *entry.key());
+                        entry.in_progress = false;
+                        to_stop.push(*entry.key());
+                    }
+                }
+                for hwnd_val in to_stop {
+                    if let Ok(mut prod) = producer_thread.lock() {
+                        let _ = prod.try_push((hwnd_val, false));
+                    }
+                }
+            }
+        });
+        Self {
+            move_resize_tracker,
+            tracker,
+            producer,
+            consumer,
+            states,
+            event_callback: None,
+        }
+    }
+
+    // Set the event callback for IPC publishing
+    pub fn set_event_callback<F>(&mut self, callback: F)
+    where
+        F: Fn(crate::ipc_protocol::GridEvent) + Send + Sync + 'static,
+    {
+        self.event_callback = Some(Box::new(callback));
+    }
+
+    // Call this periodically from the main thread/event loop
+    pub fn poll_move_resize_events(&mut self) {
+        while let Some((hwnd_val, is_start)) = self.consumer.try_pop() {
+            println!("[DEBUG][poll_move_resize_events] Popped from ringbuf: hwnd_val={:?}, is_start={}", hwnd_val, is_start);
+            let hwnd = hwnd_val as HWND;
+            let tracker = self.tracker.lock().unwrap();
+            if let Some(window_info) = tracker.windows.get(&hwnd) {
+                println!("[DEBUG][poll_move_resize_events] Found window_info for HWND={:?}, title={}", hwnd, window_info.title);
+                for callback in &tracker.event_callbacks {
+                    if is_start {
+                        println!("[WindowEventSystem] on_window_move_resize_start: HWND={:?}, title={}", hwnd, window_info.title);
+                        callback.on_window_move_resize_start(hwnd, &*window_info);
+                    } else {
+                        println!("[WindowEventSystem] on_window_move_resize_stop: HWND={:?}, title={}", hwnd, window_info.title);
+                        callback.on_window_move_resize_stop(hwnd, &*window_info);
+                    }
+                }
+                // Publish to IPC if callback is set
+                if let Some(ref cb) = self.event_callback {
+                    use crate::ipc_protocol::GridEvent;
+                    // Fill in real values for the event fields
+                    let title = window_info.title.clone();
+                    let (row, col) = window_info.grid_cells.get(0).cloned().unwrap_or((0, 0));
+                    let grid_top_left_row = row;
+                    let grid_top_left_col = col;
+                    let grid_bottom_right_row = row;
+                    let grid_bottom_right_col = col;
+                    let real_x = window_info.rect.left;
+                    let real_y = window_info.rect.top;
+                    let real_width = (window_info.rect.right - window_info.rect.left).max(0) as u32;
+                    let real_height = (window_info.rect.bottom - window_info.rect.top).max(0) as u32;
+                    let monitor_id = 0; // TODO: fill with real monitor id if available
+                    let event = if is_start {
+                        println!("[DEBUG][poll_move_resize_events] Creating GridEvent::WindowMoveStart for HWND={:?}", hwnd);
+                        GridEvent::WindowMoveStart {
+                            hwnd: hwnd as u64,
+                            title,
+                            current_row: row,
+                            current_col: col,
+                            grid_top_left_row,
+                            grid_top_left_col,
+                            grid_bottom_right_row,
+                            grid_bottom_right_col,
+                            real_x,
+                            real_y,
+                            real_width,
+                            real_height,
+                            monitor_id,
+                        }
+                    } else {
+                        println!("[DEBUG][poll_move_resize_events] Creating GridEvent::WindowMoveStop for HWND={:?}", hwnd);
+                        GridEvent::WindowMoveStop {
+                            hwnd: hwnd as u64,
+                            title,
+                            final_row: row,
+                            final_col: col,
+                            grid_top_left_row,
+                            grid_top_left_col,
+                            grid_bottom_right_row,
+                            grid_bottom_right_col,
+                            real_x,
+                            real_y,
+                            real_width,
+                            real_height,
+                            monitor_id,
+                        }
+                    };
+                    println!("[DEBUG][poll_move_resize_events] Invoking event_callback for HWND={:?}, is_start={}", hwnd, is_start);
+                    cb(event);
+                }
+            } else {
+                println!("[WindowEventSystem] Event for unknown HWND={:?}", hwnd);
+            };
+        }
     }
 }

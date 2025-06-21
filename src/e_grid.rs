@@ -182,6 +182,9 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         
+        // Poll move/resize events (required for move/resize start/stop detection)
+        ipc_server.poll_move_resize_events();
+
         // Process IPC commands from clients
         if let Err(e) = ipc_server.process_commands() {
             println!("⚠️ Error processing IPC commands: {}", e);

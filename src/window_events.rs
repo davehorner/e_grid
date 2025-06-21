@@ -18,6 +18,9 @@ pub struct WindowEventConfig {
     pub heartbeat_reset: Option<Box<dyn Fn() + Send + Sync>>,
     pub event_callback: Option<Box<dyn Fn(crate::ipc_protocol::GridEvent) + Send + Sync>>, // NEW: event publishing callback
     pub debug_mode: bool,
+    // --- ADDED: For move/resize tracking ---
+    pub move_resize_producer: Option<Arc<Mutex<ringbuf::wrap::Prod<Arc<ringbuf::HeapRb<(isize, bool)>>>>>>,
+    pub move_resize_states: Option<Arc<dashmap::DashMap<isize, crate::MoveResizeState>>>,
 }
 
 impl WindowEventConfig {
@@ -28,6 +31,8 @@ impl WindowEventConfig {
             heartbeat_reset: None,
             event_callback: None, // NEW
             debug_mode: false,
+            move_resize_producer: None,
+            move_resize_states: None,
         }
     }
     
@@ -198,6 +203,12 @@ pub unsafe extern "system" fn win_event_proc(
             EVENT_OBJECT_LOCATIONCHANGE => {
                 if WindowTracker::is_manageable_window(hwnd) {
                     tracker.update_window(hwnd);
+                    // --- ADDED: Move/Resize tracking ---
+                    if let (Some(prod), Some(states)) = (config.move_resize_producer.as_ref(), config.move_resize_states.as_ref()) {
+                        if let Ok(mut prod) = prod.lock() {
+                            crate::MoveResizeTracker::update_event(&mut *prod, states, hwnd);
+                        }
+                    }
                     // NEW: Publish move event
                     if let Some(ref event_callback) = config.event_callback {
                         if let Some(window_info) = tracker.windows.get(&hwnd) {
