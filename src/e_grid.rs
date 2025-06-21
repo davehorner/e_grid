@@ -11,6 +11,7 @@ use crossterm::{
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{self, Clear, ClearType},
     cursor,
+    event,
 };
 use winapi::um::consoleapi::SetConsoleCtrlHandler;
 use winapi::um::wincon::{CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT};
@@ -345,14 +346,14 @@ fn interactive_mode() -> Result<(), Box<dyn std::error::Error>> {
                 match client_ref.request_grid_state() {
                     Ok(_) => {
                         // Grid state request successful
-                    },
-                    Err(e) => {
+                    },                    Err(e) => {
                         queue!(stdout, SetForegroundColor(Color::Red))?;
                         queue!(stdout, Print(format!("⚠️ Server communication error: {}\n", e)))?;
                         queue!(stdout, ResetColor)?;
                         // Reset client to trigger reconnection
                         client = None;
-                        connection_status = "Disconnected";
+                        connection_status = "Reconnecting..."; // This will trigger reconnection on next cycle
+                        last_connection_attempt = std::time::Instant::now(); // Reset timer to allow immediate retry
                     }
                 }
             }
@@ -366,13 +367,17 @@ fn interactive_mode() -> Result<(), Box<dyn std::error::Error>> {
 
             stdout.flush()?;
             last_display = std::time::Instant::now();
+        }        // Small delay
+        thread::sleep(Duration::from_millis(100));        // Check for Ctrl+C using crossterm events
+        if event::poll(Duration::from_millis(0))? {
+            if let event::Event::Key(key_event) = event::read()? {
+                if key_event.code == event::KeyCode::Char('c') 
+                   && key_event.modifiers.contains(event::KeyModifiers::CONTROL) {
+                    println!("\n🛑 Ctrl+C pressed - exiting interactive mode...");
+                    return Ok(());
+                }
+            }
         }
-
-        // Small delay
-        thread::sleep(Duration::from_millis(100));
-
-        // Check for Ctrl+C (in a real implementation, we'd use crossterm events)
-        // For now, we'll just run indefinitely
     }
 }
 
