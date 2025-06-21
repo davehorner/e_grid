@@ -1,4 +1,5 @@
 use std::fmt;
+use log::warn;
 
 /// Custom error types for GridClient operations
 #[derive(Debug)]
@@ -77,11 +78,10 @@ where
 {
     let mut last_error = None;
     
-    for attempt in 1..=config.max_attempts {
-        match operation() {
+    for attempt in 1..=config.max_attempts {        match operation() {
             Ok(result) => return Ok(result),
             Err(error) => {
-                println!("⚠️ Operation failed on attempt {}/{}: {:?}", 
+                warn!("⚠️ Operation failed on attempt {}/{}: {:?}", 
                          attempt, config.max_attempts, error);
                 last_error = Some(error);
                 

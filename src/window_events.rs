@@ -9,6 +9,7 @@ use winapi::um::winuser::{
     WINEVENT_OUTOFCONTEXT, OBJID_WINDOW, CHILDID_SELF
 };
 use winapi::shared::windef::HWND;
+use log::{info, debug, warn};
 
 /// Configuration for window events with optional callbacks
 pub struct WindowEventConfig {

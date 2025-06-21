@@ -724,11 +724,24 @@ impl GridIpcServer {
     /// Get the current grid configuration
     pub fn get_config(&self) -> &GridConfig {
         &self.config
-    }
-
-    // Convenience methods for publishing specific events
+    }    // Convenience methods for publishing specific events
     pub fn publish_window_created(&mut self, hwnd: u64, title: String, row: usize, col: usize) -> Result<(), Box<dyn std::error::Error>> {
-        let event = ipc::GridEvent::WindowCreated { hwnd, title, row, col };
+        let event = ipc::GridEvent::WindowCreated { 
+            hwnd, 
+            title, 
+            row, 
+            col,
+            // TODO: Get actual position data from window tracker
+            grid_top_left_row: row,
+            grid_top_left_col: col,
+            grid_bottom_right_row: row,
+            grid_bottom_right_col: col,
+            real_x: 0,
+            real_y: 0,
+            real_width: 0,
+            real_height: 0,
+            monitor_id: 0,
+        };
         self.publish_event(event)
     }
 
@@ -738,7 +751,24 @@ impl GridIpcServer {
     }
 
     pub fn publish_window_moved(&mut self, hwnd: u64, title: String, old_row: usize, old_col: usize, new_row: usize, new_col: usize) -> Result<(), Box<dyn std::error::Error>> {
-        let event = ipc::GridEvent::WindowMoved { hwnd, title, old_row, old_col, new_row, new_col };
+        let event = ipc::GridEvent::WindowMoved { 
+            hwnd, 
+            title, 
+            old_row, 
+            old_col, 
+            new_row, 
+            new_col,
+            // TODO: Get actual position data from window tracker
+            grid_top_left_row: new_row,
+            grid_top_left_col: new_col,
+            grid_bottom_right_row: new_row,
+            grid_bottom_right_col: new_col,
+            real_x: 0,
+            real_y: 0,
+            real_width: 0,
+            real_height: 0,
+            monitor_id: 0,
+        };
         self.publish_event(event)
     }
 
@@ -870,14 +900,25 @@ impl GridIpcServer {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
-
-        match event {
-            ipc::GridEvent::WindowCreated { hwnd, row, col, .. } => ipc::WindowEvent {
+            .as_secs();        match event {
+            ipc::GridEvent::WindowCreated { 
+                hwnd, row, col, grid_top_left_row, grid_top_left_col,
+                grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
+                real_width, real_height, monitor_id, ..
+            } => ipc::WindowEvent {
                 event_type: 0,
                 hwnd: *hwnd,
                 row: *row as u32,
                 col: *col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
                 timestamp,
                 ..Default::default()
             },
@@ -887,13 +928,110 @@ impl GridIpcServer {
                 timestamp,
                 ..Default::default()
             },
-            ipc::GridEvent::WindowMoved { hwnd, old_row, old_col, new_row, new_col, .. } => ipc::WindowEvent {
+            ipc::GridEvent::WindowMoved { 
+                hwnd, old_row, old_col, new_row, new_col, grid_top_left_row, 
+                grid_top_left_col, grid_bottom_right_row, grid_bottom_right_col,
+                real_x, real_y, real_width, real_height, monitor_id, ..
+            } => ipc::WindowEvent {
                 event_type: 2,
                 hwnd: *hwnd,
                 old_row: *old_row as u32,
                 old_col: *old_col as u32,
                 row: *new_row as u32,
                 col: *new_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
+                timestamp,
+                ..Default::default()
+            },
+            ipc::GridEvent::WindowMoveStart { 
+                hwnd, current_row, current_col, grid_top_left_row, grid_top_left_col,
+                grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
+                real_width, real_height, monitor_id, ..
+            } => ipc::WindowEvent {
+                event_type: 4, // move_start
+                hwnd: *hwnd,
+                row: *current_row as u32,
+                col: *current_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
+                timestamp,
+                ..Default::default()
+            },
+            ipc::GridEvent::WindowMoveStop { 
+                hwnd, final_row, final_col, grid_top_left_row, grid_top_left_col,
+                grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
+                real_width, real_height, monitor_id, ..
+            } => ipc::WindowEvent {
+                event_type: 5, // move_stop
+                hwnd: *hwnd,
+                row: *final_row as u32,
+                col: *final_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
+                timestamp,
+                ..Default::default()
+            },
+            ipc::GridEvent::WindowResizeStart { 
+                hwnd, current_row, current_col, grid_top_left_row, grid_top_left_col,
+                grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
+                real_width, real_height, monitor_id, ..
+            } => ipc::WindowEvent {
+                event_type: 6, // resize_start
+                hwnd: *hwnd,
+                row: *current_row as u32,
+                col: *current_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
+                timestamp,
+                ..Default::default()
+            },
+            ipc::GridEvent::WindowResizeStop { 
+                hwnd, final_row, final_col, grid_top_left_row, grid_top_left_col,
+                grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
+                real_width, real_height, monitor_id, ..
+            } => ipc::WindowEvent {
+                event_type: 7, // resize_stop
+                hwnd: *hwnd,
+                row: *final_row as u32,
+                col: *final_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
                 timestamp,
                 ..Default::default()
             },

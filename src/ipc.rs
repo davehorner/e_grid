@@ -7,6 +7,7 @@ use std::ptr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use winapi::shared::windef::HWND;
+use log::{info, debug, warn, error};
 
 // Service names for iceoryx2 communication  
 pub const GRID_EVENTS_SERVICE: &str = "e_grid_events";
@@ -40,7 +41,7 @@ pub struct HeartbeatMessage {
 #[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
 #[repr(C)]
 pub struct WindowEvent {
-    pub event_type: u8, // 0=created, 1=destroyed, 2=moved, 3=state_changed
+    pub event_type: u8, // 0=created, 1=destroyed, 2=moved, 3=state_changed, 4=move_start, 5=move_stop, 6=resize_start, 7=resize_stop
     pub hwnd: u64,
     pub row: u32,
     pub col: u32,
@@ -49,6 +50,16 @@ pub struct WindowEvent {
     pub timestamp: u64,
     pub total_windows: u32,
     pub occupied_cells: u32,
+    // NEW: Enhanced position data for better grid sync
+    pub grid_top_left_row: u32,     // Grid coordinates (top-left corner)
+    pub grid_top_left_col: u32,
+    pub grid_bottom_right_row: u32, // Grid coordinates (bottom-right corner)
+    pub grid_bottom_right_col: u32,
+    pub real_x: i32,                // Real window bounds
+    pub real_y: i32,
+    pub real_width: u32,
+    pub real_height: u32,
+    pub monitor_id: u32,            // Which monitor this window is on
 }
 
 impl Default for WindowEvent {
@@ -63,6 +74,15 @@ impl Default for WindowEvent {
             timestamp: 0,
             total_windows: 0,
             occupied_cells: 0,
+            grid_top_left_row: 0,
+            grid_top_left_col: 0,
+            grid_bottom_right_row: 0,
+            grid_bottom_right_col: 0,
+            real_x: 0,
+            real_y: 0,
+            real_width: 0,
+            real_height: 0,
+            monitor_id: 0,
         }
     }
 }
@@ -225,6 +245,16 @@ pub enum GridEvent {
         title: String,
         row: usize,
         col: usize,
+        // Enhanced position data
+        grid_top_left_row: usize,
+        grid_top_left_col: usize,
+        grid_bottom_right_row: usize,
+        grid_bottom_right_col: usize,
+        real_x: i32,
+        real_y: i32,
+        real_width: u32,
+        real_height: u32,
+        monitor_id: u32,
     },
     WindowDestroyed {
         hwnd: u64,
@@ -237,6 +267,78 @@ pub enum GridEvent {
         old_col: usize,
         new_row: usize,
         new_col: usize,
+        // Enhanced position data
+        grid_top_left_row: usize,
+        grid_top_left_col: usize,
+        grid_bottom_right_row: usize,
+        grid_bottom_right_col: usize,
+        real_x: i32,
+        real_y: i32,
+        real_width: u32,
+        real_height: u32,
+        monitor_id: u32,
+    },
+    // NEW: Move tracking events for better client sync
+    WindowMoveStart {
+        hwnd: u64,
+        title: String,
+        current_row: usize,
+        current_col: usize,
+        grid_top_left_row: usize,
+        grid_top_left_col: usize,
+        grid_bottom_right_row: usize,
+        grid_bottom_right_col: usize,
+        real_x: i32,
+        real_y: i32,
+        real_width: u32,
+        real_height: u32,
+        monitor_id: u32,
+    },
+    WindowMoveStop {
+        hwnd: u64,
+        title: String,
+        final_row: usize,
+        final_col: usize,
+        grid_top_left_row: usize,
+        grid_top_left_col: usize,
+        grid_bottom_right_row: usize,
+        grid_bottom_right_col: usize,
+        real_x: i32,
+        real_y: i32,
+        real_width: u32,
+        real_height: u32,
+        monitor_id: u32,
+    },
+    // NEW: Resize tracking events  
+    WindowResizeStart {
+        hwnd: u64,
+        title: String,
+        current_row: usize,
+        current_col: usize,
+        grid_top_left_row: usize,
+        grid_top_left_col: usize,
+        grid_bottom_right_row: usize,
+        grid_bottom_right_col: usize,
+        real_x: i32,
+        real_y: i32,
+        real_width: u32,
+        real_height: u32,
+        monitor_id: u32,
+    },
+    WindowResizeStop {
+        hwnd: u64,
+        title: String,
+        final_row: usize,
+        final_col: usize,
+        grid_top_left_row: usize,
+        grid_top_left_col: usize,
+        grid_bottom_right_row: usize,
+        grid_bottom_right_col: usize,
+        real_x: i32,
+        real_y: i32,
+        real_width: u32,
+        real_height: u32,
+        monitor_id: u32,
     },
     GridStateChanged {
         timestamp: u64,
@@ -475,7 +577,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             is_running: false,
         })
     }pub fn setup_services(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🔧 Setting up iceoryx2 IPC services...");
+        debug!("🔧 Setting up iceoryx2 IPC services...");
         
         // Create iceoryx2 node
         let node = NodeBuilder::new().create::<ipc::Service>()?;
@@ -570,16 +672,15 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         
         // Store the node
         self.node = Some(node);
-        
-        println!("✅ iceoryx2 IPC services initialized successfully");
-        println!("   📡 Event service: {}", GRID_EVENTS_SERVICE);
-        println!("   📨 Command service: {}", GRID_COMMANDS_SERVICE);
-        println!("   📤 Response service: {}", GRID_RESPONSE_SERVICE);
-        println!("   📋 Window details service: {}", GRID_WINDOW_DETAILS_SERVICE);        println!("   🗂️  Grid layout service: {}", GRID_LAYOUT_SERVICE);
-        println!("   📍 Cell assignment service: {}", GRID_CELL_ASSIGNMENTS_SERVICE);
-        println!("   🎬 Animation service: {}", ANIMATION_COMMANDS_SERVICE);
-        println!("   📊 Animation status service: {}", ANIMATION_STATUS_SERVICE);
-        println!("   💓 Heartbeat service: {}", GRID_HEARTBEAT_SERVICE);
+          info!("✅ iceoryx2 IPC services initialized successfully");
+        debug!("   📡 Event service: {}", GRID_EVENTS_SERVICE);
+        debug!("   📨 Command service: {}", GRID_COMMANDS_SERVICE);
+        debug!("   📤 Response service: {}", GRID_RESPONSE_SERVICE);
+        debug!("   📋 Window details service: {}", GRID_WINDOW_DETAILS_SERVICE);        debug!("   🗂️  Grid layout service: {}", GRID_LAYOUT_SERVICE);
+        debug!("   📍 Cell assignment service: {}", GRID_CELL_ASSIGNMENTS_SERVICE);
+        debug!("   🎬 Animation service: {}", ANIMATION_COMMANDS_SERVICE);
+        debug!("   📊 Animation status service: {}", ANIMATION_STATUS_SERVICE);
+        debug!("   💓 Heartbeat service: {}", GRID_HEARTBEAT_SERVICE);
 
         self.is_running = true;
         Ok(())
@@ -590,7 +691,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         // Publish via iceoryx2
         if let Some(ref mut publisher) = self.event_publisher {
             publisher.send_copy(window_event)?;
-            println!("📡 Published event via iceoryx2: {:?}", event);
+            debug!("📡 Published event via iceoryx2: {:?}", event);
         }
         
         // Notify local listeners
@@ -612,7 +713,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         
         // Then process each command
         for command in commands_to_process {
-            println!("📨 Received command: {:?}", command);
+            debug!("📨 Received command: {:?}", command);
             
             // Convert to high-level command and process
             let grid_command = Self::window_command_to_grid_command(&command);
@@ -627,7 +728,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         if let Some(ref mut publisher) = self.response_publisher {
             let window_response = Self::grid_response_to_window_response(&response);
             publisher.send_copy(window_response)?;
-            println!("📤 Sent response via iceoryx2: {:?}", response);
+            debug!("📤 Sent response via iceoryx2: {:?}", response);
         }
         Ok(())
     }
@@ -655,7 +756,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                         grid_summary.push_str(&format!("  ... and {} more windows\n", tracker.windows.len() - 10));
                     }
                     
-                    println!("📊 Grid state: {} windows, {} occupied cells", total_windows, occupied_cells);
+                    debug!("📊 Grid state: {} windows, {} occupied cells", total_windows, occupied_cells);
                     Ok(GridResponse::GridState {
                         total_windows,
                         occupied_cells,
@@ -674,17 +775,17 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     return Ok(GridResponse::Error("Failed to access window tracker".to_string()));
                 };
                 
-                println!("📋 GetWindowList request - publishing details for {} windows", hwnd_list.len());
+                debug!("📋 GetWindowList request - publishing details for {} windows", hwnd_list.len());
                 
                 // Publish individual window details for all windows
                 if let Err(e) = self.publish_all_window_details() {
-                    println!("⚠️ Failed to publish window details: {}", e);
+                    warn!("⚠️ Failed to publish window details: {}", e);
                 }
                 
                 // Still return a simple response via the regular channel
                 Ok(GridResponse::Success)
             }GridCommand::MoveWindowToCell { hwnd, target_row, target_col } => {
-                println!("🎯 Request to move window {} to cell ({}, {})", hwnd, target_row, target_col);
+                debug!("🎯 Request to move window {} to cell ({}, {})", hwnd, target_row, target_col);
                 
                 // TODO: Implement actual window movement using Windows API
                 match self.move_window_to_cell(hwnd, target_row, target_col) {
@@ -692,33 +793,31 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     Err(e) => Ok(GridResponse::Error(format!("Failed to move window: {}", e))),
                 }
             }            GridCommand::AssignWindowToVirtualCell { hwnd, target_row, target_col } => {
-                println!("📍 Request to assign window {} to virtual grid cell ({}, {})", hwnd, target_row, target_col);
+                debug!("📍 Request to assign window {} to virtual grid cell ({}, {})", hwnd, target_row, target_col);
                 
                 match self.assign_window_to_virtual_cell(hwnd, target_row, target_col) {
                     Ok(_) => Ok(GridResponse::Success),
                     Err(e) => Ok(GridResponse::Error(format!("Failed to assign window to virtual cell: {}", e))),
                 }
             }            GridCommand::AssignWindowToMonitorCell { hwnd, target_row, target_col, monitor_id } => {
-                println!("📍 Request to assign window {} to monitor {} cell ({}, {})", hwnd, monitor_id, target_row, target_col);
+                debug!("📍 Request to assign window {} to monitor {} cell ({}, {})", hwnd, monitor_id, target_row, target_col);
                 
                 match self.assign_window_to_monitor_cell(hwnd, target_row, target_col, monitor_id) {
                     Ok(_) => Ok(GridResponse::Success),
                     Err(e) => Ok(GridResponse::Error(format!("Failed to assign window to monitor cell: {}", e))),
                 }
-            }
-            GridCommand::ApplyGridLayout { layout_name, duration_ms, easing_type } => {
-                println!("🗂️ Request to apply grid layout '{}' with {}ms duration", layout_name, duration_ms);
+            }            GridCommand::ApplyGridLayout { layout_name, duration_ms, easing_type } => {
+                info!("🗂️ Request to apply grid layout '{}' with {}ms duration", layout_name, duration_ms);
                 
                 match self.apply_saved_layout(&layout_name, duration_ms, easing_type) {
                     Ok(count) => {
-                        println!("✅ Started {} animations for layout '{}'", count, layout_name);
+                        info!("✅ Started {} animations for layout '{}'", count, layout_name);
                         Ok(GridResponse::Success)
                     },
                     Err(e) => Ok(GridResponse::Error(format!("Failed to apply layout: {}", e))),
                 }
-            }
-            GridCommand::SaveCurrentLayout { layout_name } => {
-                println!("💾 Request to save current layout as '{}'", layout_name);
+            }            GridCommand::SaveCurrentLayout { layout_name } => {
+                info!("💾 Request to save current layout as '{}'", layout_name);
                 
                 match self.save_current_layout(layout_name.clone()) {
                     Ok(_) => Ok(GridResponse::Success),
@@ -726,16 +825,15 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 }
             }
             GridCommand::GetSavedLayouts => {
-                println!("📋 Request for saved layouts list");
+                info!("📋 Request for saved layouts list");
                   if let Ok(tracker) = self.tracker.lock() {
                     let layout_names: Vec<String> = tracker.list_saved_layouts();
                     Ok(GridResponse::SavedLayouts { layout_names })
                 } else {
                     Ok(GridResponse::Error("Failed to access window tracker".to_string()))
                 }
-            }
-            GridCommand::StartAnimation { hwnd, target_x, target_y, target_width, target_height, duration_ms, easing_type } => {
-                println!("🎬 Request to animate window {} to ({}, {}) size {}x{}", hwnd, target_x, target_y, target_width, target_height);
+            }            GridCommand::StartAnimation { hwnd, target_x, target_y, target_width, target_height, duration_ms, easing_type } => {
+                info!("🎬 Request to animate window {} to ({}, {}) size {}x{}", hwnd, target_x, target_y, target_width, target_height);
                 
                 let target_rect = winapi::shared::windef::RECT {
                     left: target_x,
@@ -749,7 +847,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     Err(e) => Ok(GridResponse::Error(format!("Failed to start animation: {}", e))),
                 }
             }            GridCommand::GetAnimationStatus { hwnd } => {
-                println!("📊 Request for animation status of window {}", hwnd);
+                info!("📊 Request for animation status of window {}", hwnd);
                 
                 if let Ok(tracker) = self.tracker.lock() {                    let statuses = if hwnd == 0 {
                         // Get status for all active animations
@@ -788,9 +886,8 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         // This would involve:
         // 1. Calculate target position based on grid dimensions
         // 2. Use Windows API to move the window
-        // 3. Update the internal tracking
-        
-        println!("🔧 TODO: Implement window movement for HWND {} to ({}, {})", hwnd, target_row, target_col);
+        // 3. Update the internal tracking        
+        debug!("🔧 TODO: Implement window movement for HWND {} to ({}, {})", hwnd, target_row, target_col);
         Ok(())
     }
 
@@ -809,9 +906,8 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 window.grid_cells.clear();
                 
                 // Assign to the new cell
-                window.grid_cells.push((target_row, target_col));
-                
-                println!("✅ Assigned window {} '{}' to virtual grid cell ({}, {})", 
+                window.grid_cells.push((target_row, target_col));                
+                info!("✅ Assigned window {} '{}' to virtual grid cell ({}, {})", 
                     hwnd, 
                     if window_title.len() > 30 { 
                         format!("{}...", &window_title[..30]) 
@@ -820,7 +916,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     }, 
                     target_row, 
                     target_col
-                );            }
+                );}
             
             // Update both virtual and monitor grids
             tracker.update_grid();
@@ -833,27 +929,26 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     // Calculate cell dimensions
                     let cell_width = cell_right - cell_left;
                     let cell_height = cell_bottom - cell_top;
-                    
-                    // Calculate window position and size to fill the cell
+                      // Calculate window position and size to fill the cell
                     let window_width = cell_width.max(100);  // Minimum width of 100
                     let window_height = cell_height.max(50); // Minimum height of 50
                     let window_left = cell_left;
                     let window_top = cell_top;
                     
-                    println!("🔧 Cell bounds: ({}, {}) to ({}, {}) [{}x{}]", 
+                    debug!("🔧 Cell bounds: ({}, {}) to ({}, {}) [{}x{}]", 
                         cell_left, cell_top, cell_right, cell_bottom, cell_width, cell_height);
-                    println!("🎯 Window bounds: ({}, {}) [{}x{}]", 
+                    debug!("🎯 Window bounds: ({}, {}) [{}x{}]", 
                         window_left, window_top, window_width, window_height);
                     
                     // Move the window to the calculated position
                     if let Err(e) = self.move_window_to_position(hwnd, window_left, window_top, window_width, window_height) {
-                        println!("⚠️ Failed to physically move window {}: {}", hwnd, e);
+                        warn!("⚠️ Failed to physically move window {}: {}", hwnd, e);
                     } else {
-                        println!("🎯 Successfully moved window {} to virtual grid cell ({}, {})", hwnd, target_row, target_col);
+                        info!("🎯 Successfully moved window {} to virtual grid cell ({}, {})", hwnd, target_row, target_col);
                     }
                 }
                 Err(e) => {
-                    println!("⚠️ Failed to calculate position for virtual grid cell ({}, {}): {}", target_row, target_col, e);
+                    warn!("⚠️ Failed to calculate position for virtual grid cell ({}, {}): {}", target_row, target_col, e);
                 }
             }
             
@@ -865,6 +960,16 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 old_col: 0,
                 new_row: target_row,
                 new_col: target_col,
+                // TODO: Get actual position data from window tracker
+                grid_top_left_row: target_row,
+                grid_top_left_col: target_col,
+                grid_bottom_right_row: target_row,
+                grid_bottom_right_col: target_col,
+                real_x: 0,
+                real_y: 0,
+                real_width: 0,
+                real_height: 0,
+                monitor_id: 0,
             };
             
             // Convert and publish the event
@@ -901,8 +1006,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 
                 // Assign to the new monitor cell
                 window.monitor_cells.insert(monitor_id, vec![(target_row, target_col)]);
-                
-                println!("✅ Assigned window {} '{}' to monitor {} grid cell ({}, {})", 
+                  debug!("✅ Assigned window {} '{}' to monitor {} grid cell ({}, {})", 
                     hwnd, 
                     if window_title.len() > 30 { 
                         format!("{}...", &window_title[..30]) 
@@ -912,7 +1016,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     monitor_id,
                     target_row, 
                     target_col
-                );            }
+                );}
             
             // Update both virtual and monitor grids
             tracker.update_grid();
@@ -931,25 +1035,23 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     let window_height = cell_height.max(50); // Minimum height of 50
                     let window_left = cell_left;
                     let window_top = cell_top;
-                    
-                    println!("🔧 Monitor {} cell bounds: ({}, {}) to ({}, {}) [{}x{}]", 
+                      debug!("🔧 Monitor {} cell bounds: ({}, {}) to ({}, {}) [{}x{}]", 
                         monitor_id, cell_left, cell_top, cell_right, cell_bottom, cell_width, cell_height);
-                    println!("🎯 Window bounds: ({}, {}) [{}x{}]", 
+                    debug!("🎯 Window bounds: ({}, {}) [{}x{}]", 
                         window_left, window_top, window_width, window_height);
                     
                     // Move the window to the calculated position
                     if let Err(e) = self.move_window_to_position(hwnd, window_left, window_top, window_width, window_height) {
-                        println!("⚠️ Failed to physically move window {}: {}", hwnd, e);
+                        warn!("⚠️ Failed to physically move window {}: {}", hwnd, e);
                     } else {
-                        println!("🎯 Successfully moved window {} to monitor {} grid cell ({}, {})", hwnd, monitor_id, target_row, target_col);
+                        info!("🎯 Successfully moved window {} to monitor {} grid cell ({}, {})", hwnd, monitor_id, target_row, target_col);
                     }
                 }
                 Err(e) => {
-                    println!("⚠️ Failed to calculate position for monitor {} grid cell ({}, {}): {}", monitor_id, target_row, target_col, e);
+                    warn!("⚠️ Failed to calculate position for monitor {} grid cell ({}, {}): {}", monitor_id, target_row, target_col, e);
                 }
             }
-            
-            // Publish an event about the assignment
+              // Publish an event about the assignment
             let event = crate::ipc::GridEvent::WindowMoved {
                 hwnd,
                 title: window_title,
@@ -957,6 +1059,16 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 old_col: 0,
                 new_row: target_row,
                 new_col: target_col,
+                // TODO: Get actual position data from window tracker
+                grid_top_left_row: target_row,
+                grid_top_left_col: target_col,
+                grid_bottom_right_row: target_row,
+                grid_bottom_right_col: target_col,
+                real_x: 0,
+                real_y: 0,
+                real_width: 0,
+                real_height: 0,
+                monitor_id: monitor_id as u32,
             };
             
             // Convert and publish the event
@@ -978,9 +1090,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             }
         }
         occupied.len()
-    }
-
-    // Conversion functions between high-level and zero-copy types
+    }    // Conversion functions between high-level and zero-copy types
     fn grid_event_to_window_event(&self, event: &GridEvent) -> WindowEvent {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -988,11 +1098,24 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             .as_secs();
 
         match event {
-            GridEvent::WindowCreated { hwnd, row, col, .. } => WindowEvent {
+            GridEvent::WindowCreated { 
+                hwnd, row, col, grid_top_left_row, grid_top_left_col,
+                grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
+                real_width, real_height, monitor_id, ..
+            } => WindowEvent {
                 event_type: 0,
                 hwnd: *hwnd,
                 row: *row as u32,
                 col: *col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
                 timestamp,
                 ..Default::default()
             },
@@ -1002,13 +1125,110 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 timestamp,
                 ..Default::default()
             },
-            GridEvent::WindowMoved { hwnd, old_row, old_col, new_row, new_col, .. } => WindowEvent {
+            GridEvent::WindowMoved { 
+                hwnd, old_row, old_col, new_row, new_col, grid_top_left_row, 
+                grid_top_left_col, grid_bottom_right_row, grid_bottom_right_col,
+                real_x, real_y, real_width, real_height, monitor_id, ..
+            } => WindowEvent {
                 event_type: 2,
                 hwnd: *hwnd,
                 old_row: *old_row as u32,
                 old_col: *old_col as u32,
                 row: *new_row as u32,
                 col: *new_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
+                timestamp,
+                ..Default::default()
+            },
+            GridEvent::WindowMoveStart { 
+                hwnd, current_row, current_col, grid_top_left_row, grid_top_left_col,
+                grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
+                real_width, real_height, monitor_id, ..
+            } => WindowEvent {
+                event_type: 4, // move_start
+                hwnd: *hwnd,
+                row: *current_row as u32,
+                col: *current_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
+                timestamp,
+                ..Default::default()
+            },
+            GridEvent::WindowMoveStop { 
+                hwnd, final_row, final_col, grid_top_left_row, grid_top_left_col,
+                grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
+                real_width, real_height, monitor_id, ..
+            } => WindowEvent {
+                event_type: 5, // move_stop
+                hwnd: *hwnd,
+                row: *final_row as u32,
+                col: *final_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
+                timestamp,
+                ..Default::default()
+            },
+            GridEvent::WindowResizeStart { 
+                hwnd, current_row, current_col, grid_top_left_row, grid_top_left_col,
+                grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
+                real_width, real_height, monitor_id, ..
+            } => WindowEvent {
+                event_type: 6, // resize_start
+                hwnd: *hwnd,
+                row: *current_row as u32,
+                col: *current_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
+                timestamp,
+                ..Default::default()
+            },
+            GridEvent::WindowResizeStop { 
+                hwnd, final_row, final_col, grid_top_left_row, grid_top_left_col,
+                grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
+                real_width, real_height, monitor_id, ..
+            } => WindowEvent {
+                event_type: 7, // resize_stop
+                hwnd: *hwnd,
+                row: *final_row as u32,
+                col: *final_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
                 timestamp,
                 ..Default::default()
             },
@@ -1020,7 +1240,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 ..Default::default()
             },
         }
-    }    fn window_command_to_grid_command(command: &WindowCommand) -> GridCommand {
+    }fn window_command_to_grid_command(command: &WindowCommand) -> GridCommand {
         match command.command_type {
             0 => GridCommand::MoveWindowToCell {
                 hwnd: command.hwnd,
@@ -1114,7 +1334,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
     }
 
     pub fn run_event_loop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🔄 Starting iceoryx2 IPC event loop...");
+        info!("🔄 Starting iceoryx2 IPC event loop...");
         
         while self.is_running {
             // Process any incoming commands
@@ -1129,12 +1349,25 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
 
     pub fn stop(&mut self) {
         self.is_running = false;
-        println!("🛑 iceoryx2 IPC event loop stopped");
-    }
-
-    // Convenience methods for publishing specific events
+        info!("🛑 iceoryx2 IPC event loop stopped");
+    }    // Convenience methods for publishing specific events
     pub fn publish_window_created(&mut self, hwnd: u64, title: String, row: usize, col: usize) -> Result<(), Box<dyn std::error::Error>> {
-        let event = GridEvent::WindowCreated { hwnd, title, row, col };
+        let event = GridEvent::WindowCreated { 
+            hwnd, 
+            title, 
+            row, 
+            col,
+            // TODO: Get actual position data from window tracker
+            grid_top_left_row: row,
+            grid_top_left_col: col,
+            grid_bottom_right_row: row,
+            grid_bottom_right_col: col,
+            real_x: 0,
+            real_y: 0,
+            real_width: 0,
+            real_height: 0,
+            monitor_id: 0,
+        };
         self.publish_event(event)
     }
 
@@ -1144,9 +1377,26 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
     }
 
     pub fn publish_window_moved(&mut self, hwnd: u64, title: String, old_row: usize, old_col: usize, new_row: usize, new_col: usize) -> Result<(), Box<dyn std::error::Error>> {
-        let event = GridEvent::WindowMoved { hwnd, title, old_row, old_col, new_row, new_col };
+        let event = GridEvent::WindowMoved { 
+            hwnd, 
+            title, 
+            old_row, 
+            old_col, 
+            new_row, 
+            new_col,
+            // TODO: Get actual position data from window tracker
+            grid_top_left_row: new_row,
+            grid_top_left_col: new_col,
+            grid_bottom_right_row: new_row,
+            grid_bottom_right_col: new_col,
+            real_x: 0,
+            real_y: 0,
+            real_width: 0,
+            real_height: 0,
+            monitor_id: 0,
+        };
         self.publish_event(event)
-    }    pub fn publish_grid_state_changed(&mut self, total_windows: usize, occupied_cells: usize) -> Result<(), Box<dyn std::error::Error>> {
+    }pub fn publish_grid_state_changed(&mut self, total_windows: usize, occupied_cells: usize) -> Result<(), Box<dyn std::error::Error>> {
         let event = GridEvent::GridStateChanged {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1161,12 +1411,11 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
     // Publish individual window details for real-time client updates
     pub fn publish_window_details(&mut self, hwnd: HWND) -> Result<(), Box<dyn std::error::Error>> {        if let Ok(tracker) = self.tracker.lock() {
             if let Some(window_info) = tracker.windows.get(&hwnd) {
-                let details = self.window_info_to_details(hwnd, &*window_info);
-                  if let Some(ref mut publisher) = self.window_details_publisher {
+                let details = self.window_info_to_details(hwnd, &*window_info);                if let Some(ref mut publisher) = self.window_details_publisher {
                     publisher.send_copy(details)?;
-                    println!("📤 Published window details for HWND {:?}", hwnd);
+                    debug!("📤 Published window details for HWND {:?}", hwnd);
                 } else {
-                    println!("⚠️ Window details publisher not available");
+                    warn!("⚠️ Window details publisher not available");
                 }
             }
         }
@@ -1174,10 +1423,9 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
     }
 
     // Publish details for all current windows (useful for client initialization)
-    pub fn publish_all_window_details(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if let Ok(tracker) = self.tracker.lock() {
+    pub fn publish_all_window_details(&mut self) -> Result<(), Box<dyn std::error::Error>> {        if let Ok(tracker) = self.tracker.lock() {
             let window_count = tracker.windows.len();
-            println!("📤 Publishing details for {} windows...", window_count);
+            debug!("📤 Publishing details for {} windows...", window_count);
               for entry in &tracker.windows {
                 let (hwnd, window_info) = entry.pair();
                 let details = self.window_info_to_details(*hwnd, &*window_info);
@@ -1185,12 +1433,12 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 if let Some(ref mut publisher) = self.window_details_publisher {
                     publisher.send_copy(details)?;
                 } else {
-                    println!("⚠️ Window details publisher not available");
+                    warn!("⚠️ Window details publisher not available");
                     break;
                 }
             }
             
-            println!("✅ Published details for {} windows", window_count);
+            info!("✅ Published details for {} windows", window_count);
         }
         Ok(())
     }
@@ -1213,10 +1461,9 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 let cell_top = top + (target_row as i32 * cell_height);
                 let cell_right = cell_left + cell_width;
                 let cell_bottom = cell_top + cell_height;
-                
-                println!("🔧 Calculated VIRTUAL GRID cell position for ({}, {}): screen coords ({}, {}) to ({}, {})", 
+                  debug!("🔧 Calculated VIRTUAL GRID cell position for ({}, {}): screen coords ({}, {}) to ({}, {})", 
                     target_row, target_col, cell_left, cell_top, cell_right, cell_bottom);
-                println!("   Virtual screen bounds: ({}, {}) to ({}, {})", left, top, right, bottom);
+                debug!("   Virtual screen bounds: ({}, {}) to ({}, {})", left, top, right, bottom);
                 
                 Ok((cell_left, cell_top, cell_right, cell_bottom))
             } else {                Err(format!("Invalid virtual grid coordinates: ({}, {}). Max is ({}, {})", 
@@ -1246,10 +1493,9 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                 let cell_top = top + (target_row as i32 * cell_height);
                 let cell_right = cell_left + cell_width;
                 let cell_bottom = cell_top + cell_height;
-                
-                println!("🔧 Calculated MONITOR {} GRID cell position for ({}, {}): screen coords ({}, {}) to ({}, {})", 
+                  debug!("🔧 Calculated MONITOR {} GRID cell position for ({}, {}): screen coords ({}, {}) to ({}, {})", 
                     monitor_id, target_row, target_col, cell_left, cell_top, cell_right, cell_bottom);
-                println!("   Monitor {} bounds: ({}, {}) to ({}, {})", monitor_id, left, top, right, bottom);
+                debug!("   Monitor {} bounds: ({}, {}) to ({}, {})", monitor_id, left, top, right, bottom);
                 
                 Ok((cell_left, cell_top, cell_right, cell_bottom))
             } else {                Err(format!("Invalid monitor grid coordinates: ({}, {}). Max is ({}, {})", 
@@ -1275,16 +1521,16 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             );
             
             if result == 0 {
-                Err("Failed to move window".into())
-            } else {
-                println!("🔧 Moved window {} to position ({}, {}) with size {}x{}", hwnd, left, top, width, height);                // Rescan the grid to update internal tracking after the window move
+                Err("Failed to move window".into())            } else {
+                info!("🔧 Moved window {} to position ({}, {}) with size {}x{}", hwnd, left, top, width, height);
+                // Rescan the grid to update internal tracking after the window move
                 if let Ok(mut tracker) = self.tracker.lock() {
-                    println!("🔄 Rescanning grid after window movement...");
+                    debug!("🔄 Rescanning grid after window movement...");
                       // Update the window's rectangle in our tracking
                     if let Some(new_rect) = crate::WindowTracker::get_window_rect(hwnd_handle) {
                         if let Some(mut window) = tracker.windows.get_mut(&hwnd_handle) {
                             window.rect = new_rect;
-                            println!("   📍 Updated window {} rect to ({}, {}) - ({}, {})", 
+                            debug!("   📍 Updated window {} rect to ({}, {}) - ({}, {})", 
                                 hwnd, new_rect.left, new_rect.top, new_rect.right, new_rect.bottom);
                         }
                         
@@ -1296,7 +1542,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                             window.grid_cells = grid_cells;
                             window.monitor_cells = monitor_cells;
                             
-                            println!("   🔄 Recalculated grid assignments: {} virtual cells, {} monitor assignments", 
+                            debug!("   🔄 Recalculated grid assignments: {} virtual cells, {} monitor assignments", 
                                 window.grid_cells.len(), window.monitor_cells.len());
                         }
                     }
@@ -1304,9 +1550,9 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     tracker.update_grid();
                     tracker.update_monitor_grids();
                     
-                    println!("✅ Grid rescan complete after window movement");
+                    debug!("✅ Grid rescan complete after window movement");
                 } else {
-                    println!("⚠️ Failed to acquire tracker lock for grid rescan");
+                    warn!("⚠️ Failed to acquire tracker lock for grid rescan");
                 }
                 
                 Ok(())
@@ -1465,7 +1711,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     }
                 }
                 
-                println!("📤 Published grid layout '{}' with {} occupied cells", layout_name, layout_message.total_cells);
+                info!("📤 Published grid layout '{}' with {} occupied cells", layout_name, layout_message.total_cells);
                 Ok(())
             } else {
                 Err(format!("Layout '{}' not found", layout_name).into())
@@ -1486,25 +1732,25 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         
         // Then process each command
         for layout_msg in commands_to_process {
-            println!("🗂️ Received layout command: {:?}", layout_msg);
+            debug!("🗂️ Received layout command: {:?}", layout_msg);
             
             match layout_msg.message_type {
                 0 => { // apply_layout
                     // This would typically be handled by receiving cell assignments
-                    println!("📥 Layout application request received");
+                    info!("📥 Layout application request received");
                 },
                 1 => { // save_current_layout  
                     let layout_name = format!("layout_{}", layout_msg.layout_id);
                     if let Err(e) = self.save_current_layout(layout_name.clone()) {
-                        println!("⚠️ Failed to save layout {}: {}", layout_name, e);
+                        warn!("⚠️ Failed to save layout {}: {}", layout_name, e);
                     }
                 },
                 2 => { // get_saved_layouts
                     // Send response with saved layouts
-                    println!("📋 Saved layouts request received");
+                    info!("📋 Saved layouts request received");
                 },
                 _ => {
-                    println!("⚠️ Unknown layout command type: {}", layout_msg.message_type);
+                    warn!("⚠️ Unknown layout command type: {}", layout_msg.message_type);
                 }
             }
         }
@@ -1522,7 +1768,7 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         
         // Then process each command
         for anim_cmd in commands_to_process {
-            println!("🎬 Received animation command: {:?}", anim_cmd);
+            debug!("🎬 Received animation command: {:?}", anim_cmd);
             
             match anim_cmd.command_type {
                 0 => { // start_animation
@@ -1545,26 +1791,26 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
                     };
                     
                     if let Err(e) = self.start_window_animation(anim_cmd.hwnd, target_rect, anim_cmd.duration_ms, easing_type) {
-                        println!("⚠️ Failed to start animation for window {}: {}", anim_cmd.hwnd, e);
+                        warn!("⚠️ Failed to start animation for window {}: {}", anim_cmd.hwnd, e);
                     }
                 },
                 1 => { // stop_animation
                     if let Ok(tracker) = self.tracker.lock() {
                         if anim_cmd.hwnd == 0 {
                             tracker.active_animations.clear();
-                            println!("🛑 Stopped all animations");
+                            info!("🛑 Stopped all animations");
                         } else {
                             tracker.active_animations.remove(&(anim_cmd.hwnd as winapi::shared::windef::HWND));
-                            println!("🛑 Stopped animation for window {}", anim_cmd.hwnd);
+                            info!("🛑 Stopped animation for window {}", anim_cmd.hwnd);
                         }
                     }
                 },
                 4 => { // get_status
                     // Send animation status - this could be enhanced to send via status publisher
-                    println!("📊 Animation status request for window {}", anim_cmd.hwnd);
+                    debug!("📊 Animation status request for window {}", anim_cmd.hwnd);
                 },
                 _ => {
-                    println!("⚠️ Unknown animation command type: {}", anim_cmd.command_type);
+                    warn!("⚠️ Unknown animation command type: {}", anim_cmd.command_type);
                 }
             }
         }

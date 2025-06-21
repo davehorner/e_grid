@@ -30,6 +30,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         title: "Another Test Window".to_string(),
         row: 3,
         col: 4,
+        // Add required fields with placeholder values
+        grid_top_left_row: 3,
+        grid_top_left_col: 4,
+        grid_bottom_right_row: 3,
+        grid_bottom_right_col: 4,
+        real_x: 0,
+        real_y: 0,
+        real_width: 0,
+        real_height: 0,
+        monitor_id: 0,
     };
     ipc_manager.publish_event(test_event)?;
 

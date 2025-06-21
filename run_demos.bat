@@ -11,7 +11,7 @@ echo - Client Demo: Connects to server and displays real-time grid updates
 echo.
 
 echo Starting Server Demo...
-start "E-Grid Server Demo" cmd /k "cargo run --bin ipc_server_demo"
+start "E-Grid Server Demo" cmd /k "cargo run --bin e_grid"
 
 echo.
 echo Waiting 2 seconds for server to initialize...
