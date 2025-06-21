@@ -4,14 +4,6 @@ use winapi::shared::minwindef::{LPARAM, LRESULT, UINT, WPARAM};
 use winapi::shared::windef::{HWND, RECT};
 use winapi::um::winuser::*;
 
-// Additional constants for WinEvent hooks
-const EVENT_OBJECT_CREATE: u32 = 0x8000;
-const EVENT_OBJECT_DESTROY: u32 = 0x8001;
-const EVENT_OBJECT_LOCATIONCHANGE: u32 = 0x800B;
-const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
-const EVENT_SYSTEM_MINIMIZESTART: u32 = 0x0016;
-const EVENT_SYSTEM_MINIMIZEEND: u32 = 0x0017;
-const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
 const OBJID_WINDOW: i32 = 0x00000000;
 const CHILDID_SELF: i32 = 0;
 

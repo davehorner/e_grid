@@ -15,6 +15,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create the grid client
     let mut client = GridClient::new()?;
+
+    // Register window event callback to log all event types
+    client.set_window_event_callback(|event| {
+        let event_name = match event.event_type {
+            0 => "CREATED",
+            1 => "DESTROYED",
+            2 => "MOVED",
+            3 => "STATE_CHANGED",
+            4 => "MOVE_START",
+            5 => "MOVE_STOP",
+            6 => "RESIZE_START",
+            7 => "RESIZE_STOP",
+            _ => "UNKNOWN",
+        };
+        println!("[WINDOW EVENT] {}: HWND {} at ({}, {})", event_name, event.hwnd, event.row, event.col);
+    })?;
+
     println!("📋 Registering focus callback...");
     client.set_focus_callback(|focus_event| {
         println!("🔍 [DEBUG] DEMO CALLBACK CALLED for event type: {}", focus_event.event_type);

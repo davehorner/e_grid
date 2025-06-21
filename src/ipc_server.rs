@@ -1,7 +1,7 @@
+use crate::ipc_protocol::{IpcCommand, IpcCommandType, IpcResponse, IpcResponseType, WindowDetails, WindowEvent, WindowFocusEvent, HeartbeatMessage, AnimationCommand, AnimationStatus, GridLayoutMessage, GridCellAssignment, GridEvent, GRID_EVENTS_SERVICE, GRID_COMMANDS_SERVICE, GRID_RESPONSE_SERVICE, GRID_WINDOW_DETAILS_SERVICE, GRID_FOCUS_EVENTS_SERVICE, GRID_LAYOUT_SERVICE, GRID_CELL_ASSIGNMENTS_SERVICE, ANIMATION_COMMANDS_SERVICE, ANIMATION_STATUS_SERVICE, GRID_HEARTBEAT_SERVICE};
 use crate::GridConfig;
 use crate::{
     WindowTracker, 
-    ipc,
     window_events::{self, WindowEventConfig},
     heartbeat::HeartbeatService,
 };
@@ -14,7 +14,6 @@ use std::thread;
 use std::time::Duration;
 use winapi::shared::windef::HWND;
 use winapi::um::winuser::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
-use crate::ipc::GridResponse;
 
 /// Dedicated IPC Server for E-Grid system
 /// Manages all server-side IPC communications including:
@@ -28,27 +27,28 @@ pub struct GridIpcServer {
     config: GridConfig,
     
     // IPC Publishers
-    event_publisher: Option<Publisher<Service, ipc::WindowEvent, ()>>,
-    response_publisher: Option<Publisher<Service, ipc::WindowResponse, ()>>,
-    window_details_publisher: Option<Publisher<Service, ipc::WindowDetails, ()>>,
-    focus_publisher: Option<Publisher<Service, ipc::WindowFocusEvent, ()>>,
-    layout_publisher: Option<Publisher<Service, ipc::GridLayoutMessage, ()>>,
-    cell_assignment_publisher: Option<Publisher<Service, ipc::GridCellAssignment, ()>>,
-    animation_status_publisher: Option<Publisher<Service, ipc::AnimationStatus, ()>>,
-    heartbeat_publisher: Option<Publisher<Service, ipc::HeartbeatMessage, ()>>,
+    event_publisher: Option<Publisher<Service, WindowEvent, ()>>,
+    response_publisher: Option<Publisher<Service, IpcResponse, ()>>,
+    window_details_publisher: Option<Publisher<Service, WindowDetails, ()>>,
+    focus_publisher: Option<Publisher<Service, WindowFocusEvent, ()>>,
+    layout_publisher: Option<Publisher<Service, GridLayoutMessage, ()>>,
+    cell_assignment_publisher: Option<Publisher<Service, GridCellAssignment, ()>>,
+    animation_status_publisher: Option<Publisher<Service, AnimationStatus, ()>>,
+    heartbeat_publisher: Option<Publisher<Service, HeartbeatMessage, ()>>,
     
     // IPC Subscribers
-    command_subscriber: Option<Subscriber<Service, ipc::WindowCommand, ()>>,
-    layout_subscriber: Option<Subscriber<Service, ipc::GridLayoutMessage, ()>>,
-    cell_assignment_subscriber: Option<Subscriber<Service, ipc::GridCellAssignment, ()>>,
-    animation_subscriber: Option<Subscriber<Service, ipc::AnimationCommand, ()>>,
+    command_subscriber: Option<Subscriber<Service, IpcCommand, ()>>,
+    layout_subscriber: Option<Subscriber<Service, GridLayoutMessage, ()>>,
+    cell_assignment_subscriber: Option<Subscriber<Service, GridCellAssignment, ()>>,
+    animation_subscriber: Option<Subscriber<Service, AnimationCommand, ()>>,
       // Server state
     is_running: bool,
-    event_listeners: Vec<Box<dyn Fn(&ipc::GridEvent) + Send + Sync>>,
+    event_listeners: Vec<Box<dyn Fn(&GridEvent) + Send + Sync>>,
     
     // New library-based event handling
     heartbeat_service: Option<HeartbeatService>,
     focus_event_receiver: Option<mpsc::Receiver<(u64, bool)>>,
+    event_receiver: Option<mpsc::Receiver<crate::ipc_protocol::GridEvent>>, // NEW: for window events
 }
 
 impl GridIpcServer {
@@ -78,6 +78,7 @@ impl GridIpcServer {
             event_listeners: Vec::new(),
             heartbeat_service: None,
             focus_event_receiver: None,
+            event_receiver: None,
         })
     }
 
@@ -89,8 +90,8 @@ impl GridIpcServer {
 
         // Setup event publishing service
         let event_service = node
-            .service_builder(&ServiceName::new(ipc::GRID_EVENTS_SERVICE)?)
-            .publish_subscribe::<ipc::WindowEvent>()
+            .service_builder(&ServiceName::new(GRID_EVENTS_SERVICE)?)
+            .publish_subscribe::<WindowEvent>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
@@ -98,15 +99,15 @@ impl GridIpcServer {
 
         // Setup response publishing service
         let response_service = node
-            .service_builder(&ServiceName::new(ipc::GRID_RESPONSE_SERVICE)?)
-            .publish_subscribe::<ipc::WindowResponse>()
+            .service_builder(&ServiceName::new(GRID_RESPONSE_SERVICE)?)
+            .publish_subscribe::<IpcResponse>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
         self.response_publisher = Some(response_service.publisher_builder().create()?);        // Setup window details publishing service
         let window_details_service = node
-            .service_builder(&ServiceName::new(ipc::GRID_WINDOW_DETAILS_SERVICE)?)
-            .publish_subscribe::<ipc::WindowDetails>()
+            .service_builder(&ServiceName::new(GRID_WINDOW_DETAILS_SERVICE)?)
+            .publish_subscribe::<WindowDetails>()
             .max_publishers(8)
             .max_subscribers(8)
             .history_size(32)  // Keep more messages in history
@@ -115,8 +116,8 @@ impl GridIpcServer {
 
         // Setup focus events publishing service (NEW: for e_midi integration)
         let focus_service = node
-            .service_builder(&ServiceName::new(ipc::GRID_FOCUS_EVENTS_SERVICE)?)
-            .publish_subscribe::<ipc::WindowFocusEvent>()
+            .service_builder(&ServiceName::new(GRID_FOCUS_EVENTS_SERVICE)?)
+            .publish_subscribe::<WindowFocusEvent>()
             .max_publishers(8)
             .max_subscribers(8)
             .history_size(16)  // Keep recent focus events in history
@@ -126,16 +127,16 @@ impl GridIpcServer {
 
         // Setup command subscription service
         let command_service = node
-            .service_builder(&ServiceName::new(ipc::GRID_COMMANDS_SERVICE)?)
-            .publish_subscribe::<ipc::WindowCommand>()
+            .service_builder(&ServiceName::new(GRID_COMMANDS_SERVICE)?)
+            .publish_subscribe::<IpcCommand>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;        self.command_subscriber = Some(command_service.subscriber_builder().create()?);
 
         // Setup grid layout services
         let layout_service = node
-            .service_builder(&ServiceName::new(ipc::GRID_LAYOUT_SERVICE)?)
-            .publish_subscribe::<ipc::GridLayoutMessage>()
+            .service_builder(&ServiceName::new(GRID_LAYOUT_SERVICE)?)
+            .publish_subscribe::<GridLayoutMessage>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
@@ -145,8 +146,8 @@ impl GridIpcServer {
         
         // Setup cell assignment services
         let cell_assignment_service = node
-            .service_builder(&ServiceName::new(ipc::GRID_CELL_ASSIGNMENTS_SERVICE)?)
-            .publish_subscribe::<ipc::GridCellAssignment>()
+            .service_builder(&ServiceName::new(GRID_CELL_ASSIGNMENTS_SERVICE)?)
+            .publish_subscribe::<GridCellAssignment>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
@@ -156,8 +157,8 @@ impl GridIpcServer {
 
         // Setup animation services
         let animation_service = node
-            .service_builder(&ServiceName::new(ipc::ANIMATION_COMMANDS_SERVICE)?)
-            .publish_subscribe::<ipc::AnimationCommand>()
+            .service_builder(&ServiceName::new(ANIMATION_COMMANDS_SERVICE)?)
+            .publish_subscribe::<AnimationCommand>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
@@ -166,8 +167,8 @@ impl GridIpcServer {
         
         // Setup animation status service
         let animation_status_service = node
-            .service_builder(&ServiceName::new(ipc::ANIMATION_STATUS_SERVICE)?)
-            .publish_subscribe::<ipc::AnimationStatus>()
+            .service_builder(&ServiceName::new(ANIMATION_STATUS_SERVICE)?)
+            .publish_subscribe::<AnimationStatus>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
@@ -176,8 +177,8 @@ impl GridIpcServer {
         
         // Setup heartbeat service
         let heartbeat_service = node
-            .service_builder(&ServiceName::new(ipc::GRID_HEARTBEAT_SERVICE)?)
-            .publish_subscribe::<ipc::HeartbeatMessage>()
+            .service_builder(&ServiceName::new(GRID_HEARTBEAT_SERVICE)?)
+            .publish_subscribe::<HeartbeatMessage>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
@@ -185,15 +186,15 @@ impl GridIpcServer {
         self.heartbeat_publisher = Some(heartbeat_service.publisher_builder().create()?);
         
         println!("✅ E-Grid IPC server services initialized successfully");
-        println!("   📡 Event service: {}", ipc::GRID_EVENTS_SERVICE);
-        println!("   📨 Command service: {}", ipc::GRID_COMMANDS_SERVICE);
-        println!("   📤 Response service: {}", ipc::GRID_RESPONSE_SERVICE);
-        println!("   📋 Window details service: {}", ipc::GRID_WINDOW_DETAILS_SERVICE);
-        println!("   🎯 Focus events service: {}", ipc::GRID_FOCUS_EVENTS_SERVICE);  // NEW
-        println!("   🗂️  Grid layout service: {}", ipc::GRID_LAYOUT_SERVICE);        println!("   📍 Cell assignment service: {}", ipc::GRID_CELL_ASSIGNMENTS_SERVICE);
-        println!("   🎬 Animation service: {}", ipc::ANIMATION_COMMANDS_SERVICE);
-        println!("   📊 Animation status service: {}", ipc::ANIMATION_STATUS_SERVICE);
-        println!("   💓 Heartbeat service: {}", ipc::GRID_HEARTBEAT_SERVICE);
+        println!("   📡 Event service: {}", GRID_EVENTS_SERVICE);
+        println!("   📨 Command service: {}", GRID_COMMANDS_SERVICE);
+        println!("   📤 Response service: {}", GRID_RESPONSE_SERVICE);
+        println!("   📋 Window details service: {}", GRID_WINDOW_DETAILS_SERVICE);
+        println!("   🎯 Focus events service: {}", GRID_FOCUS_EVENTS_SERVICE);  // NEW
+        println!("   🗂️  Grid layout service: {}", GRID_LAYOUT_SERVICE);        println!("   📍 Cell assignment service: {}", GRID_CELL_ASSIGNMENTS_SERVICE);
+        println!("   🎬 Animation service: {}", ANIMATION_COMMANDS_SERVICE);
+        println!("   📊 Animation status service: {}", ANIMATION_STATUS_SERVICE);
+        println!("   💓 Heartbeat service: {}", GRID_HEARTBEAT_SERVICE);
 
         self.is_running = true;
         Ok(())
@@ -209,6 +210,9 @@ impl GridIpcServer {
             
             // Process incoming focus events from the channel and publish them via IPC
             self.process_focus_events()?;
+            
+            // Process window events from the channel and publish them via IPC
+            self.process_window_events()?;
             
             // Small delay to prevent busy waiting
             thread::sleep(Duration::from_millis(10));
@@ -232,30 +236,131 @@ impl GridIpcServer {
 
     /// Process incoming commands from clients
     pub fn process_commands(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut commands_to_process: Vec<ipc::WindowCommand> = Vec::new();
-        
+        let mut commands_to_process: Vec<IpcCommand> = Vec::new();
         // Collect all incoming commands
         if let Some(ref mut subscriber) = self.command_subscriber {
             while let Some(sample) = subscriber.receive()? {
-                let command = *sample;
+                let command = sample.clone(); // FIX: clone instead of move
                 commands_to_process.push(command);
             }
         }
-
         // Process each command
         for command in commands_to_process {
             println!("📨 Received command: {:?}", command);
-            
-            // Convert to high-level command and process
-            let grid_command = Self::window_command_to_grid_command(&command);
-            let response = self.handle_command(grid_command)?;
-            
-            // Send response
-            self.send_response(response)?;
+            let response = self.handle_ipc_command(command)?;
+            self.send_ipc_response(response)?;
         }
-
         Ok(())
-    }    /// Process incoming focus events from the channel and publish them via IPC
+    }
+
+    /// Handle an IpcCommand and return an IpcResponse
+    fn handle_ipc_command(&mut self, command: IpcCommand) -> Result<IpcResponse, Box<dyn std::error::Error>> {
+        match command.command_type {
+            IpcCommandType::GetGridState => {
+                // Example: fill in real grid state here
+                let grid_state = None; // TODO: populate real grid state
+                Ok(IpcResponse {
+                    response_type: IpcResponseType::GridState,
+                    grid_state,
+                    monitor_list: None,
+                    window_list: None,
+                    error_message: None,
+                    protocol_version: command.protocol_version,
+                })
+            }
+            IpcCommandType::GetWindowList => {
+                // Example: fill in real window list here
+                let window_list = None; // TODO: populate real window list
+                Ok(IpcResponse {
+                    response_type: IpcResponseType::WindowList,
+                    grid_state: None,
+                    monitor_list: None,
+                    window_list,
+                    error_message: None,
+                    protocol_version: command.protocol_version,
+                })
+            }
+            IpcCommandType::MoveWindow => {
+                // Example: perform move and respond
+                // TODO: actually move window using hwnd/row/col
+                Ok(IpcResponse {
+                    response_type: IpcResponseType::Ack,
+                    grid_state: None,
+                    monitor_list: None,
+                    window_list: None,
+                    error_message: None,
+                    protocol_version: command.protocol_version,
+                })
+            }
+            IpcCommandType::FocusWindow => {
+                // Example: perform focus and respond
+                Ok(IpcResponse {
+                    response_type: IpcResponseType::Ack,
+                    grid_state: None,
+                    monitor_list: None,
+                    window_list: None,
+                    error_message: None,
+                    protocol_version: command.protocol_version,
+                })
+            }
+            IpcCommandType::GetMonitorList => {
+                // Example: fill in real monitor list here
+                let monitor_list = None; // TODO: populate real monitor list
+                Ok(IpcResponse {
+                    response_type: IpcResponseType::MonitorList,
+                    grid_state: None,
+                    monitor_list,
+                    window_list: None,
+                    error_message: None,
+                    protocol_version: command.protocol_version,
+                })
+            }
+            IpcCommandType::AnimateWindow => {
+                // TODO: Implement animation logic
+                Ok(IpcResponse {
+                    response_type: IpcResponseType::Ack,
+                    grid_state: None,
+                    monitor_list: None,
+                    window_list: None,
+                    error_message: None,
+                    protocol_version: command.protocol_version,
+                })
+            }
+            IpcCommandType::AssignToVirtualCell => {
+                // TODO: Implement assignment logic
+                Ok(IpcResponse {
+                    response_type: IpcResponseType::Ack,
+                    grid_state: None,
+                    monitor_list: None,
+                    window_list: None,
+                    error_message: None,
+                    protocol_version: command.protocol_version,
+                })
+            }
+            IpcCommandType::AssignToMonitorCell => {
+                // TODO: Implement assignment logic
+                Ok(IpcResponse {
+                    response_type: IpcResponseType::Ack,
+                    grid_state: None,
+                    monitor_list: None,
+                    window_list: None,
+                    error_message: None,
+                    protocol_version: command.protocol_version,
+                })
+            }
+        }
+    }
+
+    /// Send an IpcResponse to clients
+    fn send_ipc_response(&mut self, response: IpcResponse) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(ref mut publisher) = self.response_publisher {
+            publisher.send_copy(response.clone())?; // FIX: clone before send
+            println!("📤 Sent IpcResponse: {:?}", response);
+        }
+        Ok(())
+    }
+
+    /// Process incoming focus events from the channel and publish them via IPC
     pub fn process_focus_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {        // Debug: Always log that this method is being called
         static mut CALL_COUNT: u32 = 0;
         unsafe {
@@ -301,149 +406,21 @@ impl GridIpcServer {
         Ok(())
     }
 
-    /// Handle a grid command and return a response
-    pub fn handle_command(&mut self, command: ipc::GridCommand) -> Result<ipc::GridResponse, Box<dyn std::error::Error>> {
-        match command {            ipc::GridCommand::GetGridConfig => {
-                self.send_response(GridResponse::GridConfig(self.config.clone()))?;
-                Ok(GridResponse::GridConfig(self.config.clone()))
-            }
-            ipc::GridCommand::GetGridState => {
-                if let Ok(tracker) = self.tracker.lock() {
-                    let total_windows = tracker.windows.len();
-                    let occupied_cells = self.count_occupied_cells(&tracker);
-                    
-                    let mut grid_summary = format!("Grid: {} windows, {} occupied cells\n", total_windows, occupied_cells);
-                    grid_summary.push_str("Windows:\n");
-                      for entry in tracker.windows.iter().take(10) {
-                        let (hwnd, window) = entry.pair();
-                        let title = if window.title.len() > 30 {
-                            format!("{}...", &window.title[..30])
-                        } else {
-                            window.title.clone()
-                        };
-                        grid_summary.push_str(&format!("  HWND {:?}: {}\n", hwnd, title));
-                    }
-                    
-                    if tracker.windows.len() > 10 {
-                        grid_summary.push_str(&format!("  ... and {} more windows\n", tracker.windows.len() - 10));
-                    }
-                    
-                    println!("📊 Grid state: {} windows, {} occupied cells", total_windows, occupied_cells);
-                    
-                    Ok(ipc::GridResponse::GridState {
-                        total_windows,
-                        occupied_cells,
-                        grid_summary,
-                    })
-                } else {
-                    Ok(ipc::GridResponse::Error("Failed to access window tracker".to_string()))
-                }
-            }
-
-            ipc::GridCommand::GetWindowList => {                let hwnd_list = if let Ok(tracker) = self.tracker.lock() {
-                    tracker.windows.iter()
-                        .map(|entry| *entry.key() as u64)
-                        .collect::<Vec<u64>>()
-                } else {
-                    return Ok(ipc::GridResponse::Error("Failed to access window tracker".to_string()));
-                };
-                
-                println!("📋 GetWindowList request - publishing details for {} windows", hwnd_list.len());
-                
-                // Publish individual window details for all windows
-                if let Err(e) = self.publish_all_window_details() {
-                    println!("⚠️ Failed to publish window details: {}", e);
-                }
-                
-                Ok(ipc::GridResponse::Success)
-            }
-
-            ipc::GridCommand::MoveWindowToCell { hwnd, target_row, target_col } => {
-                println!("🎯 Request to move window {} to cell ({}, {})", hwnd, target_row, target_col);
-                match self.move_window_to_cell(hwnd, target_row, target_col) {
-                    Ok(_) => Ok(ipc::GridResponse::Success),
-                    Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to move window: {}", e))),
-                }
-            }
-
-            ipc::GridCommand::AssignWindowToVirtualCell { hwnd, target_row, target_col } => {
-                println!("🏷️ Request to assign window {} to virtual grid cell ({}, {})", hwnd, target_row, target_col);
-                match self.assign_window_to_virtual_cell(hwnd, target_row, target_col) {
-                    Ok(_) => Ok(ipc::GridResponse::Success),
-                    Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to assign window to virtual cell: {}", e))),
-                }
-            }            ipc::GridCommand::AssignWindowToMonitorCell { hwnd, target_row, target_col, monitor_id } => {
-                println!("🖥️ Request to assign window {} to monitor {} cell ({}, {})", hwnd, monitor_id, target_row, target_col);
-                match self.assign_window_to_monitor_cell(hwnd, target_row, target_col, monitor_id) {
-                    Ok(_) => Ok(ipc::GridResponse::Success),
-                    Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to assign window to monitor cell: {}", e))),
-                }
-            }            ipc::GridCommand::ApplyGridLayout { layout_name, duration_ms, easing_type } => {
-                println!("🎨 Request to apply saved layout '{}'", layout_name);
-                match self.apply_saved_layout(&layout_name, duration_ms, easing_type) {
-                    Ok(count) => Ok(ipc::GridResponse::Success),
-                    Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to apply grid layout: {}", e))),
-                }
-            }
-
-            ipc::GridCommand::SaveCurrentLayout { layout_name } => {
-                println!("💾 Request to save current layout as '{}'", layout_name);
-                match self.save_current_layout(layout_name) {
-                    Ok(_) => Ok(ipc::GridResponse::Success),
-                    Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to save layout: {}", e))),
-                }
-            }            ipc::GridCommand::GetSavedLayouts => {
-                println!("📂 Request to get saved layouts");
-                match self.get_saved_layouts() {
-                    Ok(layout_names) => Ok(ipc::GridResponse::SavedLayouts { layout_names }),
-                    Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to get saved layouts: {}", e))),
-                }
-            }ipc::GridCommand::StartAnimation { hwnd, target_x, target_y, target_width, target_height, duration_ms, easing_type } => {
-                println!("🎬 Request to start animation for window {}", hwnd);
-                let target_rect = winapi::shared::windef::RECT {
-                    left: target_x,
-                    top: target_y,
-                    right: target_x + target_width as i32,
-                    bottom: target_y + target_height as i32,
-                };
-                match self.start_window_animation(hwnd, target_rect, duration_ms, easing_type) {
-                    Ok(_) => Ok(ipc::GridResponse::Success),
-                    Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to start animation: {}", e))),
-                }
-            }            ipc::GridCommand::GetAnimationStatus { hwnd } => {
-                println!("📊 Request to get animation status for window {}", hwnd);
-                if hwnd == 0 {
-                    // Get status for all windows
-                    if let Ok(tracker) = self.tracker.lock() {
-                        let mut statuses = Vec::new();                        for entry in &tracker.active_animations {
-                            let (window_hwnd, animation) = entry.pair();
-                            let progress = animation.get_progress();
-                            statuses.push((*window_hwnd as u64, true, progress));
-                        }
-                        Ok(ipc::GridResponse::AnimationStatus { statuses })
-                    } else {
-                        Ok(ipc::GridResponse::Error("Failed to get animation status".to_string()))
-                    }
-                } else {
-                    // Get status for specific window
-                    match self.get_animation_status(hwnd) {
-                        Ok(status) => {
-                            let statuses = if let Some(animation) = status {
-                                vec![(hwnd, true, animation.get_progress())]
-                            } else {
-                                vec![(hwnd, false, 0.0)]
-                            };
-                            Ok(ipc::GridResponse::AnimationStatus { statuses })
-                        },
-                        Err(e) => Ok(ipc::GridResponse::Error(format!("Failed to get animation status: {}", e))),
-                    }
-                }
-            }
+    /// Process window events from the channel and publish them via IPC
+    pub fn process_window_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let events: Vec<_> = if let Some(ref event_receiver) = self.event_receiver {
+            event_receiver.try_iter().collect()
+        } else {
+            Vec::new()
+        };
+        for event in events {
+            let _ = self.publish_event(event);
         }
+        Ok(())
     }
 
     /// Publish a window event to all connected clients
-    pub fn publish_event(&mut self, event: ipc::GridEvent) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn publish_event(&mut self, event: GridEvent) -> Result<(), Box<dyn std::error::Error>> {
         // Convert high-level event to zero-copy format
         let window_event = self.grid_event_to_window_event(&event);
         
@@ -467,7 +444,7 @@ impl GridIpcServer {
         if let Ok(tracker) = self.tracker.try_lock() {
             if let Some(window_info) = tracker.windows.get(&hwnd) {
                 // Create the details first (immutable borrow)
-                let details = self.window_info_to_details(hwnd, &*window_info);
+                let details = self.create_window_details_safe(hwnd, &*window_info);
                 
                 // Then publish (mutable borrow)
                 if let Some(ref mut publisher) = self.window_details_publisher {
@@ -501,7 +478,7 @@ impl GridIpcServer {
             // This ensures client and server see the same set of windows
             
             // Create details without holding tracker lock to avoid deadlock
-            let details = self.window_info_to_details(*hwnd, &*window_info);
+            let details = self.create_window_details_safe(*hwnd, &*window_info);
             
             // Publish the details
             if let Some(ref mut publisher) = self.window_details_publisher {
@@ -556,7 +533,7 @@ impl GridIpcServer {
         
         if let Some(ref mut publisher) = self.focus_publisher {
             // Create focus event
-            let focus_event = ipc::WindowFocusEvent {
+            let focus_event = WindowFocusEvent {
                 event_type,
                 hwnd: hwnd as u64,
                 process_id,
@@ -611,7 +588,7 @@ impl GridIpcServer {
         if let Some(ref mut publisher) = self.focus_publisher {
             println!("🔍 [DEBUG] Focus publisher is available, creating focus event...");
             // Create focus event
-            let focus_event = ipc::WindowFocusEvent {
+            let focus_event = WindowFocusEvent {
                 event_type: if is_focused { 0 } else { 1 }, // 0=FOCUSED, 1=DEFOCUSED
                 hwnd: hwnd as u64,
                 process_id,
@@ -647,7 +624,7 @@ impl GridIpcServer {
         }
         hash
     }/// Create window details without holding the tracker lock to avoid deadlocks
-    fn create_window_details_safe(&self, hwnd: HWND, window_info: &crate::WindowInfo) -> ipc::WindowDetails {
+    fn create_window_details_safe(&self, hwnd: HWND, window_info: &crate::WindowInfo) -> WindowDetails {
         let rect = &window_info.rect;
         
         // Get screen dimensions for proper grid calculation
@@ -682,7 +659,7 @@ impl GridIpcServer {
             virtual_col + 1
         };
         
-        ipc::WindowDetails {
+        WindowDetails {
             hwnd: hwnd as u64,
             x: rect.left,
             y: rect.top,
@@ -710,7 +687,7 @@ impl GridIpcServer {
     /// Add an event listener for local event handling
     pub fn add_event_listener<F>(&mut self, listener: F)
     where
-        F: Fn(&ipc::GridEvent) + Send + Sync + 'static,
+        F: Fn(&GridEvent) + Send + Sync + 'static,
     {
         self.event_listeners.push(Box::new(listener));
     }
@@ -726,7 +703,7 @@ impl GridIpcServer {
         &self.config
     }    // Convenience methods for publishing specific events
     pub fn publish_window_created(&mut self, hwnd: u64, title: String, row: usize, col: usize) -> Result<(), Box<dyn std::error::Error>> {
-        let event = ipc::GridEvent::WindowCreated { 
+        let event = GridEvent::WindowCreated { 
             hwnd, 
             title, 
             row, 
@@ -746,12 +723,12 @@ impl GridIpcServer {
     }
 
     pub fn publish_window_destroyed(&mut self, hwnd: u64, title: String) -> Result<(), Box<dyn std::error::Error>> {
-        let event = ipc::GridEvent::WindowDestroyed { hwnd, title };
+        let event = GridEvent::WindowDestroyed { hwnd, title };
         self.publish_event(event)
     }
 
     pub fn publish_window_moved(&mut self, hwnd: u64, title: String, old_row: usize, old_col: usize, new_row: usize, new_col: usize) -> Result<(), Box<dyn std::error::Error>> {
-        let event = ipc::GridEvent::WindowMoved { 
+        let event = GridEvent::WindowMoved { 
             hwnd, 
             title, 
             old_row, 
@@ -773,7 +750,7 @@ impl GridIpcServer {
     }
 
     pub fn publish_grid_state_changed(&mut self, total_windows: usize, occupied_cells: usize) -> Result<(), Box<dyn std::error::Error>> {
-        let event = ipc::GridEvent::GridStateChanged {
+        let event = GridEvent::GridStateChanged {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -783,14 +760,7 @@ impl GridIpcServer {
         };
         self.publish_event(event)
     }    // Private helper methods
-    fn send_response(&mut self, response: ipc::GridResponse) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(ref mut publisher) = self.response_publisher {
-            let window_response = Self::grid_response_to_window_response(&response);
-            publisher.send_copy(window_response)?;
-            println!("📤 Sent response: {:?}", response);
-        }
-        Ok(())
-    }    fn count_occupied_cells(&self, tracker: &WindowTracker) -> usize {
+    fn count_occupied_cells(&self, tracker: &WindowTracker) -> usize {
         let mut occupied = std::collections::HashSet::new();
         for entry in &tracker.windows {
             let (_, window) = entry.pair();
@@ -896,16 +866,16 @@ impl GridIpcServer {
     }
 
     // Conversion helper methods
-    fn grid_event_to_window_event(&self, event: &ipc::GridEvent) -> ipc::WindowEvent {
+    fn grid_event_to_window_event(&self, event: &GridEvent) -> WindowEvent {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();        match event {
-            ipc::GridEvent::WindowCreated { 
+            GridEvent::WindowCreated { 
                 hwnd, row, col, grid_top_left_row, grid_top_left_col,
                 grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
                 real_width, real_height, monitor_id, ..
-            } => ipc::WindowEvent {
+            } => WindowEvent {
                 event_type: 0,
                 hwnd: *hwnd,
                 row: *row as u32,
@@ -922,17 +892,17 @@ impl GridIpcServer {
                 timestamp,
                 ..Default::default()
             },
-            ipc::GridEvent::WindowDestroyed { hwnd, .. } => ipc::WindowEvent {
+            GridEvent::WindowDestroyed { hwnd, .. } => WindowEvent {
                 event_type: 1,
                 hwnd: *hwnd,
                 timestamp,
                 ..Default::default()
             },
-            ipc::GridEvent::WindowMoved { 
+            GridEvent::WindowMoved { 
                 hwnd, old_row, old_col, new_row, new_col, grid_top_left_row, 
                 grid_top_left_col, grid_bottom_right_row, grid_bottom_right_col,
                 real_x, real_y, real_width, real_height, monitor_id, ..
-            } => ipc::WindowEvent {
+            } => WindowEvent {
                 event_type: 2,
                 hwnd: *hwnd,
                 old_row: *old_row as u32,
@@ -951,11 +921,11 @@ impl GridIpcServer {
                 timestamp,
                 ..Default::default()
             },
-            ipc::GridEvent::WindowMoveStart { 
+            GridEvent::WindowMoveStart { 
                 hwnd, current_row, current_col, grid_top_left_row, grid_top_left_col,
                 grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
                 real_width, real_height, monitor_id, ..
-            } => ipc::WindowEvent {
+            } => WindowEvent {
                 event_type: 4, // move_start
                 hwnd: *hwnd,
                 row: *current_row as u32,
@@ -972,11 +942,11 @@ impl GridIpcServer {
                 timestamp,
                 ..Default::default()
             },
-            ipc::GridEvent::WindowMoveStop { 
+            GridEvent::WindowMoveStop { 
                 hwnd, final_row, final_col, grid_top_left_row, grid_top_left_col,
                 grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
-                real_width, real_height, monitor_id, ..
-            } => ipc::WindowEvent {
+                real_width: real_width, real_height: real_height, monitor_id, ..
+            } => WindowEvent {
                 event_type: 5, // move_stop
                 hwnd: *hwnd,
                 row: *final_row as u32,
@@ -993,11 +963,11 @@ impl GridIpcServer {
                 timestamp,
                 ..Default::default()
             },
-            ipc::GridEvent::WindowResizeStart { 
+            GridEvent::WindowResizeStart { 
                 hwnd, current_row, current_col, grid_top_left_row, grid_top_left_col,
                 grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
                 real_width, real_height, monitor_id, ..
-            } => ipc::WindowEvent {
+            } => WindowEvent {
                 event_type: 6, // resize_start
                 hwnd: *hwnd,
                 row: *current_row as u32,
@@ -1014,11 +984,11 @@ impl GridIpcServer {
                 timestamp,
                 ..Default::default()
             },
-            ipc::GridEvent::WindowResizeStop { 
+            GridEvent::WindowResizeStop { 
                 hwnd, final_row, final_col, grid_top_left_row, grid_top_left_col,
                 grid_bottom_right_row, grid_bottom_right_col, real_x, real_y,
                 real_width, real_height, monitor_id, ..
-            } => ipc::WindowEvent {
+            } => WindowEvent {
                 event_type: 7, // resize_stop
                 hwnd: *hwnd,
                 row: *final_row as u32,
@@ -1035,7 +1005,7 @@ impl GridIpcServer {
                 timestamp,
                 ..Default::default()
             },
-            ipc::GridEvent::GridStateChanged { timestamp, total_windows, occupied_cells } => ipc::WindowEvent {
+            GridEvent::GridStateChanged { timestamp, total_windows, occupied_cells } => WindowEvent {
                 event_type: 3,
                 timestamp: *timestamp,
                 total_windows: *total_windows as u32,
@@ -1045,145 +1015,6 @@ impl GridIpcServer {
         }
     }
 
-    fn window_command_to_grid_command(command: &ipc::WindowCommand) -> ipc::GridCommand {
-        match command.command_type {
-            0 => ipc::GridCommand::MoveWindowToCell {
-                hwnd: command.hwnd,
-                target_row: command.target_row as usize,
-                target_col: command.target_col as usize,
-            },
-            1 => ipc::GridCommand::GetGridState,
-            2 => ipc::GridCommand::GetWindowList,
-            5 => ipc::GridCommand::AssignWindowToVirtualCell {
-                hwnd: command.hwnd,
-                target_row: command.target_row as usize,
-                target_col: command.target_col as usize,
-            },
-            6 => ipc::GridCommand::AssignWindowToMonitorCell {
-                hwnd: command.hwnd,
-                target_row: command.target_row as usize,
-                target_col: command.target_col as usize,
-                monitor_id: command.monitor_id as usize,
-            },
-            _ => ipc::GridCommand::GetGridState, // Default fallback
-        }
-    }    fn grid_response_to_window_response(response: &ipc::GridResponse) -> ipc::WindowResponse {
-        match response {
-            ipc::GridResponse::Success => ipc::WindowResponse {
-                response_type: 0,
-                error_code: 0,
-                ..Default::default()
-            },
-            ipc::GridResponse::Error(_) => ipc::WindowResponse {
-                response_type: 1,
-                error_code: 1,
-                ..Default::default()
-            },
-            ipc::GridResponse::WindowList { windows } => ipc::WindowResponse {
-                response_type: 2,
-                window_count: windows.len() as u32,
-                ..Default::default()
-            },
-            ipc::GridResponse::GridState { total_windows, occupied_cells, .. } => ipc::WindowResponse {
-                response_type: 3,
-                error_code: 0,
-                window_count: *total_windows as u32,
-                data: [*occupied_cells as u64, 0, 0, 0],
-            },            ipc::GridResponse::SavedLayouts { layout_names } => ipc::WindowResponse {
-                response_type: 4,
-                error_code: 0,
-                window_count: layout_names.len() as u32,
-                ..Default::default()
-            },            ipc::GridResponse::AnimationStatus { statuses } => ipc::WindowResponse {
-                response_type: 5,
-                error_code: 0,
-                window_count: statuses.len() as u32,
-                data: if let Some((hwnd, is_active, progress)) = statuses.first() {
-                    [*hwnd, if *is_active { 1 } else { 0 }, (*progress * 1000.0) as u64, 0]
-                } else {
-                    [0, 0, 0, 0]
-                },
-                ..Default::default()
-            },
-            ipc::GridResponse::GridConfig(config) => ipc::WindowResponse {
-                response_type: 6, // Grid config response type
-                error_code: 0,
-                window_count: 0, // Not used for config
-                data: [config.rows as u64, config.cols as u64, 0, 0],
-                ..Default::default()
-            },
-        }
-    }
-
-    fn window_info_to_details(&self, hwnd: HWND, window_info: &crate::WindowInfo) -> ipc::WindowDetails {
-        let rect = &window_info.rect;
-        
-        // Get virtual grid positions
-        let (virtual_start_row, virtual_start_col, virtual_end_row, virtual_end_col) = 
-            if let Ok(tracker) = self.tracker.lock() {
-                let cells = tracker.window_to_grid_cells(rect);
-                if cells.is_empty() {
-                    (0, 0, 0, 0)
-                } else {
-                    let min_row = cells.iter().map(|(r, _)| *r).min().unwrap_or(0) as u32;
-                    let max_row = cells.iter().map(|(r, _)| *r).max().unwrap_or(0) as u32;
-                    let min_col = cells.iter().map(|(_, c)| *c).min().unwrap_or(0) as u32;
-                    let max_col = cells.iter().map(|(_, c)| *c).max().unwrap_or(0) as u32;
-                    (min_row, min_col, max_row, max_col)
-                }
-            } else {
-                (0, 0, 0, 0)
-            };
-
-        // Find which monitor this window is primarily on and get monitor grid positions
-        let (monitor_id, monitor_start_row, monitor_start_col, monitor_end_row, monitor_end_col) = 
-            if let Ok(tracker) = self.tracker.lock() {
-                // Find the monitor that contains the center of the window
-                let center_x = rect.left + (rect.right - rect.left) / 2;
-                let center_y = rect.top + (rect.bottom - rect.top) / 2;
-                
-                let mut found_monitor = None;
-                
-                for (i, monitor) in tracker.monitor_grids.iter().enumerate() {
-                    let (left, top, right, bottom) = monitor.monitor_rect;
-                    if center_x >= left && center_x < right && center_y >= top && center_y < bottom {
-                        // Get grid positions within this monitor
-                        let cells = monitor.window_to_grid_cells(rect);
-                        if cells.is_empty() {
-                            found_monitor = Some((i as u32, 0, 0, 0, 0));
-                        } else {
-                            let min_row = cells.iter().map(|(r, _)| *r).min().unwrap_or(0) as u32;
-                            let max_row = cells.iter().map(|(r, _)| *r).max().unwrap_or(0) as u32;
-                            let min_col = cells.iter().map(|(_, c)| *c).min().unwrap_or(0) as u32;
-                            let max_col = cells.iter().map(|(_, c)| *c).max().unwrap_or(0) as u32;
-                            found_monitor = Some((i as u32, min_row, min_col, max_row, max_col));
-                        }
-                        break;
-                    }
-                }
-                
-                found_monitor.unwrap_or((0, 0, 0, 0, 0))
-            } else {
-                (0, 0, 0, 0, 0)
-            };
-
-        ipc::WindowDetails {
-            hwnd: hwnd as u64,
-            x: rect.left,
-            y: rect.top,
-            width: rect.right - rect.left,
-            height: rect.bottom - rect.top,
-            virtual_row_start: virtual_start_row,
-            virtual_col_start: virtual_start_col,
-            virtual_row_end: virtual_end_row,
-            virtual_col_end: virtual_end_col,            monitor_id,
-            monitor_row_start: monitor_start_row,
-            monitor_col_start: monitor_start_col,
-            monitor_row_end: monitor_end_row,
-            monitor_col_end: monitor_end_col,
-            title_len: window_info.title.len().min(255) as u32,
-        }    }
-    
     /// Setup window event monitoring using the new library-based system
     pub fn setup_window_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("🔗 Setting up integrated window event monitoring using library system...");
@@ -1191,13 +1022,15 @@ impl GridIpcServer {
         // Create a channel for focus events
         let (focus_sender, focus_receiver) = mpsc::channel::<(u64, bool)>();
         self.focus_event_receiver = Some(focus_receiver);
-          // Create window event configuration with focus publishing callback
+        // Create a channel for window move/resize events
+        let (event_sender, event_receiver) = mpsc::channel::<crate::ipc_protocol::GridEvent>();
+        self.event_receiver = Some(event_receiver);
+        // Create window event configuration with focus and event publishing callbacks
         let config = WindowEventConfig {
             tracker: self.tracker.clone(),
             focus_callback: Some(Box::new(move |hwnd: HWND, is_focused: bool| {
                 println!("🎯 Focus event: HWND {} - {}", hwnd as u64, 
                         if is_focused { "FOCUSED" } else { "DEFOCUSED" });
-                
                 // Send focus event via channel (convert HWND to u64 for thread safety)
                 match focus_sender.send((hwnd as u64, is_focused)) {
                     Ok(()) => {
@@ -1213,15 +1046,20 @@ impl GridIpcServer {
                 // This callback will be called when window events occur
                 println!("💓 Heartbeat reset triggered by window event");
             })),
+            event_callback: Some(Box::new(move |event: crate::ipc_protocol::GridEvent| {
+                // Debug: Log every event received by the callback
+                println!("[event_callback] Received event: {:?}", event);
+                // Send event to the main event loop via channel
+                if let Err(e) = event_sender.send(event.clone()) {
+                    println!("❌ Failed to send event via channel: {:?}", e);
+                }
+            })),
             debug_mode: true,
         };
-        
         // Setup window events using the new library system
         window_events::setup_window_events(config).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>)?;
-        
         // Initialize heartbeat service with 30-second timeout
         self.heartbeat_service = Some(HeartbeatService::new(Duration::from_secs(30)));
-        
         println!("✅ Library-based window event monitoring is now active!");
         println!("🎯 Focus tracking and heartbeat services are operational");
         println!("📢 Focus events will be published through the main event loop");
@@ -1335,7 +1173,7 @@ impl GridIpcServer {
     /// Send heartbeat message to keep clients connected during idle periods
     pub fn send_heartbeat(&mut self, iteration: u64, uptime_ms: u64) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ref heartbeat_publisher) = self.heartbeat_publisher {
-            let heartbeat = ipc::HeartbeatMessage {
+            let heartbeat = HeartbeatMessage {
                 timestamp: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()

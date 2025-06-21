@@ -1,4 +1,5 @@
 use e_grid::{GridClient, ipc};
+use e_grid::ipc_client::{ClientCellState};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -157,31 +158,155 @@ impl AppState {
                 }
             }
         }
-    }fn update_grid_state(&mut self) {
+    }    fn update_grid_state(&mut self) {
         if let Some(ref mut client) = self.grid_client {
             // Request current grid state from server
             match client.request_grid_state() {
                 Ok(_) => {
                     self.add_log(LogLevel::Info, "Grid state requested from server".to_string());
-                    // Simulate some monitor data for demonstration
-                    self.simulate_monitor_data();
                 },
                 Err(e) => {
                     self.add_log(LogLevel::Error, format!("Grid state request failed: {}", e));
                     // Reset connection to trigger reconnection
                     self.grid_client = None;
                     self.connection_status = "Disconnected".to_string();
+                    return;
                 }
             }
+            
+            // Update with real data after the request
+            self.update_from_real_server_data();
         } else {
             // If not connected, show placeholder data
             if self.monitors.is_empty() {
                 self.create_placeholder_monitors();
             }
         }
+    }    // Use REAL server data instead of simulated data
+    fn update_from_real_server_data(&mut self) {
+        let (server_monitors, server_windows, virtual_grid, has_recent_data) = if let Some(ref client) = self.grid_client {
+            (
+                client.get_monitor_data(),
+                client.get_window_data(),
+                client.get_virtual_grid_state(),
+                client.has_recent_data()
+            )
+        } else {
+            return;
+        };
+        
+        // Add debug logging to see what data we're getting
+        let monitor_count = server_monitors.len();
+        let window_count = server_windows.len();
+        self.add_log(LogLevel::Info, format!("Server data check: {} monitors, {} windows", 
+            monitor_count, window_count));
+        
+        if !server_monitors.is_empty() {
+            self.add_log(LogLevel::Info, format!("Received {} monitors from server", monitor_count));
+            
+            // Convert server monitor data to TUI monitor data
+            self.monitors.clear();
+            for server_monitor in server_monitors {
+                let mut monitor = MonitorState {
+                    id: server_monitor.monitor_id,
+                    name: format!("Monitor {}", server_monitor.monitor_id),
+                    width: server_monitor.width.max(0) as u32,
+                    height: server_monitor.height.max(0) as u32,
+                    grid_rows: server_monitor.grid.len(),
+                    grid_cols: server_monitor.grid.get(0).map(|row| row.len()).unwrap_or(0),
+                    windows: Vec::new(),
+                    last_update: Instant::now(),
+                };
+                debug!("Mapping monitor: id={} name={} size={}x{} grid={}x{}", monitor.id, monitor.name, monitor.width, monitor.height, monitor.grid_rows, monitor.grid_cols);
+                let mut seen_hwnds = std::collections::HashSet::new();
+                for (row_idx, row) in server_monitor.grid.iter().enumerate() {
+                    for (col_idx, cell) in row.iter().enumerate() {
+                        if let Some(hwnd) = cell {
+                            if seen_hwnds.insert(*hwnd) {
+                                if let Some(window_info) = server_windows.get(hwnd) {
+                                    monitor.windows.push(WindowGridState {
+                                        hwnd: *hwnd,
+                                        title: format!("HWND {}", hwnd), // Replace with real title if available
+                                        grid_top_left_row: window_info.monitor_row_start,
+                                        grid_top_left_col: window_info.monitor_col_start,
+                                        grid_bottom_right_row: window_info.monitor_row_end,
+                                        grid_bottom_right_col: window_info.monitor_col_end,
+                                        real_x: window_info.x,
+                                        real_y: window_info.y,
+                                        real_width: window_info.width.max(0) as u32,
+                                        real_height: window_info.height.max(0) as u32,
+                                        last_event_type: 0, // TODO: Use real event type if available
+                                    });
+                                    debug!("  Window HWND={} grid=({},{}-{},{}), real=({},{} {}x{})", hwnd, window_info.monitor_row_start, window_info.monitor_col_start, window_info.monitor_row_end, window_info.monitor_col_end, window_info.x, window_info.y, window_info.width, window_info.height);
+                                }
+                            }
+                        }
+                    }
+                }
+                self.monitors.push(monitor);
+            }
+            
+            // Update total window count from real data
+            self.total_windows = window_count as u32;
+            
+            self.add_log(LogLevel::Info, format!("Updated with real server data: {} monitors, {} windows", 
+                self.monitors.len(), self.total_windows));
+        } else if !virtual_grid.is_empty() {
+            self.add_log(LogLevel::Info, format!("Using virtual grid data: {}x{} cells", 
+                virtual_grid.len(), virtual_grid.get(0).map(|row| row.len()).unwrap_or(0)));
+            
+            // Create a single virtual monitor from virtual grid data
+            let mut virtual_monitor = MonitorState {
+                id: 999, // Virtual monitor ID
+                name: "Virtual Monitor".to_string(),
+                width: 1920, // Default size
+                height: 1080,
+                grid_rows: virtual_grid.len(),
+                grid_cols: virtual_grid.get(0).map(|row| row.len()).unwrap_or(0),
+                windows: Vec::new(),
+                last_update: Instant::now(),
+            };
+            
+            // Convert virtual grid to windows
+            for (row_idx, row) in virtual_grid.iter().enumerate() {
+                for (col_idx, cell) in row.iter().enumerate() {
+                    if let ClientCellState::Occupied(hwnd) = cell {
+                        if let Some(window_info) = server_windows.get(hwnd) {
+                            virtual_monitor.windows.push(WindowGridState {
+                                hwnd: *hwnd,
+                                title: format!("Window {}", hwnd), // Use hwnd as title
+                                grid_top_left_row: row_idx as u32,
+                                grid_top_left_col: col_idx as u32,
+                                grid_bottom_right_row: row_idx as u32,
+                                grid_bottom_right_col: col_idx as u32,
+                                real_x: window_info.x,
+                                real_y: window_info.y,
+                                real_width: window_info.width.max(0) as u32,
+                                real_height: window_info.height.max(0) as u32,
+                                last_event_type: 0,
+                            });
+                        }
+                    }
+                }
+            }
+            
+            self.monitors = vec![virtual_monitor];
+            self.total_windows = window_count as u32;
+        } else if has_recent_data {
+            self.add_log(LogLevel::Warning, "Client has recent data but no virtual grid".to_string());
+            if self.monitors.is_empty() {
+                self.create_placeholder_monitors();
+            }
+        } else {
+            // No real data available yet - client is still connecting or no data
+            self.add_log(LogLevel::Warning, "No monitor data received from server yet".to_string());
+            if self.monitors.is_empty() {
+                self.create_placeholder_monitors();
+            }
+        }
     }
 
-    // Create placeholder monitor data for demonstration
+    // Create placeholder monitor data for demonstration (fallback when no server data)
     fn create_placeholder_monitors(&mut self) {
         self.monitors.clear();
         

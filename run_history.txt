@@ -9,3 +9,4 @@ grid_layout_client_demo
 comprehensive_focus_demo
 comprehensive_focus_demo
 grid_client_demo
+test_animated_transitions

@@ -1,4 +1,4 @@
-use crate::ipc::{self, WindowCommand};
+use crate::ipc_protocol::{IpcCommand, IpcCommandType, IpcResponse, IpcResponseType, WindowDetails, WindowEvent, WindowFocusEvent, HeartbeatMessage, AnimationCommand, AnimationStatus, GridLayoutMessage, GridCellAssignment, GridEvent, GRID_EVENTS_SERVICE, GRID_COMMANDS_SERVICE, GRID_RESPONSE_SERVICE, GRID_WINDOW_DETAILS_SERVICE, GRID_FOCUS_EVENTS_SERVICE, GRID_LAYOUT_SERVICE, GRID_CELL_ASSIGNMENTS_SERVICE, ANIMATION_COMMANDS_SERVICE, ANIMATION_STATUS_SERVICE, GRID_HEARTBEAT_SERVICE};
 use crate::GridConfig;
 use crate::grid_client_errors::{GridClientError, GridClientResult, RetryConfig, 
                                 retry_with_backoff, validate_grid_coordinates, 
@@ -8,11 +8,9 @@ use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::service::ipc::Service;
 use std::collections::HashMap;
-use std::ptr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use winapi::um::winuser::{EnumDisplayMonitors};
 use log::{info, debug, warn, error};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,8 +45,8 @@ pub struct ClientWindowInfo {
     pub title_len: u32,
 }
 
-impl From<ipc::WindowDetails> for ClientWindowInfo {
-    fn from(details: ipc::WindowDetails) -> Self {
+impl From<WindowDetails> for ClientWindowInfo {
+    fn from(details: WindowDetails) -> Self {
         Self {
             hwnd: details.hwnd,
             x: details.x,
@@ -74,7 +72,7 @@ pub struct GridClient {
     config: GridConfig,
     
     // IPC components - only keep what we need for sending commands
-    command_publisher: Publisher<Service, ipc::WindowCommand, ()>,
+    command_publisher: Publisher<Service, IpcCommand, ()>,
     
     // Local grid state
     windows: Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
@@ -88,7 +86,9 @@ pub struct GridClient {
     running: Arc<Mutex<bool>>,
     
     // NEW: Focus event handling for e_midi integration
-    focus_callback: Arc<Mutex<Option<Box<dyn Fn(ipc::WindowFocusEvent) + Send + Sync>>>>,
+    focus_callback: Arc<Mutex<Option<Box<dyn Fn(WindowFocusEvent) + Send + Sync>>>>,
+    // NEW: Window event callback for demo logging
+    window_event_callback: Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -101,6 +101,17 @@ pub struct MonitorGridInfo {    pub monitor_id: u32,
 }
 
 impl GridClient {
+
+
+        pub fn set_window_event_callback<F>(&mut self, callback: F) -> GridClientResult<()>
+    where
+        F: Fn(WindowEvent) + Send + Sync + 'static,
+    {
+        let mut cb_lock = safe_arc_lock(&self.window_event_callback, "window event callback registration")?;
+        *cb_lock = Some(Box::new(callback));
+        Ok(())
+    }
+
     /// Request grid configuration from server before creating client
     fn request_grid_config_from_server() -> GridClientResult<GridConfig> {
         // For now, return the same default config as the server
@@ -123,8 +134,8 @@ impl GridClient {
         };
         let command_publisher = retry_with_backoff(|| -> Result<_, Box<dyn std::error::Error>> {
             let command_service = node
-                .service_builder(&ServiceName::new(ipc::GRID_COMMANDS_SERVICE).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?)
-                .publish_subscribe::<ipc::WindowCommand>()
+                .service_builder(&ServiceName::new(GRID_COMMANDS_SERVICE).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?)
+                .publish_subscribe::<IpcCommand>()
                 .open().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
             Ok(command_service.publisher_builder().create().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?)
         }, &retry_config)
@@ -142,6 +153,7 @@ impl GridClient {
             auto_display: Arc::new(Mutex::new(true)),
             running: Arc::new(Mutex::new(true)),
             focus_callback: Arc::new(Mutex::new(None)),
+            window_event_callback: Arc::new(Mutex::new(None)),
         };
 
         info!("✅ Client initialized with grid size: {}x{}", client.config.rows, client.config.cols);
@@ -155,143 +167,48 @@ impl GridClient {
     
     
     pub fn request_grid_config(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let command = WindowCommand {
-            command_type: 8, // New command type for GetGridConfig
-            hwnd: 0,
-            target_row: 0,
-            target_col: 0,
-            monitor_id: 0,
-            layout_id: 1001, // Use layout_id as command identifier
-            animation_duration_ms: 0,
-            easing_type: 0,
+        let command = IpcCommand {
+            command_type: IpcCommandType::GetGridState, // Use GetGridState instead of GetGridConfig
+            hwnd: None,
+            target_row: None,
+            target_col: None,
+            monitor_id: None,
+            layout_id: None,
+            animation_duration_ms: None,
+            easing_type: None,
+            protocol_version: 1,
         };
         self.command_publisher.send_copy(command)?;
         debug!("🔧 Requested grid configuration from server...");
         Ok(())
     }
-    fn process_responses(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // TODO: Implement response subscriber for config updates
-        // For now this is a placeholder
-        Ok(())    }    pub fn wait_for_config(&mut self, _timeout_ms: u64) -> Result<GridConfig, Box<dyn std::error::Error>> {
+    
+    pub fn wait_for_config(&mut self, _timeout_ms: u64) -> Result<GridConfig, Box<dyn std::error::Error>> {
         // For now, just return the current config
         // TODO: Implement actual waiting for server response
         Ok(self.config.clone())
-    }
-      fn initialize_client_grid(&self) -> GridClientResult<()> {
-        // Get virtual screen dimensions
-        let virtual_rect = Self::get_virtual_screen_rect();
-        let actual_monitors = Self::get_actual_monitor_bounds()
-            .map_err(|e| GridClientError::MonitorError(format!("Failed to get monitor bounds: {}", e)))?;
-          debug!("🔍 DEBUG: Client virtual screen: {}x{} at ({},{})", 
-            virtual_rect.2 - virtual_rect.0, virtual_rect.3 - virtual_rect.1,
-            virtual_rect.0, virtual_rect.1);
-        debug!("🔍 DEBUG: Client found {} monitors", actual_monitors.len());
-        for (i, monitor) in actual_monitors.iter().enumerate() {
-            debug!("   Monitor {}: {}x{} at ({},{})", i, 
-                monitor.2 - monitor.0, monitor.3 - monitor.1,
-                monitor.0, monitor.1);
-        }
-          // Store monitor information for display
-        {
-            let mut monitors_lock = safe_arc_lock(&self.monitors, "monitors initialization")?;
-            monitors_lock.clear();
-            for (i, monitor) in actual_monitors.iter().enumerate() {
-                let monitor_info = MonitorGridInfo {
-                    monitor_id: i as u32,
-                    width: monitor.2 - monitor.0,
-                    height: monitor.3 - monitor.1,
-                    x: monitor.0,
-                    y: monitor.1,
-                    grid: vec![vec![None; self.config.cols]; self.config.rows],
-                };
-                monitors_lock.push(monitor_info);
-            }
-            debug!("🔍 DEBUG: Stored {} monitor grid structures", monitors_lock.len());
-        }
-          let cell_width = (virtual_rect.2 - virtual_rect.0) / self.config.cols as i32;
-        let cell_height = (virtual_rect.3 - virtual_rect.1) / self.config.rows as i32;
+    }      fn initialize_client_grid(&self) -> GridClientResult<()> {
+        // Initialize basic client grid structure - monitor details will come from server
+        debug!("🔧 Initializing client grid structure {}x{}", self.config.rows, self.config.cols);
         
         {
             let mut grid = safe_arc_lock(&self.virtual_grid, "virtual grid initialization")?;
-            // Initialize all cells based on whether they're on an actual monitor  
+            // Initialize all cells as empty - server will provide actual on-screen/off-screen status
             for row in 0..self.config.rows {
                 for col in 0..self.config.cols {
-                    let cell_left = virtual_rect.0 + (col as i32 * cell_width);
-                    let cell_top = virtual_rect.1 + (row as i32 * cell_height);
-                    let cell_right = cell_left + cell_width;
-                    let cell_bottom = cell_top + cell_height;
-                    
-                    // Check if this cell overlaps with any actual monitor
-                    let mut is_on_screen = false;
-                    for monitor_rect in &actual_monitors {
-                        if cell_left < monitor_rect.2 && cell_right > monitor_rect.0 &&
-                           cell_top < monitor_rect.3 && cell_bottom > monitor_rect.1 {
-                            is_on_screen = true;
-                            break;
-                        }
-                    }
-                      grid[row][col] = if is_on_screen {
-                        ClientCellState::Empty
-                    } else {
-                        ClientCellState::OffScreen
-                    };
+                    grid[row][col] = ClientCellState::Empty;
                 }
             }
         }
         
-        Ok(())
-    }
-
-    fn get_virtual_screen_rect() -> (i32, i32, i32, i32) {
-        unsafe {
-            use winapi::um::winuser::{GetSystemMetrics, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, 
-                                      SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN};
-            let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-            let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-            let width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-            let height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-            (left, top, left + width, top + height)
-        }
-    }    fn get_actual_monitor_bounds() -> GridClientResult<Vec<(i32, i32, i32, i32)>> {
-        let mut monitors = Vec::new();
-        
-        unsafe {
-            // Enumerate all monitors
-            extern "system" fn monitor_enum_proc(
-                _hmonitor: winapi::shared::windef::HMONITOR,
-                _hdc: winapi::shared::windef::HDC,
-                rect: *mut winapi::shared::windef::RECT,
-                data: winapi::shared::minwindef::LPARAM,
-            ) -> i32 {
-                unsafe {
-                    let monitors = &mut *(data as *mut Vec<(i32, i32, i32, i32)>);
-                    let r = *rect;
-                    monitors.push((r.left, r.top, r.right, r.bottom));
-                }
-                1 // Continue enumeration
-            }
-            
-            let result = EnumDisplayMonitors(
-                ptr::null_mut(),
-                ptr::null(),
-                Some(monitor_enum_proc),
-                &mut monitors as *mut Vec<(i32, i32, i32, i32)> as winapi::shared::minwindef::LPARAM,
-            );
-            
-            if result == 0 {
-                return Err(GridClientError::MonitorError(
-                    "Failed to enumerate display monitors".to_string()
-                ));
-            }
+        // Initialize empty monitor list - will be populated from server data
+        {
+            let mut monitors_lock = safe_arc_lock(&self.monitors, "monitors initialization")?;
+            monitors_lock.clear();
+            debug!("🔧 Client grid initialized - awaiting server data for monitor layouts");
         }
         
-        if monitors.is_empty() {
-            return Err(GridClientError::MonitorError(
-                "No monitors detected".to_string()
-            ));
-        }        
-        Ok(monitors)
-    }
+        Ok(())    }
 
     pub fn start_background_monitoring(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let windows = self.windows.clone();
@@ -300,8 +217,9 @@ impl GridClient {
         let auto_display = self.auto_display.clone();
         let running = self.running.clone();
         let focus_callback = self.focus_callback.clone();
+        let window_event_callback = self.window_event_callback.clone();
         let config = self.config.clone(); // Clone the config for the background thread
-          thread::spawn(move || {
+        thread::spawn(move || {
             let mut connection_retry_count = 0;
             let max_retries = 5;  // Reduced from 10
             let retry_delay = Duration::from_secs(3);  // Increased from 2 seconds
@@ -327,6 +245,7 @@ impl GridClient {
                             &auto_display,
                             &running,
                             &focus_callback,
+                            &window_event_callback,
                             &config
                         );
                         
@@ -379,16 +298,17 @@ impl GridClient {
           Ok(())
     }
 
-    fn run_monitoring_loop(        event_subscriber: &Subscriber<Service, ipc::WindowEvent, ()>,
-        window_details_subscriber: &Subscriber<Service, ipc::WindowDetails, ()>,
-        focus_subscriber: &Subscriber<Service, ipc::WindowFocusEvent, ()>,
-        heartbeat_subscriber: &Subscriber<Service, ipc::HeartbeatMessage, ()>,
+    fn run_monitoring_loop(        event_subscriber: &Subscriber<Service, WindowEvent, ()>,
+        window_details_subscriber: &Subscriber<Service, WindowDetails, ()>,
+        focus_subscriber: &Subscriber<Service, WindowFocusEvent, ()>,
+        heartbeat_subscriber: &Subscriber<Service, HeartbeatMessage, ()>,
         windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
         virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
         monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
         auto_display: &Arc<Mutex<bool>>,
         running: &Arc<Mutex<bool>>,
-        focus_callback: &Arc<Mutex<Option<Box<dyn Fn(ipc::WindowFocusEvent) + Send + Sync>>>>,
+        focus_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowFocusEvent) + Send + Sync>>>>,
+        window_event_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
         config: &GridConfig,
     ) -> MonitoringResult {
         let mut consecutive_empty_cycles = 0;
@@ -407,7 +327,14 @@ impl GridClient {
                 let event = *event_sample;
                 _events_received += 1;
                 had_activity = true;
-                
+                // Debug log for all received window events
+                println!("[DEBUG] Received WindowEvent: type={} hwnd={} row={} col={}", event.event_type, event.hwnd, event.row, event.col);
+                // Call user callback if set
+                if let Ok(cb_lock) = window_event_callback.lock() {
+                    if let Some(ref cb) = *cb_lock {
+                        cb(event.clone());
+                    }
+                }
                 Self::handle_window_event(&event, windows, virtual_grid, monitors, auto_display, config);
             }
             
@@ -501,8 +428,6 @@ impl GridClient {
     
     /// Animate window with specified duration and easing
     pub fn animate_window(&mut self, hwnd: u64, duration_ms: u32, easing: crate::EasingType) -> Result<(), Box<dyn std::error::Error>> {
-        use crate::ipc::WindowCommand;
-        
         let easing_type = match easing {
             crate::EasingType::Linear => 0,
             crate::EasingType::EaseIn => 1,
@@ -512,37 +437,34 @@ impl GridClient {
             crate::EasingType::Elastic => 5,
             crate::EasingType::Back => 6,
         };
-        
-        let command = WindowCommand {
-            command_type: 9, // Animation command
-            hwnd,
-            target_row: 0,
-            target_col: 0,
-            monitor_id: 0,
-            layout_id: 0,
-            animation_duration_ms: duration_ms,
-            easing_type,
+        let command = IpcCommand {
+            command_type: IpcCommandType::AnimateWindow,
+            hwnd: Some(hwnd),
+            target_row: None,
+            target_col: None,
+            monitor_id: None,
+            layout_id: None,
+            animation_duration_ms: Some(duration_ms),
+            easing_type: Some(easing_type),
+            protocol_version: 1,
         };
-        
-        self.command_publisher.send_copy(command)?;
+        self.send_command(command)?;
         debug!("🎬 Animation command sent for window {}", hwnd);
         Ok(())
     }
-      /// Move window to a specific grid cell (actually moves the window)
+    /// Move window to a specific grid cell (actually moves the window)
     pub fn move_window_to_cell(&mut self, hwnd: u64, row: u32, col: u32) -> Result<(), Box<dyn std::error::Error>> {
-        use crate::ipc::WindowCommand;
-        
-        let command = WindowCommand {
-            command_type: 0, // MoveWindowToCell
-            hwnd,
-            target_row: row,
-            target_col: col,
-            monitor_id: 0,
-            layout_id: 0,
-            animation_duration_ms: 0,
-            easing_type: 0,
+        let command = IpcCommand {
+            command_type: IpcCommandType::MoveWindow,
+            hwnd: Some(hwnd),
+            target_row: Some(row),
+            target_col: Some(col),
+            monitor_id: None,
+            layout_id: None,
+            animation_duration_ms: None,
+            easing_type: None,
+            protocol_version: 1,
         };
-        
         self.send_command(command)?;
         Ok(())
     }    
@@ -550,7 +472,7 @@ impl GridClient {
     /// This enables e_midi integration by allowing it to listen for focus changes
     pub fn set_focus_callback<F>(&mut self, callback: F) -> GridClientResult<()>
     where
-        F: Fn(ipc::WindowFocusEvent) + Send + Sync + 'static,
+        F: Fn(WindowFocusEvent) + Send + Sync + 'static,
     {
         let mut focus_callback_lock = safe_arc_lock(&self.focus_callback, "focus callback registration")?;
         *focus_callback_lock = Some(Box::new(callback));
@@ -576,34 +498,34 @@ impl GridClient {
 
 
 
-    fn create_background_subscribers() -> Result<(Subscriber<Service, ipc::WindowEvent, ()>, Subscriber<Service, ipc::WindowDetails, ()>, Subscriber<Service, ipc::WindowFocusEvent, ()>, Subscriber<Service, ipc::HeartbeatMessage, ()>), Box<dyn std::error::Error>> {
+    fn create_background_subscribers() -> Result<(Subscriber<Service, WindowEvent, ()>, Subscriber<Service, WindowDetails, ()>, Subscriber<Service, WindowFocusEvent, ()>, Subscriber<Service, HeartbeatMessage, ()>), Box<dyn std::error::Error>> {
         let node = NodeBuilder::new().create::<Service>()?;
 
         // Create event subscriber
         let event_service = node
-            .service_builder(&ServiceName::new(ipc::GRID_EVENTS_SERVICE)?)
-            .publish_subscribe::<ipc::WindowEvent>()
+            .service_builder(&ServiceName::new(GRID_EVENTS_SERVICE)?)
+            .publish_subscribe::<WindowEvent>()
             .open()?;
         let event_subscriber = event_service.subscriber_builder().create()?;
 
         // Create window details subscriber
         let window_details_service = node
-            .service_builder(&ServiceName::new(ipc::GRID_WINDOW_DETAILS_SERVICE)?)
-            .publish_subscribe::<ipc::WindowDetails>()
+            .service_builder(&ServiceName::new(GRID_WINDOW_DETAILS_SERVICE)?)
+            .publish_subscribe::<WindowDetails>()
             .open()?;
         let window_details_subscriber = window_details_service.subscriber_builder().create()?;
 
         // Create focus events subscriber for e_midi integration
         let focus_service = node
-            .service_builder(&ServiceName::new(ipc::GRID_FOCUS_EVENTS_SERVICE)?)
-            .publish_subscribe::<ipc::WindowFocusEvent>()
+            .service_builder(&ServiceName::new(GRID_FOCUS_EVENTS_SERVICE)?)
+            .publish_subscribe::<WindowFocusEvent>()
             .open()?;
         let focus_subscriber = focus_service.subscriber_builder().create()?;
 
         // Create heartbeat subscriber for connection monitoring
         let heartbeat_service = node
-            .service_builder(&ServiceName::new(ipc::GRID_HEARTBEAT_SERVICE)?)
-            .publish_subscribe::<ipc::HeartbeatMessage>()
+            .service_builder(&ServiceName::new(GRID_HEARTBEAT_SERVICE)?)
+            .publish_subscribe::<HeartbeatMessage>()
             .open()?;
         let heartbeat_subscriber = heartbeat_service.subscriber_builder().create()?;
 
@@ -611,7 +533,7 @@ impl GridClient {
     }
     
     fn handle_window_event(
-        event: &ipc::WindowEvent,
+        event: &WindowEvent,
         windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
         virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
         monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
@@ -623,38 +545,50 @@ impl GridClient {
             1 => "DESTROYED", 
             2 => "MOVED",
             3 => "STATE_CHANGED",
+            4 => "MOVE_START",
+            5 => "MOVE_STOP",
+            6 => "RESIZE_START",
+            7 => "RESIZE_STOP",
             _ => "UNKNOWN",
         };
-          debug!("📡 [REAL-TIME EVENT] {}: HWND {} at ({}, {})", 
+        debug!("[REAL-TIME EVENT] {}: HWND {} at ({}, {})", 
             event_name, event.hwnd, event.row, event.col);
-        
         match event.event_type {
             0 => { // Window created - we'll get window details shortly
-                debug!("   🆕 New window {} created, waiting for details...", event.hwnd);
+                debug!("   New window {} created, waiting for details...", event.hwnd);
             }
             1 => { // Window destroyed
                 Self::remove_window_from_client(event.hwnd, windows, virtual_grid, monitors);
-                debug!("   🗑️  Removed window {} from client state", event.hwnd);
+                debug!("   Removed window {} from client state", event.hwnd);
             }
             2 => { // Window moved - we'll get updated window details shortly
-                debug!("   🔄 Window {} moved, waiting for updated details...", event.hwnd);
+                debug!("   Window {} moved, waiting for updated details...", event.hwnd);
+            }
+            4 => { // Move start
+                debug!("   Window {} move started at ({}, {})", event.hwnd, event.row, event.col);
+            }
+            5 => { // Move stop
+                debug!("   Window {} move stopped at ({}, {})", event.hwnd, event.row, event.col);
+            }
+            6 => { // Resize start
+                debug!("   Window {} resize started at ({}, {})", event.hwnd, event.row, event.col);
+            }
+            7 => { // Resize stop
+                debug!("   Window {} resize stopped at ({}, {})", event.hwnd, event.row, event.col);
             }
             _ => {}
         }
-        
         // Only display grid for significant events and not too frequently
         static mut LAST_EVENT_DISPLAY: std::time::Instant = unsafe { std::mem::zeroed() };
         static mut EVENT_DISPLAY_INITIALIZED: bool = false;
-        
         unsafe {
             if !EVENT_DISPLAY_INITIALIZED {
                 LAST_EVENT_DISPLAY = std::time::Instant::now();
                 EVENT_DISPLAY_INITIALIZED = true;
             }
-            
             if *auto_display.lock().unwrap() &&               (event.event_type == 0 || event.event_type == 1) && // Only for create/destroy
                LAST_EVENT_DISPLAY.elapsed().as_millis() > 500 { // Max twice per second
-                debug!("   📊 Displaying grid after {} event...", event_name);
+                debug!("   Displaying grid after {} event...", event_name);
                 Self::display_virtual_grid(&virtual_grid, &windows, &config);
                 LAST_EVENT_DISPLAY = std::time::Instant::now();
             }
@@ -698,7 +632,7 @@ impl GridClient {
         }
     }
         fn handle_window_details(
-        details: &ipc::WindowDetails,
+        details: &WindowDetails,
         windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
         virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
         monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
@@ -745,8 +679,8 @@ impl GridClient {
         }
     }    /// Handle focus events for e_midi integration
     fn handle_focus_event(
-        focus_event: &ipc::WindowFocusEvent,
-        focus_callback: &Arc<Mutex<Option<Box<dyn Fn(ipc::WindowFocusEvent) + Send + Sync>>>>,
+        focus_event: &WindowFocusEvent,
+        focus_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowFocusEvent) + Send + Sync>>>>,
     ) {        // Debug: Always log that we're handling a focus event
         let event_type = if focus_event.event_type == 0 { "FOCUSED" } else { "DEFOCUSED" };
         debug!("🔍 [DEBUG] handle_focus_event called: {} window {}", event_type, focus_event.hwnd);
@@ -769,7 +703,7 @@ impl GridClient {
         }
     }
       fn update_virtual_grid(
-        details: &ipc::WindowDetails,
+        details: &WindowDetails,
         virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
     ) {
         if let Ok(mut grid) = virtual_grid.lock() {
@@ -820,14 +754,9 @@ impl GridClient {
                         ClientCellState::OffScreen => crate::CellState::OffScreen,
                     }
                 }).collect()
-            }).collect();
-              debug!("\n🔥 REAL-TIME GRID UPDATE:");
+            }).collect();              debug!("\n🔥 REAL-TIME GRID UPDATE:");
             
-            // Get virtual screen bounds for display
-            let virtual_rect = Self::get_virtual_screen_rect();
-            let bounds = ((virtual_rect.0, virtual_rect.1), (virtual_rect.2, virtual_rect.3));
-            
-            // Use the centralized display function for consistency with server
+            // Use the centralized display function (server will provide bounds info)
             crate::grid_display::display_grid(
                 &server_grid,
                 config,
@@ -835,27 +764,19 @@ impl GridClient {
                 &crate::grid_display::GridDisplayConfig::default(),
                 Some("Client Grid Viewer"),
                 None,
-                Some(bounds),
-            );        }
-    }
-      fn update_monitor_grids(
-        details: &ipc::WindowDetails,
+                None, // No bounds - let display function use defaults
+            );}
+    }      fn update_monitor_grids(
+        details: &WindowDetails,
         monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
         config: &GridConfig,
     ) {        
         if let Ok(mut monitors_lock) = monitors.lock() {
-            // Ensure we have enough monitor grid entries
-            let current_len = monitors_lock.len();
-            while monitors_lock.len() <= details.monitor_id as usize {
-                let new_id = monitors_lock.len() as u32;
-                monitors_lock.push(MonitorGridInfo {
-                    monitor_id: new_id,
-                    width: 0,
-                    height: 0, 
-                    x: 0,
-                    y: 0,
-                    grid: vec![vec![None; config.cols]; config.rows],
-                });
+            // Ensure we have enough monitor grid entries (should have been initialized already)
+            if details.monitor_id as usize >= monitors_lock.len() {
+                warn!("⚠️ Monitor ID {} not found in initialized monitors (have {})", 
+                    details.monitor_id, monitors_lock.len());
+                return;
             }
             
             let monitor = &mut monitors_lock[details.monitor_id as usize];
@@ -869,7 +790,7 @@ impl GridClient {
                 }
             }
             
-            // Set new positions in monitor grid
+            // Set new positions in monitor grid using the coordinates from the server
             for row in details.monitor_row_start..=details.monitor_row_end {
                 for col in details.monitor_col_start..=details.monitor_col_end {
                     if row < config.rows as u32 && col < config.cols as u32 {
@@ -878,16 +799,10 @@ impl GridClient {
                 }
             }
             
-            // Update monitor dimensions if we can infer them from window position
-            // This is approximate - ideally we'd get actual monitor info from the server
-            let window_right = details.x + details.width;
-            let window_bottom = details.y + details.height; 
-            if window_right > monitor.width {
-                monitor.width = window_right;
-            }
-            if window_bottom > monitor.height {
-                monitor.height = window_bottom;
-            }        
+            debug!("🔧 Updated monitor {} grid: window {} assigned to cells ({},{}) to ({},{})", 
+                details.monitor_id, details.hwnd, 
+                details.monitor_row_start, details.monitor_col_start,
+                details.monitor_row_end, details.monitor_col_end);        
         }
     }    fn display_complete_grid(
         &self,
@@ -899,14 +814,8 @@ impl GridClient {
             Ok(windows_lock) => windows_lock.len(),
             Err(_) => {
                 warn!("⚠️ Windows cache locked, skipping grid display");
-                return;
-            }
+                return;            }
         };
-        
-        // Get actual virtual screen dimensions like the server
-        let virtual_rect = Self::get_virtual_screen_rect();
-        let virtual_width = virtual_rect.2 - virtual_rect.0;
-        let virtual_height = virtual_rect.3 - virtual_rect.1;
         
         // Convert client grid to server grid format for display
         if let Ok(grid) = virtual_grid.try_lock() {
@@ -926,8 +835,8 @@ impl GridClient {
                 window_count,
                 &crate::grid_display::GridDisplayConfig::default(),
                 None,
-                Some((virtual_width, virtual_height)),
-                Some(((virtual_rect.0, virtual_rect.1), (virtual_rect.2, virtual_rect.3))),
+                None, // Let display function determine dimensions
+                None, // No specific bounds - use defaults
             );
         }
         
@@ -972,36 +881,38 @@ impl GridClient {
         }
     }
     
-    pub fn send_command(&mut self, command: ipc::WindowCommand) -> GridClientResult<()> {
+    pub fn send_command(&mut self, command: IpcCommand) -> GridClientResult<()> {
         self.command_publisher.send_copy(command)
             .map(|_| ()) // Ignore the returned size, just return ()
             .map_err(|e| GridClientError::IpcError(format!("Failed to send command: {:?}", e)))
     }      
     
     pub fn request_window_list(&mut self) -> GridClientResult<()> {
-        let command = ipc::WindowCommand {
-            command_type: 2, // GetWindowList
-            hwnd: 0,
-            target_row: 0,
-            target_col: 0,
-            monitor_id: 0,
-            layout_id: 0,
-            animation_duration_ms: 0,
-            easing_type: 0,
+        let command = IpcCommand {
+            command_type: IpcCommandType::GetWindowList,
+            hwnd: None,
+            target_row: None,
+            target_col: None,
+            monitor_id: None,
+            layout_id: None,
+            animation_duration_ms: None,
+            easing_type: None,
+            protocol_version: 1,
         };
         self.send_command(command)
     }
     
       pub fn request_grid_state(&mut self) -> GridClientResult<()> {
-        let command = ipc::WindowCommand {
-            command_type: 1, // GetGridState
-            hwnd: 0,
-            target_row: 0,
-            target_col: 0,
-            monitor_id: 0,
-            layout_id: 0,
-            animation_duration_ms: 0,
-            easing_type: 0,
+        let command = IpcCommand {
+            command_type: IpcCommandType::GetGridState,
+            hwnd: None,
+            target_row: None,
+            target_col: None,
+            monitor_id: None,
+            layout_id: None,
+            animation_duration_ms: None,
+            easing_type: None,
+            protocol_version: 1,
         };
         self.send_command(command)
     }
@@ -1010,16 +921,16 @@ impl GridClient {
     pub fn assign_window_to_virtual_cell(&mut self, hwnd: u64, row: u32, col: u32) -> GridClientResult<()> {
         // Validate coordinates
         validate_grid_coordinates(row, col, self.config.rows as u32, self.config.cols as u32)?;
-        
-        let command = ipc::WindowCommand {
-            command_type: 3, // AssignToVirtualCell
-            hwnd,
-            target_row: row,
-            target_col: col,
-            monitor_id: 0,
-            layout_id: 0,
-            animation_duration_ms: 0,
-            easing_type: 0,
+        let command = IpcCommand {
+            command_type: IpcCommandType::AssignToVirtualCell,
+            hwnd: Some(hwnd),
+            target_row: Some(row),
+            target_col: Some(col),
+            monitor_id: None,
+            layout_id: None,
+            animation_duration_ms: None,
+            easing_type: None,
+            protocol_version: 1,
         };
         self.send_command(command)
             .map_err(|e| GridClientError::IpcError(format!("Failed to assign window to virtual cell: {}", e)))
@@ -1028,16 +939,16 @@ impl GridClient {
     pub fn assign_window_to_monitor_cell(&mut self, hwnd: u64, row: u32, col: u32, monitor_id: u32) -> GridClientResult<()> {
         // Validate coordinates
         validate_grid_coordinates(row, col, self.config.rows as u32, self.config.cols as u32)?;
-        
-        let command = ipc::WindowCommand {
-            command_type: 4, // AssignToMonitorCell
-            hwnd,
-            target_row: row,
-            target_col: col,
-            monitor_id,
-            layout_id: 0,
-            animation_duration_ms: 0,
-            easing_type: 0,
+        let command = IpcCommand {
+            command_type: IpcCommandType::AssignToMonitorCell,
+            hwnd: Some(hwnd),
+            target_row: Some(row),
+            target_col: Some(col),
+            monitor_id: Some(monitor_id),
+            layout_id: None,
+            animation_duration_ms: None,
+            easing_type: None,
+            protocol_version: 1,
         };
         self.send_command(command)
             .map_err(|e| GridClientError::IpcError(format!("Failed to assign window to monitor cell: {}", e)))
@@ -1075,33 +986,43 @@ impl GridClient {
     }
     
     pub fn is_auto_display_enabled(&self) -> bool {
-        *self.auto_display.lock().unwrap()
+        self.auto_display.lock().map(|auto| *auto).unwrap_or(false)
+    }
+
+    /// Get the current monitor data for real-time display (for TUI applications)
+    pub fn get_monitor_data(&self) -> Vec<MonitorGridInfo> {
+        match self.monitors.try_lock() {
+            Ok(monitors) => monitors.clone(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Get the current window data for real-time display (for TUI applications)
+    pub fn get_window_data(&self) -> HashMap<u64, ClientWindowInfo> {
+        match self.windows.try_lock() {
+            Ok(windows) => windows.clone(),
+            Err(_) => HashMap::new(),
+        }
+    }
+
+    /// Get the current virtual grid state for real-time display (for TUI applications)
+    pub fn get_virtual_grid_state(&self) -> Vec<Vec<ClientCellState>> {
+        match self.virtual_grid.try_lock() {
+            Ok(grid) => grid.clone(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Check if the client is connected and has recent data
+    pub fn has_recent_data(&self) -> bool {
+        let has_windows = !self.get_window_data().is_empty();
+        let has_monitors = !self.get_monitor_data().is_empty();
+        has_windows || has_monitors
     }
     
     pub fn stop(&self) {
         *self.running.lock().unwrap() = false;
-        info!("🛑 Stopping grid client...");
-    }
-    
-    /// Get window title using Windows API
-    fn get_window_title(hwnd: winapi::shared::windef::HWND) -> String {
-        use winapi::um::winuser::{GetWindowTextW, GetWindowTextLengthW};
-        
-        unsafe {
-            let length = GetWindowTextLengthW(hwnd);
-            if length == 0 {
-                return String::new();
-            }
-            
-            let mut buffer: Vec<u16> = vec![0; (length + 1) as usize];
-            let result = GetWindowTextW(hwnd, buffer.as_mut_ptr(), length + 1);            if result > 0 {
-                buffer.truncate(result as usize);
-                String::from_utf16_lossy(&buffer)
-            } else {
-                String::new()
-            }
-        }
-    }
+        info!("🛑 Stopping grid client...");    }
 }
 
 impl Drop for GridClient {

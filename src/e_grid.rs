@@ -192,6 +192,11 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
             println!("⚠️ Error processing focus events: {}", e);
         }
 
+        // Process window events from the channel and publish them via IPC
+        if let Err(e) = ipc_server.process_window_events() {
+            println!("⚠️ Error processing window events: {}", e);
+        }
+
         // Process layout commands
         if let Err(e) = ipc_server.process_layout_commands() {
             println!("⚠️ Error processing layout commands: {}", e);

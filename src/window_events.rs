@@ -16,6 +16,7 @@ pub struct WindowEventConfig {
     pub tracker: Arc<Mutex<WindowTracker>>,
     pub focus_callback: Option<Box<dyn Fn(HWND, bool) + Send + Sync>>, // hwnd, is_focused
     pub heartbeat_reset: Option<Box<dyn Fn() + Send + Sync>>,
+    pub event_callback: Option<Box<dyn Fn(crate::ipc_protocol::GridEvent) + Send + Sync>>, // NEW: event publishing callback
     pub debug_mode: bool,
 }
 
@@ -25,6 +26,7 @@ impl WindowEventConfig {
             tracker,
             focus_callback: None,
             heartbeat_reset: None,
+            event_callback: None, // NEW
             debug_mode: false,
         }
     }
@@ -38,6 +40,12 @@ impl WindowEventConfig {
     pub fn with_heartbeat_reset<F>(mut self, callback: F) -> Self 
     where F: Fn() + Send + Sync + 'static {
         self.heartbeat_reset = Some(Box::new(callback));
+        self
+    }
+    
+    pub fn with_event_callback<F>(mut self, callback: F) -> Self 
+    where F: Fn(crate::ipc_protocol::GridEvent) + Send + Sync + 'static {
+        self.event_callback = Some(Box::new(callback));
         self
     }
     
@@ -139,6 +147,7 @@ pub unsafe extern "system" fn win_event_proc(
             3 => "EVENT_SYSTEM_FOREGROUND (FOCUS)",
             32768 => "EVENT_OBJECT_SHOW",
             32769 => "EVENT_OBJECT_HIDE",
+            32779 => "EVENT_OBJECT_LOCATIONCHANGE (MOVE/RESIZE)",
             _ => "OTHER",
         };
         println!("🔍 WinEvent: event={} ({}), hwnd={:?}", event, event_name, hwnd);
@@ -189,6 +198,29 @@ pub unsafe extern "system" fn win_event_proc(
             EVENT_OBJECT_LOCATIONCHANGE => {
                 if WindowTracker::is_manageable_window(hwnd) {
                     tracker.update_window(hwnd);
+                    // NEW: Publish move event
+                    if let Some(ref event_callback) = config.event_callback {
+                        if let Some(window_info) = tracker.windows.get(&hwnd) {
+                            let event = crate::ipc_protocol::GridEvent::WindowMoved {
+                                hwnd: hwnd as u64,
+                                title: window_info.title.clone(),
+                                old_row: 0, // TODO: track previous row/col if needed
+                                old_col: 0,
+                                new_row: 0, // TODO: fill with actual grid info
+                                new_col: 0,
+                                grid_top_left_row: 0,
+                                grid_top_left_col: 0,
+                                grid_bottom_right_row: 0,
+                                grid_bottom_right_col: 0,
+                                real_x: window_info.rect.left,
+                                real_y: window_info.rect.top,
+                                real_width: (window_info.rect.right - window_info.rect.left) as u32,
+                                real_height: (window_info.rect.bottom - window_info.rect.top) as u32,
+                                monitor_id: 0,
+                            };
+                            event_callback(event);
+                        }
+                    }
                 }
             }
             EVENT_SYSTEM_MINIMIZESTART => {

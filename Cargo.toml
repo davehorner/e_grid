@@ -18,6 +18,7 @@ ctrlc = "3.0"
 ratatui = "0.28"
 log = "0.4"
 env_logger = "0.11"
+bincode = "1.3"
 
 [[bin]]
 name = "e_grid"
@@ -143,3 +144,11 @@ path = "examples/focus_demo_server.rs"
 [[bin]]
 name = "realtime_monitor_grid"
 path = "realtime_monitor_grid.rs"
+
+[[bin]]
+name = "debug_monitor_coords"
+path = "src/debug_monitor_coords.rs"
+
+[[bin]]
+name = "simple_monitor_test"
+path = "src/simple_monitor_test.rs"

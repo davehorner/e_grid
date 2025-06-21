@@ -1363,6 +1363,9 @@ fn meets_coverage_threshold(window_rect: &RECT, cell_rect: &RECT) -> bool {
 // iceoryx2 IPC integration for command and control
 pub mod ipc;
 
+/// Protocol definitions and message types for IPC communication
+pub mod ipc_protocol;
+
 // Client module for real-time grid reconstruction and monitoring
 pub mod ipc_client;
 pub use ipc_client::GridClient;
