@@ -164,8 +164,7 @@ impl GridClient {
     fn process_responses(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: Implement response subscriber for config updates
         // For now this is a placeholder
-        Ok(())
-    }    pub fn wait_for_config(&mut self, timeout_ms: u64) -> Result<GridConfig, Box<dyn std::error::Error>> {
+        Ok(())    }    pub fn wait_for_config(&mut self, _timeout_ms: u64) -> Result<GridConfig, Box<dyn std::error::Error>> {
         // For now, just return the current config
         // TODO: Implement actual waiting for server response
         Ok(self.config.clone())
@@ -416,7 +415,8 @@ impl GridClient {
                 let focus_event = *focus_sample;
                 _focus_events_received += 1;
                 had_activity = true;
-                
+                println!("🎯 [FOCUS EVENT] HWND {} (PID: {}) at timestamp: {}", 
+                    focus_event.hwnd, focus_event.process_id, focus_event.timestamp);
                 Self::handle_focus_event(&focus_event, focus_callback);
             }
             
@@ -752,14 +752,19 @@ impl GridClient {
         focus_event: &ipc::WindowFocusEvent,
         focus_callback: &Arc<Mutex<Option<Box<dyn Fn(ipc::WindowFocusEvent) + Send + Sync>>>>,
     ) {
-        // Invoke the callback if one is registered (real-time, no logging)
+        // Debug: Always log that we're handling a focus event
+        let event_type = if focus_event.event_type == 0 { "FOCUSED" } else { "DEFOCUSED" };
+        println!("🔍 [DEBUG] handle_focus_event called: {} window {}", event_type, focus_event.hwnd);
+        
+        // Invoke the callback if one is registered
         match safe_arc_lock(focus_callback, "focus event callback") {
             Ok(callback_lock) => {
                 if let Some(ref callback) = *callback_lock {
+                    println!("🔍 [DEBUG] Calling focus callback for {} event", event_type);
                     callback(*focus_event);
+                    println!("🔍 [DEBUG] Focus callback completed for {} event", event_type);
                 } else {
                     // Only log when no callback is registered (debugging)
-                    let event_type = if focus_event.event_type == 0 { "FOCUSED" } else { "DEFOCUSED" };
                     println!("🎯 [FOCUS EVENT] {} window {} (no callback)", event_type, focus_event.hwnd);
                 }
             }

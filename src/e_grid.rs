@@ -1,4 +1,4 @@
-use e_grid::{ipc_server, WindowTracker, GridClient};
+use e_grid::{ipc_server, WindowTracker, GridClient, window_events};
 use iceoryx2::prelude::*;
 use iceoryx2::service::ipc::Service;
 use std::process::{Command, Stdio};
@@ -12,19 +12,14 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
     cursor,
 };
-use winapi::um::winuser::{
-    DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
-};
 
 const BANNER: &str = r#"
-████████╗██╗  ██╗███████╗   ███████╗      ██████╗ ██████╗ ██╗██████╗ 
-██╔═════╝██║  ██║██╔════╝   ██╔════╝     ██╔════╝ ██╔══██╗██║██╔══██╗
-█████╗  ███████║█████╗     █████╗       ██║  ███╗██████╔╝██║██║  ██║
-██╔══╝  ██╔══██║██╔══╝     ██╔══╝       ██║   ██║██╔══██╗██║██║  ██║
-███████╗██║  ██║███████╗   ███████╗     ╚██████╔╝██║  ██║██║██████╔╝
-╚══════╝╚═╝  ╚═╝╚══════╝   ╚══════╝      ╚═════╝ ╚═╝  ╚═╝╚═╝╚═════╝ 
-                                                                     
-    Advanced Window Grid Management System with Focus Tracking
+  ███████╗      ██████╗  ██████╗  ██╗ ██████╗ 
+  ██╔════╝     ██╔════╝  ██╔══██╗ ██║ ██╔══██╗
+  █████╗       ██║  ███╗ ██████╔╝ ██║ ██║  ██║
+  ██╔══╝       ██║   ██║ ██╔══██╗ ██║ ██║  ██║
+  ███████╗     ╚██████╔╝ ██║  ██║ ██║ ██████╔╝
+  ╚══════╝      ╚═════╝  ╚═╝  ╚═╝ ╚═╝ ╚═════╝ 
 "#;
 
 /// Check if the e_grid server is already running by trying to connect to an IPC service
@@ -123,39 +118,23 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(tracker) = tracker.lock() {
         println!("📊 Server tracking {} windows across {} monitors", 
                  tracker.windows.len(), tracker.monitor_grids.len());
-    }
-
-    println!("💡 Tip: Run 'cargo run --example simple_focus_demo' in another terminal to see focus events!");
+    }    println!("💡 Tip: Run 'cargo run --example simple_focus_demo' in another terminal to see focus events!");
     println!("🔄 Server running... Press Ctrl+C to stop");
-    println!();    // Main server event loop
+    println!();
+
+    // Main server event loop using the library's reusable message loop
     let mut _loop_count = 0u32;
-    let mut last_update = std::time::Instant::now();
-
-    loop {
-        // Process Windows messages for WinEvent callbacks
-        unsafe {
-            let mut msg = MSG {
-                hwnd: std::ptr::null_mut(),
-                message: 0,
-                wParam: 0,
-                lParam: 0,
-                time: 0,
-                pt: winapi::shared::windef::POINT { x: 0, y: 0 },
-            };
-
-            while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
-                if msg.message == winapi::um::winuser::WM_QUIT {
-                    println!("🛑 Received quit message, shutting down server...");
-                    return Ok(());
-                }
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-        }
-
+    let mut last_update = std::time::Instant::now();    // Use the reusable message loop from the library
+    // This automatically handles Windows message processing for WinEvent callbacks
+    window_events::run_message_loop(|| {
         // Process IPC commands from clients
         if let Err(e) = ipc_server.process_commands() {
             println!("⚠️ Error processing IPC commands: {}", e);
+        }
+
+        // Process focus events from the channel and publish them via IPC
+        if let Err(e) = ipc_server.process_focus_events() {
+            println!("⚠️ Error processing focus events: {}", e);
         }
 
         // Process layout commands
@@ -175,7 +154,7 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // Periodic status updates every 30 seconds
+        // Periodic status updates and heartbeat every 30 seconds
         if last_update.elapsed().as_secs() > 30 {
             if let Ok(tracker) = tracker.lock() {
                 println!("📊 Status: {} windows, {} monitors, {} active animations", 
@@ -183,14 +162,24 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
                          tracker.monitor_grids.len(),
                          tracker.active_animations.len());
             }
+            
+            // Send heartbeat to keep clients connected
+            let uptime_ms = std::time::Instant::now().duration_since(last_update).as_millis() as u64;
+            if let Err(e) = ipc_server.send_heartbeat(_loop_count as u64, uptime_ms) {
+                println!("⚠️ Failed to send heartbeat: {}", e);
+            }
+            
             last_update = std::time::Instant::now();
         }
 
-        // Real-time processing with minimal delay
-        thread::sleep(Duration::from_millis(1)); // Minimal delay for real-time processing
-        
         _loop_count += 1;
-    }
+        
+        // Return true to continue the loop, false to exit
+        true
+    })?;
+
+    println!("🛑 Server event loop ended, shutting down server...");
+    Ok(())
 
 }
 

@@ -39,7 +39,9 @@ fn main() {
     println!("Tracker arc created successfully!");
 
     println!("Setting up real-time window event tracking...");
-    match window_events::setup_window_events(tracker_arc.clone()) {
+    let config = window_events::WindowEventConfig::new(tracker_arc.clone())
+        .with_debug(true);
+    match window_events::setup_window_events(config) {
         Ok(()) => {
             println!("✅ Window event hooks set up successfully!");
             println!("🔄 Starting real-time event monitoring...");

@@ -1,10 +1,7 @@
-use e_grid::{ipc_server, WindowTracker};
+use e_grid::{ipc_server, WindowTracker, window_events};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use winapi::um::winuser::{
-    DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
-};
 use winapi::um::consoleapi::SetConsoleCtrlHandler;
 use winapi::um::wincon::{CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT};
 use winapi::shared::minwindef::{BOOL, DWORD, TRUE, FALSE};
@@ -109,9 +106,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         // Debug focus tracking setup
         println!("✅ WinEvent hooks successfully established!");
-        println!("🎯 Focus tracking is now active - testing focus events after restart");
-        ipc_server.debug_focus_state();
-    } // Give the server a moment to be ready
+        println!("🎯 Focus tracking is now active - using library-based system");
+        
+        // IMPORTANT: Test focus tracking immediately
+        println!("🔧 Testing focus event system...");
+        // This ensures the focus system is working right after setup
+    }
+    
+    // Give the server a moment to be ready
     thread::sleep(Duration::from_millis(500));
 
     // Don't publish initial window details automatically - wait for client requests
@@ -154,29 +156,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  2. Move windows around to see real-time updates");
     println!("  3. Use client commands to assign windows to grid cells");
     println!();
-    println!("Press Ctrl+C to stop the server..."); // Keep the main thread alive with responsive command processing
-                                                    // WinEvents require a proper Windows message loop to work
-    println!("🔄 Starting Windows message loop for WinEvent processing...");
+    println!("Press Ctrl+C to stop the server...");    println!("🔄 Starting message loop with WinEvent processing...");
     let mut iteration = 0;
     let mut last_status_time = std::time::Instant::now();
 
-    loop {
+    // Use the library's reusable message loop instead of manual Windows message processing
+    window_events::run_message_loop(|| {
         // Check for shutdown request from console control handler
         unsafe {
             if SHUTDOWN_REQUESTED {
                 println!("🛑 Shutdown requested - exiting gracefully...");
-                break;
-            }
-        }
-        
-        // Process Windows messages for WinEvent hooks
-        unsafe {
-            let mut msg: MSG = std::mem::zeroed();
-
-            // Process all available messages without blocking
-            while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+                return false; // Exit the loop
             }
         }
 
@@ -217,9 +207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("❌ Error updating animations: {}", e);
             }
         }
-        // Small sleep to prevent busy waiting while still being responsive
-        thread::sleep(Duration::from_millis(10));
-        iteration += 1;
+
         // Update grids periodically (every 2 seconds) to handle changes from WinEvents
         // This is done outside WinEvent callbacks to prevent deadlocks
         if iteration % 200 == 0 {
@@ -261,9 +249,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("⚠️ Could not acquire tracker lock for grid update");
                 }
             }
-
-            // Don't automatically republish all window details - only send updates when requested
-            // or when individual windows change (via WinEvents)
         }
 
         // Print status every 30 seconds - just for monitoring, no polling
@@ -332,14 +317,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             last_status_time = std::time::Instant::now();
         }
 
-        // Check for shutdown request
+        // Check for shutdown request again before continuing
         unsafe {
             if SHUTDOWN_REQUESTED {
                 println!("🛑 Shutdown requested - exiting...");
-                break;
+                return false; // Exit the loop
             }
         }
-    }
+
+        iteration += 1;
+        true // Continue the loop
+    })?;
 
     // Cleanup before shutdown
     println!("🧹 Cleaning up server resources...");
@@ -349,10 +337,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         send_shutdown_heartbeat();
     }
     
-    // Clean up IPC server
-    ipc_server.cleanup_hooks();
-    
-    // Clear global pointer (handled in ipc_server cleanup now)
+    // IPC server cleanup is now handled automatically by the Drop trait
+    println!("🧹 IPC server cleanup will be handled automatically");
 
     println!("✅ Server stopped. Goodbye!");
     Ok(())

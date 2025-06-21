@@ -53,10 +53,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let mut tracker_guard = tracker.lock().unwrap();
         tracker_guard.register_event_callback(Box::new(DebugEventCallback));
-    }
-      // Step 3: Set up event-driven window monitoring
+    }    // Step 3: Set up event-driven window monitoring
     println!("🔧 Setting up event-driven window monitoring...");
-    window_events::setup_window_events(tracker.clone())?;
+    let config = window_events::WindowEventConfig::new(tracker.clone())
+        .with_debug(true);
+    window_events::setup_window_events(config)?;
       // Step 4: Event-driven monitoring is ready (message loop will run in demo phases)
     println!("🔄 Event-driven system ready - message processing will happen in main thread...");
       // Step 3: Create and setup the IPC server (main thread for HWND safety)
@@ -157,14 +158,10 @@ fn demonstrate_grid_animation(client: &mut GridClient, tracker: &Arc<Mutex<Windo
         
         // Process any pending commands on the server
         server.process_commands()?;
-        
-        thread::sleep(Duration::from_millis(100)); // Small delay between commands
+          thread::sleep(Duration::from_millis(100)); // Small delay between commands
         
         // Process messages to keep events responsive
-        {
-            let tracker_guard = tracker.lock().unwrap();
-            tracker_guard.process_windows_messages();
-        }
+        window_events::process_windows_messages()?;
     }
     
     thread::sleep(Duration::from_millis(2000)); // Let animations complete
@@ -234,12 +231,8 @@ fn demonstrate_realtime_events(tracker: &Arc<Mutex<WindowTracker>>, server: &mut
     let start_time = std::time::Instant::now();
     let monitor_duration = Duration::from_secs(30);
     
-    let mut last_window_count = 0;    while start_time.elapsed() < monitor_duration {
-        // Process Windows messages for WinEvent hooks (critical for event detection)
-        {
-            let tracker_guard = tracker.lock().unwrap();
-            tracker_guard.process_windows_messages();
-        }
+    let mut last_window_count = 0;    while start_time.elapsed() < monitor_duration {        // Process Windows messages for WinEvent hooks (critical for event detection)
+        window_events::process_windows_messages()?;
         
         // Process any pending IPC commands
         server.process_commands()?;

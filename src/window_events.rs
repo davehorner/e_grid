@@ -10,6 +10,42 @@ use winapi::um::winuser::{
 };
 use winapi::shared::windef::HWND;
 
+/// Configuration for window events with optional callbacks
+pub struct WindowEventConfig {
+    pub tracker: Arc<Mutex<WindowTracker>>,
+    pub focus_callback: Option<Box<dyn Fn(HWND, bool) + Send + Sync>>, // hwnd, is_focused
+    pub heartbeat_reset: Option<Box<dyn Fn() + Send + Sync>>,
+    pub debug_mode: bool,
+}
+
+impl WindowEventConfig {
+    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Self {
+        Self {
+            tracker,
+            focus_callback: None,
+            heartbeat_reset: None,
+            debug_mode: false,
+        }
+    }
+    
+    pub fn with_focus_callback<F>(mut self, callback: F) -> Self 
+    where F: Fn(HWND, bool) + Send + Sync + 'static {
+        self.focus_callback = Some(Box::new(callback));
+        self
+    }
+    
+    pub fn with_heartbeat_reset<F>(mut self, callback: F) -> Self 
+    where F: Fn() + Send + Sync + 'static {
+        self.heartbeat_reset = Some(Box::new(callback));
+        self
+    }
+    
+    pub fn with_debug(mut self, enabled: bool) -> Self {
+        self.debug_mode = enabled;
+        self
+    }
+}
+
 // Debug callback implementation
 pub struct DebugEventCallback;
 
@@ -72,12 +108,13 @@ impl WindowEventCallback for DebugEventCallback {
     }
 }
 
-// Global state for event hooks - necessary due to Windows API callback constraints
+// Global state for event hooks and configuration
 // These are accessed only from the main thread and properly synchronized
-static mut WINDOW_TRACKER: Option<Arc<Mutex<WindowTracker>>> = None;
+static mut WINDOW_EVENT_CONFIG: Option<WindowEventConfig> = None;
 static mut EVENT_HOOKS: Vec<winapi::shared::windef::HWINEVENTHOOK> = Vec::new();
+static mut LAST_FOCUSED_WINDOW: Option<HWND> = None;
 
-// WinEvent hook procedure - simplified to use WindowTracker callbacks
+// WinEvent hook procedure - unified event handling with optional callbacks
 pub unsafe extern "system" fn win_event_proc(
     _h_winevent_hook: winapi::shared::windef::HWINEVENTHOOK,
     event: u32,
@@ -87,90 +124,102 @@ pub unsafe extern "system" fn win_event_proc(
     _dw_event_thread: u32,
     _dw_ms_event_time: u32,
 ) {
-    // Debug: Always log that we received an event
-    println!("🔍 WinEvent received: event={}, hwnd={:?}, obj={}, child={}", 
-        event, hwnd, id_object, id_child);
-        
     // Only process window-level events (not child objects)
-    if id_object != OBJID_WINDOW || id_child != CHILDID_SELF {
-        println!("🔍 Skipping non-window event");
+    if id_object != OBJID_WINDOW || id_child != CHILDID_SELF || hwnd.is_null() {
         return;
     }
 
-    // Skip if window handle is null
-    if hwnd.is_null() {
-        println!("🔍 Skipping null HWND");
-        return;
-    }    println!("🔍 Processing window event for HWND {:?}", hwnd);
-    
-    // Safer access to static tracker
-    let tracker_arc = unsafe {
-        WINDOW_TRACKER.as_ref()
-    };
-    
-    if let Some(tracker_arc) = tracker_arc {
-        println!("🔍 Tracker found, attempting to lock...");
-        if let Ok(mut tracker) = tracker_arc.try_lock() {
-            println!("🔍 Tracker locked successfully, processing event {}", event);
-            match event {                EVENT_OBJECT_CREATE => {
-                    if WindowTracker::is_manageable_window(hwnd) {
-                        println!("🔍 Processing CREATE event for manageable window {:?}", hwnd);
-                        // Remove the sleep - it can block other events
-                        // std::thread::sleep(std::time::Duration::from_millis(100));
-                        tracker.add_window(hwnd); // This will trigger callbacks
-                    } else {
-                        println!("🔍 Skipping CREATE event for non-manageable window {:?}", hwnd);
+    // Get the global configuration
+    let config = match WINDOW_EVENT_CONFIG.as_ref() {
+        Some(config) => config,
+        None => return, // No configuration available
+    };    if config.debug_mode {
+        let event_name = match event {
+            3 => "EVENT_SYSTEM_FOREGROUND (FOCUS)",
+            32768 => "EVENT_OBJECT_SHOW",
+            32769 => "EVENT_OBJECT_HIDE",
+            _ => "OTHER",
+        };
+        println!("🔍 WinEvent: event={} ({}), hwnd={:?}", event, event_name, hwnd);
+    }
+
+    // Always try to reset heartbeat if callback is available
+    if let Some(ref heartbeat_reset) = config.heartbeat_reset {
+        heartbeat_reset();
+    }
+
+    // Handle focus events specially
+    if event == EVENT_SYSTEM_FOREGROUND {
+        if let Some(ref focus_callback) = config.focus_callback {
+            // Send DEFOCUSED for previous window if it exists
+            if let Some(prev_hwnd) = LAST_FOCUSED_WINDOW {
+                if prev_hwnd != hwnd && !prev_hwnd.is_null() {
+                    if config.debug_mode {
+                        println!("🎯 Focus: DEFOCUSED HWND {:?}", prev_hwnd);
                     }
-                }                EVENT_OBJECT_DESTROY => {
-                    println!("🔍 Processing DESTROY event for window {:?}", hwnd);
-                    tracker.remove_window(hwnd); // This will trigger callbacks
-                }
-                EVENT_OBJECT_LOCATIONCHANGE | EVENT_SYSTEM_FOREGROUND => {
-                    if WindowTracker::is_manageable_window(hwnd) {
-                        println!("🔍 Processing MOVE/FOREGROUND event for manageable window {:?}", hwnd);
-                        tracker.update_window(hwnd); // This will trigger callbacks
-                    } else {
-                        println!("🔍 Skipping MOVE/FOREGROUND event for non-manageable window {:?}", hwnd);
-                    }
-                }
-                EVENT_SYSTEM_MINIMIZESTART => {
-                    println!("🔍 Processing MINIMIZE START event for window {:?}", hwnd);
-                    tracker.remove_window(hwnd); // This will trigger callbacks
-                }
-                EVENT_SYSTEM_MINIMIZEEND => {
-                    if WindowTracker::is_manageable_window(hwnd) {
-                        println!("🔍 Processing MINIMIZE END event for manageable window {:?}", hwnd);
-                        tracker.add_window(hwnd); // This will trigger callbacks
-                    } else {
-                        println!("🔍 Skipping MINIMIZE END event for non-manageable window {:?}", hwnd);
-                    }
-                }_ => {
-                    // Unhandled event type
-                    println!("🔍 Unhandled event type: {}", event);
+                    focus_callback(prev_hwnd, false); // false = DEFOCUSED
                 }
             }
-        } else {
-            println!("🔍 Failed to lock tracker - might be busy");
+            
+            // Update last focused window and send FOCUSED
+            LAST_FOCUSED_WINDOW = Some(hwnd);
+            if config.debug_mode {
+                println!("🎯 Focus: FOCUSED HWND {:?}", hwnd);
+            }
+            focus_callback(hwnd, true); // true = FOCUSED
         }
-    } else {
-        println!("🔍 No tracker found in static");
+    }
+
+    // Update window tracker
+    if let Ok(mut tracker) = config.tracker.try_lock() {
+        if config.debug_mode {
+            println!("🔍 Processing event {} for window {:?}", event, hwnd);
+        }
+        
+        match event {
+            EVENT_OBJECT_CREATE => {
+                if WindowTracker::is_manageable_window(hwnd) {
+                    tracker.add_window(hwnd);
+                }
+            }
+            EVENT_OBJECT_DESTROY => {
+                tracker.remove_window(hwnd);
+            }
+            EVENT_OBJECT_LOCATIONCHANGE => {
+                if WindowTracker::is_manageable_window(hwnd) {
+                    tracker.update_window(hwnd);
+                }
+            }
+            EVENT_SYSTEM_MINIMIZESTART => {
+                tracker.remove_window(hwnd);
+            }
+            EVENT_SYSTEM_MINIMIZEEND => {
+                if WindowTracker::is_manageable_window(hwnd) {
+                    tracker.add_window(hwnd);
+                }
+            }
+            _ => {} // Unhandled event types
+        }
+    } else if config.debug_mode {
+        println!("🔍 Failed to lock tracker - might be busy");
     }
 }
 
-pub fn setup_window_events(tracker: Arc<Mutex<WindowTracker>>) -> Result<(), String> {
+pub fn setup_window_events(config: WindowEventConfig) -> Result<(), String> {
     unsafe {
-        // Simple assignment instead of ptr operations
-        WINDOW_TRACKER = Some(tracker.clone());
+        // Store the configuration globally
+        WINDOW_EVENT_CONFIG = Some(config);
         EVENT_HOOKS = Vec::new();
+        LAST_FOCUSED_WINDOW = None;
 
-        println!("🔧 Setting up WinEvent hooks...");
+        println!("🔧 Setting up unified WinEvent hooks...");
 
         // Set up hooks for different window events
         let events_to_hook = [
             (EVENT_OBJECT_CREATE, "Window Creation"),
             (EVENT_OBJECT_DESTROY, "Window Destruction"), 
             (EVENT_OBJECT_LOCATIONCHANGE, "Window Move/Resize"),
-            (EVENT_SYSTEM_FOREGROUND, "Window Activation"),
+            (EVENT_SYSTEM_FOREGROUND, "Window Activation/Focus"),
             (EVENT_SYSTEM_MINIMIZESTART, "Window Minimize"),
             (EVENT_SYSTEM_MINIMIZEEND, "Window Restore"),
         ];
@@ -179,27 +228,41 @@ pub fn setup_window_events(tracker: Arc<Mutex<WindowTracker>>) -> Result<(), Str
             let hook = SetWinEventHook(
                 *event,
                 *event,
-                ptr::null_mut(), // No specific module
+                ptr::null_mut(),
                 Some(win_event_proc),
                 0, // All processes
                 0, // All threads
-                WINEVENT_OUTOFCONTEXT, // Out-of-context (more reliable)
-            );            if hook.is_null() {
+                WINEVENT_OUTOFCONTEXT,
+            );
+
+            if hook.is_null() {
                 let error = GetLastError();
                 println!("❌ Failed to set up hook for {}: error {}", description, error);
             } else {
-                // Simple push to static vector
                 EVENT_HOOKS.push(hook);
                 println!("✅ Successfully set up hook for {}", description);
             }
-        }        // Check if we have any hooks
+        }
+
         let hooks_len = EVENT_HOOKS.len();
         if hooks_len == 0 {
             return Err("Failed to set up any event hooks".to_string());
         }
 
+        // Display what features are enabled
+        let config_ref = WINDOW_EVENT_CONFIG.as_ref().unwrap();
         println!("🚀 Successfully set up {} WinEvent hooks!", hooks_len);
-        println!("📢 Now listening for real-time window events across all monitors!");
+        println!("📢 Features enabled:");
+        println!("   • Window tracking: ✓");
+        if config_ref.focus_callback.is_some() {
+            println!("   • Focus event callbacks: ✓");
+        }
+        if config_ref.heartbeat_reset.is_some() {
+            println!("   • Heartbeat reset: ✓");
+        }
+        if config_ref.debug_mode {
+            println!("   • Debug logging: ✓");
+        }
         println!();
 
         Ok(())
@@ -208,11 +271,88 @@ pub fn setup_window_events(tracker: Arc<Mutex<WindowTracker>>) -> Result<(), Str
 
 pub fn cleanup_hooks() {
     unsafe {
-        // Simple iteration and cleanup
+        // Clean up hooks
         for hook in &EVENT_HOOKS {
             UnhookWinEvent(*hook);
         }
         EVENT_HOOKS = Vec::new();
-        println!("🧹 Cleaned up all event hooks");
+        
+        // Clear state
+        WINDOW_EVENT_CONFIG = None;
+        LAST_FOCUSED_WINDOW = None;
+        
+        println!("🧹 Cleaned up all WinEvent hooks and state");
     }
+}
+
+/// Process Windows messages for WinEvent hooks
+/// 
+/// This function processes the Windows message queue, which is required for WinEvent hooks
+/// to function properly. It should be called regularly in the application's main loop.
+/// 
+/// Returns `Ok(true)` if messages were processed normally, `Ok(false)` if a WM_QUIT message
+/// was received (indicating the application should shut down), or an `Err` if there was an error.
+pub fn process_windows_messages() -> Result<bool, String> {
+    unsafe {
+        use winapi::um::winuser::{
+            PeekMessageW, TranslateMessage, DispatchMessageW, MSG, PM_REMOVE, WM_QUIT
+        };
+        
+        let mut msg = MSG {
+            hwnd: std::ptr::null_mut(),
+            message: 0,
+            wParam: 0,
+            lParam: 0,
+            time: 0,
+            pt: winapi::shared::windef::POINT { x: 0, y: 0 },
+        };
+
+        while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+            if msg.message == WM_QUIT {
+                return Ok(false); // Signal that the application should shut down
+            }
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        
+        Ok(true) // Continue processing
+    }
+}
+
+/// Run a complete message loop that processes Windows messages until WM_QUIT is received
+/// 
+/// This is a convenience function for applications that want a simple blocking message loop.
+/// It will process messages and call the provided callback function in each iteration.
+/// 
+/// # Arguments
+/// * `callback` - Function called in each loop iteration. Should return `false` to exit the loop.
+/// 
+/// # Returns
+/// `Ok(())` when the loop exits normally, or an error if message processing fails.
+pub fn run_message_loop<F>(mut callback: F) -> Result<(), String> 
+where 
+    F: FnMut() -> bool 
+{
+    loop {
+        // Process Windows messages
+        match process_windows_messages()? {
+            false => {
+                // WM_QUIT received, exit the loop
+                break;
+            }
+            true => {
+                // Continue processing
+            }
+        }
+        
+        // Call the application callback
+        if !callback() {
+            break; // Application requested to exit
+        }
+        
+        // Small delay to prevent busy waiting
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    
+    Ok(())
 }

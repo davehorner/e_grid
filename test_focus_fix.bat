@@ -1,0 +1,3 @@
+@echo off
+echo Testing focus event fix...
+cargo run --bin e_grid

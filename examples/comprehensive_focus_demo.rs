@@ -418,6 +418,7 @@ fn main() -> GridClientResult<()> {
     println!("🎯 Registering comprehensive focus tracking callback...");
     let tracker_clone = focus_tracker.clone();
     grid_client.set_focus_callback(move |focus_event| {
+        println!("🔄 Focus Event Received: {:?}", focus_event);
         tracker_clone.handle_focus_event(focus_event);
     })?;
 

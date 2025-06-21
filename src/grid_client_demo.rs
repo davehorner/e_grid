@@ -15,7 +15,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create the grid client
     let mut client = GridClient::new()?;
+    println!("📋 Registering focus callback...");
+    client.set_focus_callback(|focus_event| {
+        println!("🔍 [DEBUG] DEMO CALLBACK CALLED for event type: {}", focus_event.event_type);
+        
+        let event_name = if focus_event.event_type == 0 { "🟢 FOCUSED" } else { "🔴 DEFOCUSED" };
+        
+        println!("{} - Window: {} (PID: {}) at timestamp: {}", 
+            event_name, 
+            focus_event.hwnd, 
+            focus_event.process_id,
+            focus_event.timestamp
+        );
 
+        // Show application hash for identification
+        if focus_event.app_name_hash != 0 {
+            println!("   📱 App Hash: 0x{:x}", focus_event.app_name_hash);
+        }
+
+        // Show window title hash if available
+        if focus_event.window_title_hash != 0 {
+            println!("   🪟 Title Hash: 0x{:x}", focus_event.window_title_hash);
+        }
+
+        println!("   ─────────────────────────────");
+    })?;
     // Enable auto-display for real-time updates
     client.set_auto_display(true);
     // Start background monitoring for real-time updates

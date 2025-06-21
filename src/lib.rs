@@ -17,6 +17,14 @@ pub use grid_client_errors::{GridClientError, GridClientResult, RetryConfig,
 // Import the centralized grid display module
 pub mod grid_display;
 
+// Import the heartbeat service module
+pub mod heartbeat;
+pub use heartbeat::HeartbeatService;
+
+// Import window events module with unified hook management
+pub mod window_events;
+pub use window_events::{WindowEventConfig, setup_window_events, cleanup_hooks};
+
 // Coverage threshold: percentage of cell area that must be covered by window
 // to consider the window as occupying that cell (0.0 to 1.0)
 const COVERAGE_THRESHOLD: f32 = 0.3; // 30% coverage required
@@ -479,22 +487,6 @@ impl WindowTracker {
             callback.on_window_restored(hwnd, window_info);
         }
     }
-    
-    // Internal message processing for WinEvent hooks (main thread only)
-    pub fn process_windows_messages(&self) {
-        use winapi::um::winuser::{PeekMessageW, TranslateMessage, DispatchMessageW, PM_REMOVE, MSG};
-        
-        unsafe {
-            let mut msg: std::mem::MaybeUninit<MSG> = std::mem::MaybeUninit::uninit();
-            
-            // Process all available messages without blocking
-            while PeekMessageW(msg.as_mut_ptr(), std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
-                let msg = msg.assume_init();
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-        }
-    }
 
     pub fn get_window_title(hwnd: HWND) -> String {
         unsafe {
@@ -532,17 +524,17 @@ impl WindowTracker {
             let title = Self::get_window_title(hwnd);
             
             // Debug: Print details for client-related windows
-            if title.contains("Client") || title.contains("cargo") || title.contains("grid") {
-                println!("🔍 DEBUG: Checking client-related window: '{}'", title);
-                println!("   HWND: {:?}", hwnd);
-                println!("   IsWindow: {}", IsWindow(hwnd));
-                println!("   IsWindowVisible: {}", IsWindowVisible(hwnd));
-                println!("   IsIconic: {}", IsIconic(hwnd));
-                let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                println!("   ExStyle: 0x{:X}", ex_style);
-                println!("   WS_EX_TOOLWINDOW: {}", (ex_style & WS_EX_TOOLWINDOW) != 0);
-                println!("   WS_EX_APPWINDOW: {}", (ex_style & WS_EX_APPWINDOW) != 0);
-            }
+            // if title.contains("Client") || title.contains("cargo") || title.contains("grid") {
+            //     println!("🔍 DEBUG: Checking client-related window: '{}'", title);
+            //     println!("   HWND: {:?}", hwnd);
+            //     println!("   IsWindow: {}", IsWindow(hwnd));
+            //     println!("   IsWindowVisible: {}", IsWindowVisible(hwnd));
+            //     println!("   IsIconic: {}", IsIconic(hwnd));
+            //     let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            //     println!("   ExStyle: 0x{:X}", ex_style);
+            //     println!("   WS_EX_TOOLWINDOW: {}", (ex_style & WS_EX_TOOLWINDOW) != 0);
+            //     println!("   WS_EX_APPWINDOW: {}", (ex_style & WS_EX_APPWINDOW) != 0);
+            // }
             
             if IsWindow(hwnd) == 0 || IsWindowVisible(hwnd) == 0 {
                 return false;
@@ -573,11 +565,6 @@ impl WindowTracker {
                 || title.contains("Windows Input Experience") {
                 return false;
             }
-
-            if title.contains("Client") || title.contains("cargo") || title.contains("grid") {
-                println!("   ✅ Window passed all filters - will be tracked");
-            }
-
             true
         }
     }
@@ -1373,9 +1360,6 @@ fn meets_coverage_threshold(window_rect: &RECT, cell_rect: &RECT) -> bool {
     coverage_ratio >= COVERAGE_THRESHOLD
 }
 
-// Windows event hook integration using SetWinEventHook
-pub mod window_events;
-
 // iceoryx2 IPC integration for command and control
 pub mod ipc;
 
@@ -1392,14 +1376,14 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
     let counter = tracker.enum_counter.fetch_add(1, Ordering::SeqCst) + 1;
     
     if WindowTracker::is_manageable_window(hwnd) {
-        let title = WindowTracker::get_window_title(hwnd);
-        println!("Checking window #{}: {}", counter, 
-            if title.is_empty() { "<No Title>" } else { &title });
-        println!("  -> Adding manageable window: {}", title);
+        // let title = WindowTracker::get_window_title(hwnd);
+        // println!("Checking window #{}: {}", counter, 
+        //     if title.is_empty() { "<No Title>" } else { &title });
+        // println!("  -> Adding manageable window: {}", title);
         if tracker.add_window(hwnd) {
-            println!("  -> Added successfully");
+            // println!("  -> Added successfully");
         } else {
-            println!("  -> Failed to add window");
+            // println!("  -> Failed to add window");
         }
     }
     

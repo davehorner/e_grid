@@ -1,24 +1,20 @@
 use crate::GridConfig;
-use crate::{WindowTracker, ipc};
+use crate::{
+    WindowTracker, 
+    ipc,
+    window_events::{self, WindowEventConfig},
+    heartbeat::HeartbeatService,
+};
 use iceoryx2::prelude::*;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::service::ipc::Service;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
-use std::ptr;
 use winapi::shared::windef::HWND;
-use winapi::um::errhandlingapi::GetLastError;
-use winapi::um::winuser::{
-    SetWinEventHook, UnhookWinEvent, GetSystemMetrics,
-    EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE,
-    EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND,
-    WINEVENT_OUTOFCONTEXT, OBJID_WINDOW, CHILDID_SELF, SM_CXSCREEN, SM_CYSCREEN
-};
+use winapi::um::winuser::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 use crate::ipc::GridResponse;
-// Global state for the IPC server instance - needed for WinEvent callbacks
-static mut GLOBAL_IPC_SERVER: Option<*mut GridIpcServer> = None;
 
 /// Dedicated IPC Server for E-Grid system
 /// Manages all server-side IPC communications including:
@@ -29,45 +25,48 @@ static mut GLOBAL_IPC_SERVER: Option<*mut GridIpcServer> = None;
 pub struct GridIpcServer {
     // Core window tracker
     tracker: Arc<Mutex<WindowTracker>>,
-    config: GridConfig,    // IPC Publishers
+    config: GridConfig,
+    
+    // IPC Publishers
     event_publisher: Option<Publisher<Service, ipc::WindowEvent, ()>>,
     response_publisher: Option<Publisher<Service, ipc::WindowResponse, ()>>,
-    window_details_publisher: Option<Publisher<Service, ipc::WindowDetails, ()>>,    focus_publisher: Option<Publisher<Service, ipc::WindowFocusEvent, ()>>,  // NEW: Focus events
+    window_details_publisher: Option<Publisher<Service, ipc::WindowDetails, ()>>,
+    focus_publisher: Option<Publisher<Service, ipc::WindowFocusEvent, ()>>,
     layout_publisher: Option<Publisher<Service, ipc::GridLayoutMessage, ()>>,
     cell_assignment_publisher: Option<Publisher<Service, ipc::GridCellAssignment, ()>>,
     animation_status_publisher: Option<Publisher<Service, ipc::AnimationStatus, ()>>,
-    heartbeat_publisher: Option<Publisher<Service, ipc::HeartbeatMessage, ()>>,  // NEW: Heartbeat
+    heartbeat_publisher: Option<Publisher<Service, ipc::HeartbeatMessage, ()>>,
     
     // IPC Subscribers
     command_subscriber: Option<Subscriber<Service, ipc::WindowCommand, ()>>,
     layout_subscriber: Option<Subscriber<Service, ipc::GridLayoutMessage, ()>>,
     cell_assignment_subscriber: Option<Subscriber<Service, ipc::GridCellAssignment, ()>>,
     animation_subscriber: Option<Subscriber<Service, ipc::AnimationCommand, ()>>,
-    
-    // Server state
+      // Server state
     is_running: bool,
     event_listeners: Vec<Box<dyn Fn(&ipc::GridEvent) + Send + Sync>>,
-      // WinEvent hooks
-    event_hooks: Vec<winapi::shared::windef::HWINEVENTHOOK>,
     
-    // Focus tracking (NEW: for DEFOCUSED events)
-    last_focused_window: Option<HWND>,
+    // New library-based event handling
+    heartbeat_service: Option<HeartbeatService>,
+    focus_event_receiver: Option<mpsc::Receiver<(u64, bool)>>,
 }
 
 impl GridIpcServer {
     /// Create a new IPC server instance
-    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Result<Self, Box<dyn std::error::Error>> {    
-                // Get the config from the tracker once during initialization
+    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Result<Self, Box<dyn std::error::Error>> {
+        // Get the config from the tracker once during initialization
         let config = {
             let tracker_guard = tracker.lock().unwrap();
             tracker_guard.config.clone()
-        };        Ok(Self {
+        };
+        
+        Ok(Self {
             tracker,
             config,
             event_publisher: None,
             response_publisher: None,
             window_details_publisher: None,
-            focus_publisher: None,  // NEW: Focus events
+            focus_publisher: None,
             layout_publisher: None,
             cell_assignment_publisher: None,
             animation_status_publisher: None,
@@ -75,11 +74,10 @@ impl GridIpcServer {
             command_subscriber: None,
             layout_subscriber: None,
             cell_assignment_subscriber: None,
-            animation_subscriber: None,
-            is_running: false,
+            animation_subscriber: None,            is_running: false,
             event_listeners: Vec::new(),
-            event_hooks: Vec::new(),
-            last_focused_window: None,  // NEW: Initialize focus tracking
+            heartbeat_service: None,
+            focus_event_receiver: None,
         })
     }
 
@@ -209,6 +207,9 @@ impl GridIpcServer {
             // Process incoming commands from clients
             self.process_commands()?;
             
+            // Process incoming focus events from the channel and publish them via IPC
+            self.process_focus_events()?;
+            
             // Small delay to prevent busy waiting
             thread::sleep(Duration::from_millis(10));
         }
@@ -253,6 +254,50 @@ impl GridIpcServer {
             self.send_response(response)?;
         }
 
+        Ok(())
+    }    /// Process incoming focus events from the channel and publish them via IPC
+    pub fn process_focus_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {        // Debug: Always log that this method is being called
+        static mut CALL_COUNT: u32 = 0;
+        unsafe {
+            CALL_COUNT += 1;
+            if CALL_COUNT % 1000 == 1 { // Log every 1000th call to avoid spam
+                println!("🔍 [DEBUG] process_focus_events called {} times", CALL_COUNT);
+            }
+        }
+        
+        // Collect events first to avoid borrowing conflicts
+        let mut events = Vec::new();
+        if let Some(ref receiver) = self.focus_event_receiver {
+            while let Ok(event) = receiver.try_recv() {
+                events.push(event);
+            }
+        } else {
+            println!("❌ [DEBUG] focus_event_receiver is None!");
+        }
+        
+        // Debug: Log how many events we're processing
+        if !events.is_empty() {
+            println!("🔍 [DEBUG] Processing {} focus events from channel", events.len());
+        }
+        
+        // Process all collected focus events
+        for (hwnd, is_focused) in events {
+            // Convert u64 back to HWND and publish via IPC
+            let hwnd_ptr = hwnd as HWND;
+            let event_type = if is_focused { "FOCUSED" } else { "DEFOCUSED" };
+            println!("🔍 [DEBUG] About to publish {} event for HWND {}", event_type, hwnd);
+            
+            if let Err(e) = self.publish_focus_event_from_library(hwnd_ptr, is_focused) {
+                println!("❌ Failed to publish focus event via IPC: {:?}", e);
+            } else {
+                println!("✅ [DEBUG] Successfully called publish_focus_event_from_library for {}", hwnd);
+            }
+            
+            // Reset heartbeat when focus events occur
+            if let Some(ref mut heartbeat) = self.heartbeat_service {
+                heartbeat.reset();
+            }
+        }
         Ok(())
     }
 
@@ -536,6 +581,62 @@ impl GridIpcServer {
         } else {
             println!("⚠️ Focus publisher not available");
         }
+    }    /// Publish focus event for window focus tracking (compatible with library-based events)
+    pub fn publish_focus_event_from_library(&mut self, hwnd: HWND, is_focused: bool) -> Result<(), Box<dyn std::error::Error>> {
+        println!("🔍 [DEBUG] publish_focus_event_from_library called for HWND {}", hwnd as u64);
+        
+        // Get window information for the focus event
+        let process_id = unsafe {
+            let mut process_id: u32 = 0;
+            winapi::um::winuser::GetWindowThreadProcessId(hwnd, &mut process_id);
+            process_id
+        };
+        
+        // Get window title for hashing
+        let window_title = unsafe {
+            let mut buffer: [u16; 256] = [0; 256];
+            let len = winapi::um::winuser::GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
+            if len > 0 {
+                String::from_utf16_lossy(&buffer[..len as usize])
+            } else {
+                "(No Title)".to_string()
+            }
+        };
+        
+        // Calculate hashes before borrowing publisher
+        let app_name_hash = self.hash_string(&format!("Process_{}", process_id));
+        let window_title_hash = self.hash_string(&window_title);
+        
+        println!("🔍 [DEBUG] About to check focus_publisher availability...");
+        if let Some(ref mut publisher) = self.focus_publisher {
+            println!("🔍 [DEBUG] Focus publisher is available, creating focus event...");
+            // Create focus event
+            let focus_event = ipc::WindowFocusEvent {
+                event_type: if is_focused { 0 } else { 1 }, // 0=FOCUSED, 1=DEFOCUSED
+                hwnd: hwnd as u64,
+                process_id,
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                app_name_hash,
+                window_title_hash,
+                reserved: [0; 2],
+            };
+            
+            println!("🔍 [DEBUG] About to call publisher.send_copy...");
+            // Publish the focus event
+            publisher.send_copy(focus_event)?;
+            
+            let event_name = if is_focused { "FOCUSED" } else { "DEFOCUSED" };
+            println!("🎯 Published {} event: HWND {} (PID: {}) Title: '{}'", 
+                     event_name, hwnd as u64, process_id, 
+                     if window_title.len() > 30 { &window_title[..30] } else { &window_title });
+        } else {
+            println!("❌ [DEBUG] Focus publisher is None - not initialized!");
+            return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Focus publisher not initialized")));
+        }
+        Ok(())
     }
     
     /// Simple hash function for strings  
@@ -937,151 +1038,57 @@ impl GridIpcServer {
             virtual_row_start: virtual_start_row,
             virtual_col_start: virtual_start_col,
             virtual_row_end: virtual_end_row,
-            virtual_col_end: virtual_end_col,
-            monitor_id,
+            virtual_col_end: virtual_end_col,            monitor_id,
             monitor_row_start: monitor_start_row,
             monitor_col_start: monitor_start_col,
             monitor_row_end: monitor_end_row,
             monitor_col_end: monitor_end_col,
             title_len: window_info.title.len().min(255) as u32,
-        }
-    }
-}
-
-// WinEvent hook procedure for the IPC server
-unsafe extern "system" fn server_win_event_proc(
-    _h_winevent_hook: winapi::shared::windef::HWINEVENTHOOK,
-    event: u32,
-    hwnd: HWND,
-    id_object: i32,
-    id_child: i32,
-    _dw_event_thread: u32,
-    _dw_ms_event_time: u32,
-) {
-    // Only process window-level events
-    if id_object != OBJID_WINDOW || id_child != CHILDID_SELF || hwnd.is_null() {
-        return;
-    }
-
-    // Get the global server instance with additional safety checks
-    if let Some(server_ptr) = GLOBAL_IPC_SERVER {
-        // Additional safety: verify the pointer is not null
-        if !server_ptr.is_null() {
-            let server = &mut *server_ptr;
-            server.handle_window_event(event, hwnd);
-        } else {
-            println!("⚠️ WinEvent callback: Global server pointer is null");
-        }
-    } else {
-        // This can happen during shutdown - not necessarily an error
-        if event == EVENT_SYSTEM_FOREGROUND {
-            println!("🔔 WinEvent: Focus event ignored (server shutting down)");
-        }
-    }
-}
-
-impl GridIpcServer {    /// Handle a window event from WinEvent hook - MINIMAL PROCESSING ONLY
-    fn handle_window_event(&mut self, event: u32, hwnd: HWND) {
-        // DO NOTHING EXPENSIVE IN WINEVENT CALLBACK
-        // Just print a simple message - all actual processing happens in main loop
-        
-        let event_name = match event {
-            EVENT_OBJECT_CREATE => "CREATED",
-            EVENT_OBJECT_DESTROY => "DESTROYED", 
-            EVENT_OBJECT_LOCATIONCHANGE => "MOVED/RESIZED",
-            EVENT_SYSTEM_FOREGROUND => "FOCUSED",  // Changed from ACTIVATED
-            EVENT_SYSTEM_MINIMIZESTART => "MINIMIZED",
-            EVENT_SYSTEM_MINIMIZEEND => "RESTORED",
-            _ => "UNKNOWN",
-        };
-          // Only do minimal logging - no lock acquisition, no publishing, no window operations
-        println!("🔔 WinEvent: {} - HWND: {} (server ptr: {:p})", event_name, hwnd as u64, self as *mut GridIpcServer);        // NEW: For focus events, we can do minimal publishing since it's lightweight
-        if event == EVENT_SYSTEM_FOREGROUND {
-            // Send DEFOCUSED event for previous window if it exists
-            if let Some(prev_hwnd) = self.last_focused_window {
-                if prev_hwnd != hwnd && !prev_hwnd.is_null() {
-                    println!("🎯 [RESTART-TEST] Sending DEFOCUSED for previous HWND: {} (current: {})", prev_hwnd as u64, hwnd as u64);
-                    self.publish_focus_event(prev_hwnd, 1);  // 1 = DEFOCUSED
-                }
-            }
-            
-            // Update the last focused window
-            self.last_focused_window = Some(hwnd);
-            println!("🎯 [RESTART-TEST] Updated last_focused_window to: {} (server ptr: {:p})", hwnd as u64, self as *mut GridIpcServer);
-            
-            // Send FOCUSED event for current window
-            println!("🎯 [RESTART-TEST] Sending FOCUSED for current HWND: {}", hwnd as u64);
-            self.publish_focus_event(hwnd, 0);  // 0 = FOCUSED
-        }
-        
-        // That's it! All actual processing happens in the main loop periodic updates
-    }/// Setup WinEvent hooks for real-time window monitoring
+        }    }
+    
+    /// Setup window event monitoring using the new library-based system
     pub fn setup_window_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        unsafe {
-            // IMPORTANT: Clean up any existing hooks first to prevent orphaned callbacks
-            if !self.event_hooks.is_empty() {
-                println!("🧹 Cleaning up existing WinEvent hooks before setting up new ones...");
-                for hook in &self.event_hooks {
-                    UnhookWinEvent(*hook);
-                }
-                self.event_hooks.clear();
-            }
-            
-            // Clear any existing global pointer first
-            if GLOBAL_IPC_SERVER.is_some() {
-                println!("⚠️ Global server pointer already set - clearing old reference");
-                GLOBAL_IPC_SERVER = None;
-                // Give Windows a moment to process any pending callbacks
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            
-            // Set the global server pointer for the callback
-            GLOBAL_IPC_SERVER = Some(self as *mut GridIpcServer);
-            println!("🎯 Global server pointer set for WinEvent callbacks (ptr: {:p})", self as *mut GridIpcServer);
-            
-            // Initialize focus tracking state
-            self.last_focused_window = None;
-            println!("🎯 Focus tracking state initialized");
-            
-            println!("🔧 Setting up WinEvent hooks for real-time monitoring...");
-            
-            let events_to_hook = [
-                (EVENT_OBJECT_CREATE, "Window Creation"),
-                (EVENT_OBJECT_DESTROY, "Window Destruction"), 
-                (EVENT_OBJECT_LOCATIONCHANGE, "Window Move/Resize"),
-                (EVENT_SYSTEM_FOREGROUND, "Window Activation"),
-                (EVENT_SYSTEM_MINIMIZESTART, "Window Minimize"),
-                (EVENT_SYSTEM_MINIMIZEEND, "Window Restore"),
-            ];
-            
-            for (event, description) in &events_to_hook {
-                let hook = SetWinEventHook(
-                    *event,
-                    *event,
-                    ptr::null_mut(),
-                    Some(server_win_event_proc),
-                    0, // All processes
-                    0, // All threads
-                    WINEVENT_OUTOFCONTEXT,
-                );
+        println!("🔗 Setting up integrated window event monitoring using library system...");
+        
+        // Create a channel for focus events
+        let (focus_sender, focus_receiver) = mpsc::channel::<(u64, bool)>();
+        self.focus_event_receiver = Some(focus_receiver);
+          // Create window event configuration with focus publishing callback
+        let config = WindowEventConfig {
+            tracker: self.tracker.clone(),
+            focus_callback: Some(Box::new(move |hwnd: HWND, is_focused: bool| {
+                println!("🎯 Focus event: HWND {} - {}", hwnd as u64, 
+                        if is_focused { "FOCUSED" } else { "DEFOCUSED" });
                 
-                if hook.is_null() {
-                    let error = GetLastError();
-                    println!("❌ Failed to set up hook for {}: error {}", description, error);
-                } else {
-                    self.event_hooks.push(hook);
-                    println!("✅ Successfully set up hook for {}", description);
+                // Send focus event via channel (convert HWND to u64 for thread safety)
+                match focus_sender.send((hwnd as u64, is_focused)) {
+                    Ok(()) => {
+                        println!("✅ [DEBUG] Successfully sent focus event to channel: HWND {} - {}", 
+                                hwnd as u64, if is_focused { "FOCUSED" } else { "DEFOCUSED" });
+                    },
+                    Err(e) => {
+                        println!("❌ Failed to send focus event via channel: {:?}", e);
+                    }
                 }
-            }
-            
-            if self.event_hooks.is_empty() {
-                return Err("Failed to set up any event hooks".into());
-            }
-            
-            println!("🚀 Successfully set up {} WinEvent hooks!", self.event_hooks.len());
-            println!("📢 Now listening for real-time window events and publishing updates!");
-        }
-          Ok(())
+            })),
+            heartbeat_reset: Some(Box::new(|| {
+                // This callback will be called when window events occur
+                println!("💓 Heartbeat reset triggered by window event");
+            })),
+            debug_mode: true,
+        };
+        
+        // Setup window events using the new library system
+        window_events::setup_window_events(config).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>)?;
+        
+        // Initialize heartbeat service with 30-second timeout
+        self.heartbeat_service = Some(HeartbeatService::new(Duration::from_secs(30)));
+        
+        println!("✅ Library-based window event monitoring is now active!");
+        println!("🎯 Focus tracking and heartbeat services are operational");
+        println!("📢 Focus events will be published through the main event loop");
+        
+        Ok(())
     }
     
     /// Process layout commands from clients
@@ -1186,40 +1193,7 @@ impl GridIpcServer {    /// Handle a window event from WinEvent hook - MINIMAL P
             Err("Failed to acquire tracker lock".into())
         }
     }
-    
-    /// Cleanup WinEvent hooks
-    pub fn cleanup_hooks(&mut self) {        unsafe {
-            println!("🧹 Cleaning up WinEvent hooks and focus state...");
-            
-            for hook in &self.event_hooks {
-                UnhookWinEvent(*hook);
-            }
-            self.event_hooks.clear();
-            
-            // Clear focus tracking state
-            self.last_focused_window = None;
-            println!("🎯 Focus tracking state cleared");
-            
-            // Clear global pointer
-            GLOBAL_IPC_SERVER = None;
-            println!("🎯 Global server pointer cleared");
-            
-            println!("🧹 Cleaned up all WinEvent hooks and state");
-        }
-    }
-      /// Debug method to check focus tracking state
-    pub fn debug_focus_state(&self) {
-        println!("🔍 === FOCUS DEBUG STATE ===");
-        println!("  Last focused window: {:?}", self.last_focused_window.map(|h| h as u64));
-        println!("  Event hooks active: {}", self.event_hooks.len());
-        println!("  Focus publisher available: {}", self.focus_publisher.is_some());
-        unsafe {
-            println!("  Global server pointer set: {}", GLOBAL_IPC_SERVER.is_some());
-        }
-        println!("  Server memory address: {:p}", self as *const GridIpcServer);
-        println!("🔍 ========================");
-    }
-    
+      
     /// Send heartbeat message to keep clients connected during idle periods
     pub fn send_heartbeat(&mut self, iteration: u64, uptime_ms: u64) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ref heartbeat_publisher) = self.heartbeat_publisher {
@@ -1230,9 +1204,7 @@ impl GridIpcServer {    /// Handle a window event from WinEvent hook - MINIMAL P
                     .as_millis() as u64,
                 server_iteration: iteration,
                 uptime_ms,
-            };
-            
-            heartbeat_publisher.send_copy(heartbeat)?;
+            };              heartbeat_publisher.send_copy(heartbeat)?;
         }
         Ok(())
     }
@@ -1240,6 +1212,8 @@ impl GridIpcServer {    /// Handle a window event from WinEvent hook - MINIMAL P
 
 impl Drop for GridIpcServer {
     fn drop(&mut self) {
-        self.cleanup_hooks();
+        // Cleanup window events using the library system
+        window_events::cleanup_hooks();
+        println!("🧹 GridIpcServer cleanup completed");
     }
 }
