@@ -12,15 +12,47 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
     cursor,
 };
+use winapi::um::consoleapi::SetConsoleCtrlHandler;
+use winapi::um::wincon::{CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT};
+use winapi::shared::minwindef::{BOOL, DWORD, TRUE, FALSE};
+
+// Global variables for graceful shutdown
+static mut SHUTDOWN_REQUESTED: bool = false;
+static mut GLOBAL_IPC_SERVER: Option<*mut ipc_server::GridIpcServer> = None;
 
 const BANNER: &str = r#"
-  ███████╗      ██████╗  ██████╗  ██╗ ██████╗ 
-  ██╔════╝     ██╔════╝  ██╔══██╗ ██║ ██╔══██╗
-  █████╗       ██║  ███╗ ██████╔╝ ██║ ██║  ██║
-  ██╔══╝       ██║   ██║ ██╔══██╗ ██║ ██║  ██║
-  ███████╗     ╚██████╔╝ ██║  ██║ ██║ ██████╔╝
-  ╚══════╝      ╚═════╝  ╚═╝  ╚═╝ ╚═╝ ╚═════╝ 
+  ███████╗          ██████╗  ██████╗  ██╗ ██████╗ 
+  ██╔════╝         ██╔════╝  ██╔══██╗ ██║ ██╔══██╗
+  █████╗           ██║  ███╗ ██████╔╝ ██║ ██║  ██║
+  ██╔══╝           ██║   ██║ ██╔══██╗ ██║ ██║  ██║
+  ███████╗ ██████╗ ╚██████╔╝ ██║  ██║ ██║ ██████╔╝
+  ╚══════╝ ╚═════╝  ╚═════╝  ╚═╝  ╚═╝ ╚═╝ ╚═════╝ 
 "#;
+
+/// Console control handler for graceful shutdown
+unsafe extern "system" fn console_ctrl_handler(ctrl_type: DWORD) -> BOOL {
+    match ctrl_type {
+        CTRL_C_EVENT | CTRL_BREAK_EVENT | CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
+            println!("\n🛑 Shutdown signal received - initiating graceful shutdown...");
+            SHUTDOWN_REQUESTED = true;
+            
+            // Send shutdown heartbeat if server is available
+            if let Some(server_ptr) = GLOBAL_IPC_SERVER {
+                if let Some(server) = server_ptr.as_mut() {
+                    println!("💓 Sending shutdown heartbeat to connected clients...");
+                    if let Err(e) = server.send_heartbeat(0, 0) { // iteration=0 signals shutdown
+                        println!("⚠️ Failed to send shutdown heartbeat: {}", e);
+                    }
+                }
+            }
+            
+            // Give time for shutdown heartbeat to be sent
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            TRUE
+        }
+        _ => FALSE,
+    }
+}
 
 /// Check if the e_grid server is already running by trying to connect to an IPC service
 fn is_server_running() -> bool {
@@ -67,6 +99,16 @@ fn is_server_running() -> bool {
 fn start_server() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Starting E-Grid Server");
     println!("=========================");
+    
+    // Setup console control handler for graceful shutdown
+    unsafe {
+        if SetConsoleCtrlHandler(Some(console_ctrl_handler), TRUE) == 0 {
+            println!("⚠️ Failed to set console control handler - graceful shutdown may not work");
+        } else {
+            println!("✅ Console control handler registered - supports graceful shutdown");
+        }
+    }
+    
     println!("Features enabled:");
     println!("  📊 Real-time window grid tracking");
     println!("  🎯 Focus event publishing (FOCUSED/DEFOCUSED)");
@@ -82,10 +124,14 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
     tracker.scan_existing_windows();
     tracker.print_grid();
 
-    let tracker = Arc::new(Mutex::new(tracker));
-
-    // Create and setup the IPC server
+    let tracker = Arc::new(Mutex::new(tracker));    // Create and setup the IPC server
     let mut ipc_server = ipc_server::GridIpcServer::new(tracker.clone())?;
+    
+    // Set global server pointer for graceful shutdown
+    unsafe {
+        GLOBAL_IPC_SERVER = Some(&mut ipc_server as *mut _);
+    }
+    
     println!("\n🔧 Setting up IPC services...");
     ipc_server.setup_services()?;
 
@@ -127,6 +173,14 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_update = std::time::Instant::now();    // Use the reusable message loop from the library
     // This automatically handles Windows message processing for WinEvent callbacks
     window_events::run_message_loop(|| {
+        // Check for shutdown request from console control handler
+        unsafe {
+            if SHUTDOWN_REQUESTED {
+                println!("🛑 Shutdown requested - exiting gracefully...");
+                return false; // Exit the loop
+            }
+        }
+        
         // Process IPC commands from clients
         if let Err(e) = ipc_server.process_commands() {
             println!("⚠️ Error processing IPC commands: {}", e);
@@ -152,17 +206,8 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
             if !completed.is_empty() {
                 println!("🎬 Completed animations for {} windows", completed.len());
             }
-        }
-
-        // Periodic status updates and heartbeat every 30 seconds
-        if last_update.elapsed().as_secs() > 30 {
-            if let Ok(tracker) = tracker.lock() {
-                println!("📊 Status: {} windows, {} monitors, {} active animations", 
-                         tracker.windows.len(), 
-                         tracker.monitor_grids.len(),
-                         tracker.active_animations.len());
-            }
-            
+        }        // Send heartbeat every 5 seconds to keep clients connected
+        if last_update.elapsed().as_secs() > 5 {
             // Send heartbeat to keep clients connected
             let uptime_ms = std::time::Instant::now().duration_since(last_update).as_millis() as u64;
             if let Err(e) = ipc_server.send_heartbeat(_loop_count as u64, uptime_ms) {
@@ -170,6 +215,27 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
             }
             
             last_update = std::time::Instant::now();
+        }
+
+        // Periodic status updates every 30 seconds
+        static mut LAST_STATUS_DISPLAY: std::time::Instant = unsafe { std::mem::zeroed() };
+        static mut STATUS_DISPLAY_INITIALIZED: bool = false;
+        
+        unsafe {
+            if !STATUS_DISPLAY_INITIALIZED {
+                LAST_STATUS_DISPLAY = std::time::Instant::now();
+                STATUS_DISPLAY_INITIALIZED = true;
+            }
+            
+            if LAST_STATUS_DISPLAY.elapsed().as_secs() > 30 {
+                if let Ok(tracker) = tracker.lock() {
+                    println!("📊 Status: {} windows, {} monitors, {} active animations", 
+                             tracker.windows.len(), 
+                             tracker.monitor_grids.len(),
+                             tracker.active_animations.len());
+                }
+                LAST_STATUS_DISPLAY = std::time::Instant::now();
+            }
         }
 
         _loop_count += 1;
