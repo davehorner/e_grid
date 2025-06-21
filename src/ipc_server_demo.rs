@@ -5,10 +5,72 @@ use std::time::Duration;
 use winapi::um::winuser::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
 };
+use winapi::um::consoleapi::SetConsoleCtrlHandler;
+use winapi::um::wincon::{CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT};
+use winapi::shared::minwindef::{BOOL, DWORD, TRUE, FALSE};
+
+// Global flag to track if we're shutting down
+static mut SHUTDOWN_REQUESTED: bool = false;
+static mut GLOBAL_IPC_SERVER: Option<*mut ipc_server::GridIpcServer> = None;
+
+// Console control handler for graceful shutdown
+unsafe extern "system" fn console_ctrl_handler(ctrl_type: DWORD) -> BOOL {
+    match ctrl_type {
+        CTRL_C_EVENT => {
+            println!("\n🛑 CTRL+C received - initiating graceful shutdown...");
+            SHUTDOWN_REQUESTED = true;
+            send_shutdown_heartbeat();
+            TRUE
+        }
+        CTRL_BREAK_EVENT => {
+            println!("\n🛑 CTRL+BREAK received - initiating graceful shutdown...");
+            SHUTDOWN_REQUESTED = true;
+            send_shutdown_heartbeat();
+            TRUE
+        }
+        CTRL_CLOSE_EVENT => {
+            println!("\n🛑 Console window closing - initiating graceful shutdown...");
+            SHUTDOWN_REQUESTED = true;
+            send_shutdown_heartbeat();
+            // Give a moment for the heartbeat to be sent
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            TRUE
+        }
+        CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
+            println!("\n🛑 System shutdown/logoff - initiating graceful shutdown...");
+            SHUTDOWN_REQUESTED = true;
+            send_shutdown_heartbeat();
+            TRUE
+        }
+        _ => FALSE,
+    }
+}
+
+unsafe fn send_shutdown_heartbeat() {
+    if let Some(server_ptr) = GLOBAL_IPC_SERVER {
+        let server = &mut *server_ptr;
+        // Send a special shutdown heartbeat with iteration = 0 to signal shutdown
+        if let Err(e) = server.send_heartbeat(0, 0) {
+            println!("⚠️ Failed to send shutdown heartbeat: {}", e);
+        } else {
+            println!("💓 Shutdown heartbeat sent to clients");
+        }
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 E-Grid IPC Server Demo - Integrated WinEvent Mode");
     println!("====================================================");
+    
+    // Setup console control handler for graceful shutdown
+    unsafe {
+        if SetConsoleCtrlHandler(Some(console_ctrl_handler), TRUE) == 0 {
+            println!("⚠️ Failed to set console control handler - graceful shutdown may not work");
+        } else {
+            println!("✅ Console control handler registered - supports graceful shutdown");
+        }
+    }
+    
     println!("Starting server with integrated WinEvent monitoring:");
     println!("  🔔 Real-time window event detection (create, move, destroy)");
     println!("  📤 Automatic publishing of window details to clients");
@@ -33,11 +95,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🔄 Starting IPC server monitoring...");
     ipc_server.start_background_event_loop()?;
 
+    // Track server start time for heartbeat uptime
+    let start_time = std::time::Instant::now();
+
+    // Set global server pointer for graceful shutdown  
+    // This is handled inside ipc_server.setup_window_events() now
+
     // Setup integrated WinEvent hooks for real-time monitoring
     println!("\n🔗 Setting up integrated WinEvent monitoring...");
     if let Err(e) = ipc_server.setup_window_events() {
         println!("⚠️ Failed to setup WinEvents: {}", e);
         println!("   Continuing without real-time event monitoring...");
+    } else {
+        // Debug focus tracking setup
+        println!("✅ WinEvent hooks successfully established!");
+        println!("🎯 Focus tracking is now active - testing focus events after restart");
+        ipc_server.debug_focus_state();
     } // Give the server a moment to be ready
     thread::sleep(Duration::from_millis(500));
 
@@ -88,6 +161,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_status_time = std::time::Instant::now();
 
     loop {
+        // Check for shutdown request from console control handler
+        unsafe {
+            if SHUTDOWN_REQUESTED {
+                println!("🛑 Shutdown requested - exiting gracefully...");
+                break;
+            }
+        }
+        
         // Process Windows messages for WinEvent hooks
         unsafe {
             let mut msg: MSG = std::mem::zeroed();
@@ -102,6 +183,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Show heartbeat every 100 iterations (1 second)
         if iteration % 100 == 0 {
             println!("💓 Server heartbeat - iteration {}", iteration);
+            
+            // Send IPC heartbeat to keep clients connected during idle periods
+            let uptime_ms = start_time.elapsed().as_millis() as u64;
+            if let Err(e) = ipc_server.send_heartbeat(iteration, uptime_ms) {
+                println!("⚠️ Failed to send heartbeat: {}", e);
+            }
         }
 
         // Process IPC commands frequently for responsiveness
@@ -244,5 +331,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             last_status_time = std::time::Instant::now();
         }
+
+        // Check for shutdown request
+        unsafe {
+            if SHUTDOWN_REQUESTED {
+                println!("🛑 Shutdown requested - exiting...");
+                break;
+            }
+        }
     }
+
+    // Cleanup before shutdown
+    println!("🧹 Cleaning up server resources...");
+    
+    // Send final shutdown heartbeat
+    unsafe {
+        send_shutdown_heartbeat();
+    }
+    
+    // Clean up IPC server
+    ipc_server.cleanup_hooks();
+    
+    // Clear global pointer (handled in ipc_server cleanup now)
+
+    println!("✅ Server stopped. Goodbye!");
+    Ok(())
 }

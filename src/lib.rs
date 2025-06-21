@@ -14,6 +14,9 @@ pub use grid_client_errors::{GridClientError, GridClientResult, RetryConfig,
                              retry_with_backoff, validate_grid_coordinates, 
                              safe_lock, safe_arc_lock};
 
+// Import the centralized grid display module
+pub mod grid_display;
+
 // Coverage threshold: percentage of cell area that must be covered by window
 // to consider the window as occupying that cell (0.0 to 1.0)
 const COVERAGE_THRESHOLD: f32 = 0.3; // 30% coverage required

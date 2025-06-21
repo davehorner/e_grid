@@ -418,8 +418,6 @@ checksum = "0a94e78e84f673da8ee4b46cb5df643792b046b7118678da9969fee29cf15c68"
 [[package]]
 name = "iceoryx2-pal-posix"
 version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5616e41d3171df75d1ab9577d5bccdc4fb95102e275db2afd84a9828a0a01918"
 dependencies = [
  "bindgen",
  "cc",

@@ -22,8 +22,21 @@ pub const ANIMATION_STATUS_SERVICE: &str = "e_grid_animation_status"; // Animati
 // NEW: Focus events service for e_midi integration
 pub const GRID_FOCUS_EVENTS_SERVICE: &str = "e_grid_focus_events"; // Window focus/defocus events
 
+// NEW: Heartbeat service for client connection monitoring
+pub const GRID_HEARTBEAT_SERVICE: &str = "e_grid_heartbeat"; // Server heartbeat messages
+
 // Zero-copy compatible data types for iceoryx2
 // Using only basic types that work with iceoryx2's zero-copy requirements
+
+// Heartbeat message to keep client connection alive during idle periods
+#[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
+#[repr(C)]
+pub struct HeartbeatMessage {
+    pub timestamp: u64,
+    pub server_iteration: u64,
+    pub uptime_ms: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
 #[repr(C)]
 pub struct WindowEvent {
@@ -436,10 +449,10 @@ pub struct GridIpcManager {
     layout_publisher: Option<Publisher<ipc::Service, GridLayoutMessage, ()>>,
     layout_subscriber: Option<Subscriber<ipc::Service, GridLayoutMessage, ()>>,
     cell_assignment_publisher: Option<Publisher<ipc::Service, GridCellAssignment, ()>>,
-    cell_assignment_subscriber: Option<Subscriber<ipc::Service, GridCellAssignment, ()>>,
-    animation_publisher: Option<Publisher<ipc::Service, AnimationCommand, ()>>,
+    cell_assignment_subscriber: Option<Subscriber<ipc::Service, GridCellAssignment, ()>>,    animation_publisher: Option<Publisher<ipc::Service, AnimationCommand, ()>>,
     animation_subscriber: Option<Subscriber<ipc::Service, AnimationCommand, ()>>,
     animation_status_publisher: Option<Publisher<ipc::Service, AnimationStatus, ()>>,
+    heartbeat_publisher: Option<Publisher<ipc::Service, HeartbeatMessage, ()>>,
     
     is_running: bool,
 }
@@ -455,10 +468,10 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
             layout_publisher: None,
             layout_subscriber: None,
             cell_assignment_publisher: None,
-            cell_assignment_subscriber: None,
-            animation_publisher: None,
+            cell_assignment_subscriber: None,            animation_publisher: None,
             animation_subscriber: None,
             animation_status_publisher: None,
+            heartbeat_publisher: None,
             is_running: false,
         })
     }pub fn setup_services(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -545,6 +558,16 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         
         self.animation_status_publisher = Some(animation_status_service.publisher_builder().create()?);
         
+        // Setup heartbeat service
+        let heartbeat_service = node
+            .service_builder(&ServiceName::new(GRID_HEARTBEAT_SERVICE)?)
+            .publish_subscribe::<HeartbeatMessage>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create()?;
+        
+        self.heartbeat_publisher = Some(heartbeat_service.publisher_builder().create()?);
+        
         // Store the node
         self.node = Some(node);
         
@@ -552,11 +575,11 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         println!("   📡 Event service: {}", GRID_EVENTS_SERVICE);
         println!("   📨 Command service: {}", GRID_COMMANDS_SERVICE);
         println!("   📤 Response service: {}", GRID_RESPONSE_SERVICE);
-        println!("   📋 Window details service: {}", GRID_WINDOW_DETAILS_SERVICE);
-        println!("   🗂️  Grid layout service: {}", GRID_LAYOUT_SERVICE);
+        println!("   📋 Window details service: {}", GRID_WINDOW_DETAILS_SERVICE);        println!("   🗂️  Grid layout service: {}", GRID_LAYOUT_SERVICE);
         println!("   📍 Cell assignment service: {}", GRID_CELL_ASSIGNMENTS_SERVICE);
         println!("   🎬 Animation service: {}", ANIMATION_COMMANDS_SERVICE);
         println!("   📊 Animation status service: {}", ANIMATION_STATUS_SERVICE);
+        println!("   💓 Heartbeat service: {}", GRID_HEARTBEAT_SERVICE);
 
         self.is_running = true;
         Ok(())
@@ -1547,8 +1570,24 @@ impl GridIpcManager {    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Resul
         }
         Ok(())
     }
+    
+    /// Send heartbeat message to keep clients connected during idle periods
+    pub fn send_heartbeat(&mut self, iteration: u64, uptime_ms: u64) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(ref heartbeat_publisher) = self.heartbeat_publisher {
+            let heartbeat = HeartbeatMessage {
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                server_iteration: iteration,
+                uptime_ms,
+            };
+            
+            heartbeat_publisher.send_copy(heartbeat)?;
+        }
+        Ok(())
+    }
 }
-
 // Module definition for iceoryx2 service type
 pub mod ipc {
     pub use iceoryx2::service::ipc::Service;

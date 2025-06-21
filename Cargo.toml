@@ -2,6 +2,8 @@
 name = "e_grid"
 version = "0.1.0"
 edition = "2021"
+[patch.crates-io]
+iceoryx2-pal-posix = { path = "C:\\w\\iceoryx2-pal-posix-0.6.1" }
 
 [dependencies]
 winapi = { version = "0.3", features = ["winuser", "libloaderapi", "processthreadsapi", "shellapi", "consoleapi", "errhandlingapi"] }
@@ -105,6 +107,10 @@ path = "src/test_comprehensive_window_management.rs"
 [[bin]]
 name = "test_event_driven_demo"
 path = "src/test_event_driven_demo.rs"
+
+[[bin]]
+name = "test_bounds_demo"
+path = "src/test_bounds_demo.rs"
 
 # Focus tracking examples
 [[example]]

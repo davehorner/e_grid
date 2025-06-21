@@ -102,10 +102,10 @@ pub struct MonitorGridInfo {    pub monitor_id: u32,
 impl GridClient {
     /// Request grid configuration from server before creating client
     fn request_grid_config_from_server() -> GridClientResult<GridConfig> {
-        // For now, return a default config
-        // TODO: Implement actual IPC request to server
-        println!("⚙️ Using default grid configuration (TODO: implement server request)");
-        Ok(GridConfig::new(4, 6)) // Default 4x6 grid
+        // For now, return the same default config as the server
+        // TODO: Implement actual IPC request to server for dynamic configuration
+        println!("⚙️ Using server default grid configuration (TODO: implement server request)");
+        Ok(GridConfig::default()) // Use same default as server (8x12)
     }
     
     pub fn new() -> GridClientResult<Self> {
@@ -305,19 +305,19 @@ impl GridClient {
             while *running.lock().unwrap() {
                 // Try to create/recreate connection to server
                 match Self::create_background_subscribers() {
-                    Ok((event_subscriber, window_details_subscriber, focus_subscriber)) => {
+                    Ok((event_subscriber, window_details_subscriber, focus_subscriber, heartbeat_subscriber)) => {
                         if connection_retry_count > 0 {
                             println!("✅ Successfully reconnected to e_grid server (attempt {})", connection_retry_count + 1);
                         } else {
                             println!("🔍 Background monitoring started - listening for real-time updates + focus events...");
                         }
                         connection_retry_count = 0; // Reset retry count on successful connection
-                        
-                        // Main monitoring loop - process events while connected
+                          // Main monitoring loop - process events while connected
                         let monitoring_result = Self::run_monitoring_loop(
                             &event_subscriber,
                             &window_details_subscriber, 
                             &focus_subscriber,
+                            &heartbeat_subscriber,
                             &windows,
                             &virtual_grid,
                             &monitors,
@@ -379,10 +379,10 @@ impl GridClient {
           Ok(())
     }
 
-    fn run_monitoring_loop(
-        event_subscriber: &Subscriber<Service, ipc::WindowEvent, ()>,
+    fn run_monitoring_loop(        event_subscriber: &Subscriber<Service, ipc::WindowEvent, ()>,
         window_details_subscriber: &Subscriber<Service, ipc::WindowDetails, ()>,
         focus_subscriber: &Subscriber<Service, ipc::WindowFocusEvent, ()>,
+        heartbeat_subscriber: &Subscriber<Service, ipc::HeartbeatMessage, ()>,
         windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
         virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
         monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
@@ -392,7 +392,7 @@ impl GridClient {
         config: &GridConfig,
     ) -> MonitoringResult {
         let mut consecutive_empty_cycles = 0;
-        let max_empty_cycles = 20; // If no data for 20 cycles (10+ seconds), assume disconnection
+        let max_empty_cycles = 200; // If no data for 200 cycles (10+ seconds), assume disconnection
         
         loop {
             if !*running.lock().unwrap() {
@@ -427,7 +427,19 @@ impl GridClient {
                 had_activity = true;
                 
                 Self::handle_window_details(&details, windows, virtual_grid, monitors, auto_display, config);
-            }            
+            }              // Process heartbeat messages to keep connection alive
+            while let Some(heartbeat_sample) = heartbeat_subscriber.receive().unwrap_or(None) {
+                let heartbeat = *heartbeat_sample;
+                had_activity = true; // Reset disconnect counter on heartbeat
+                
+                // Check for shutdown heartbeat (iteration = 0)
+                if heartbeat.server_iteration == 0 {
+                    println!("💓 Received shutdown heartbeat from server - server is gracefully shutting down");
+                    return MonitoringResult::ServerDisconnected;
+                }
+                // No need to log every normal heartbeat, just reset the timer
+            }
+            
             // Connection health monitoring
             if had_activity {
                 consecutive_empty_cycles = 0; // Reset counter on activity
@@ -565,7 +577,7 @@ impl GridClient {
 
 
 
-    fn create_background_subscribers() -> Result<(Subscriber<Service, ipc::WindowEvent, ()>, Subscriber<Service, ipc::WindowDetails, ()>, Subscriber<Service, ipc::WindowFocusEvent, ()>), Box<dyn std::error::Error>> {
+    fn create_background_subscribers() -> Result<(Subscriber<Service, ipc::WindowEvent, ()>, Subscriber<Service, ipc::WindowDetails, ()>, Subscriber<Service, ipc::WindowFocusEvent, ()>, Subscriber<Service, ipc::HeartbeatMessage, ()>), Box<dyn std::error::Error>> {
         let node = NodeBuilder::new().create::<Service>()?;
 
         // Create event subscriber
@@ -589,7 +601,14 @@ impl GridClient {
             .open()?;
         let focus_subscriber = focus_service.subscriber_builder().create()?;
 
-        Ok((event_subscriber, window_details_subscriber, focus_subscriber))
+        // Create heartbeat subscriber for connection monitoring
+        let heartbeat_service = node
+            .service_builder(&ServiceName::new(ipc::GRID_HEARTBEAT_SERVICE)?)
+            .publish_subscribe::<ipc::HeartbeatMessage>()
+            .open()?;
+        let heartbeat_subscriber = heartbeat_service.subscriber_builder().create()?;
+
+        Ok((event_subscriber, window_details_subscriber, focus_subscriber, heartbeat_subscriber))
     }
     
     fn handle_window_event(
@@ -781,43 +800,45 @@ impl GridClient {
                 }
             }
         }
-    }    
-      fn display_virtual_grid(
+    }    fn display_virtual_grid(
         virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
         windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
         config: &GridConfig,
     ) {
-        println!("\n🔥 REAL-TIME GRID UPDATE:");
-        println!("{}", "=".repeat(60));
+        let window_count = match windows.try_lock() {
+            Ok(windows_lock) => windows_lock.len(),
+            Err(_) => 0,
+        };
         
-        let window_count = windows.lock().unwrap().len();
-        println!("Client Grid Viewer - {}x{} Grid ({} windows)", config.rows, config.cols, window_count);
-        println!("{}", "=".repeat(60));
-
-        // Print column headers
-        print!("   ");
-        for col in 0..config.cols {
-            print!("{:2} ", col);
-        }
-        println!();
-
-        // Print grid
-        if let Ok(grid) = virtual_grid.lock() {
-            for row in 0..config.rows {
-                print!("{:2} ", row);
-                
-                for col in 0..config.cols {
-                    match grid[row][col] {
-                        ClientCellState::Occupied(_hwnd) => print!("## "),
-                        ClientCellState::Empty => print!(".. "),
-                        ClientCellState::OffScreen => print!("XX "),
+        // Convert client grid to server grid format for display
+        if let Ok(grid) = virtual_grid.try_lock() {
+            let server_grid: Vec<Vec<crate::CellState>> = grid.iter().map(|row| {
+                row.iter().map(|cell| {
+                    match cell {
+                        ClientCellState::Empty => crate::CellState::Empty,
+                        ClientCellState::Occupied(hwnd) => crate::CellState::Occupied(*hwnd as crate::HWND),
+                        ClientCellState::OffScreen => crate::CellState::OffScreen,
                     }
-                }
-                println!();
-            }
+                }).collect()
+            }).collect();
+              println!("\n🔥 REAL-TIME GRID UPDATE:");
+            
+            // Get virtual screen bounds for display
+            let virtual_rect = Self::get_virtual_screen_rect();
+            let bounds = ((virtual_rect.0, virtual_rect.1), (virtual_rect.2, virtual_rect.3));
+            
+            // Use the centralized display function for consistency with server
+            crate::grid_display::display_grid(
+                &server_grid,
+                config,
+                window_count,
+                &crate::grid_display::GridDisplayConfig::default(),
+                Some("Client Grid Viewer"),
+                None,
+                Some(bounds),
+            );
         }
         
-        println!("{}", "=".repeat(60));
         println!();
     }
       fn update_monitor_grids(
@@ -871,8 +892,7 @@ impl GridClient {
                 monitor.height = window_bottom;
             }        
         }
-    }
-      fn display_complete_grid(
+    }    fn display_complete_grid(
         &self,
         virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
         windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
@@ -891,76 +911,63 @@ impl GridClient {
         let virtual_width = virtual_rect.2 - virtual_rect.0;
         let virtual_height = virtual_rect.3 - virtual_rect.1;
         
-        println!("\n============================================================");
-        println!("Window Grid Tracker - {}x{} Grid ({} windows)", self.config.rows, self.config.cols, window_count);
-        println!("Monitor: {}x{} px", virtual_width, virtual_height);
-        println!("============================================================");        // Print column headers
-        print!("    ");
-        for col in 0..self.config.cols {
-            print!("{:2} ", col);
-        }
-        println!();
-          // Print virtual grid with window representation (like server)
+        // Convert client grid to server grid format for display
         if let Ok(grid) = virtual_grid.try_lock() {
-            for row in 0..self.config.rows {
-                print!(" {}: ", row);
-                
-                for col in 0..self.config.cols {
-                    match grid[row][col] {
-                        ClientCellState::Occupied(hwnd) => {
-                            // Display last 2 decimal digits of HWND in hex format like the server
-                            let display_val = (hwnd % 100) as u8;
-                            if display_val == 0 {
-                                print!("XX ");
-                            } else {
-                                print!("{:2X} ", display_val);
-                            }
-                        }
-                        ClientCellState::Empty => print!(".. "),
-                        ClientCellState::OffScreen => print!("XX "),
+            let server_grid: Vec<Vec<crate::CellState>> = grid.iter().map(|row| {
+                row.iter().map(|cell| {
+                    match cell {
+                        ClientCellState::Empty => crate::CellState::Empty,
+                        ClientCellState::Occupied(hwnd) => crate::CellState::Occupied(*hwnd as crate::HWND),
+                        ClientCellState::OffScreen => crate::CellState::OffScreen,
                     }
-                }
-                println!();
-            }}
+                }).collect()
+            }).collect();
+              // Use the centralized display function for consistency with server
+            crate::grid_display::display_grid(
+                &server_grid,
+                &self.config,
+                window_count,
+                &crate::grid_display::GridDisplayConfig::default(),
+                None,
+                Some((virtual_width, virtual_height)),
+                Some(((virtual_rect.0, virtual_rect.1), (virtual_rect.2, virtual_rect.3))),
+            );
+        }
         
-        println!();
-        
-        // Print monitor grids
+        // Display monitor grids using the centralized function like the server
         match monitors.try_lock() {
             Ok(monitors_lock) => {
                 if !monitors_lock.is_empty() {
                     println!("\n🖥️ Monitor Grids:");
-                    for (i, monitor) in monitors_lock.iter().enumerate() {
-                        if monitor.width > 0 || monitor.height > 0 {
-                            println!("  Monitor {}: {}x{}", i, monitor.width, monitor.height);
-                        }
-                        // Print column headers
-                        print!("      ");
-                        for col in 0..self.config.cols {
-                            print!("{:2} ", col);
-                        }
+                    
+                    for monitor in monitors_lock.iter() {
+                        println!("  Monitor {}: {}x{}", monitor.monitor_id, monitor.width, monitor.height);
                         println!();
                         
-                        // Print monitor grid
+                        // Convert monitor grid to server format
+                        let mut server_monitor_grid = vec![vec![crate::CellState::Empty; self.config.cols]; self.config.rows];
                         for row in 0..self.config.rows {
-                            print!(" {}:  ", row);
-                            
                             for col in 0..self.config.cols {
-                                match monitor.grid[row][col] {                                    
-                                    Some(hwnd) => {
-                                        // Display last 2 decimal digits of HWND in hex format like server
-                                        let display_val = (hwnd % 100) as u8;
-                                        if display_val == 0 {
-                                            print!(" X ");
-                                        } else {
-                                            print!("{:2X} ", display_val);
-                                        }
-                                    }
-                                    None => print!(" . "),
+                                if row < monitor.grid.len() && col < monitor.grid[row].len() {
+                                    server_monitor_grid[row][col] = match monitor.grid[row][col] {
+                                        Some(hwnd) => crate::CellState::Occupied(hwnd as crate::HWND),
+                                        None => crate::CellState::Empty,
+                                    };
                                 }
                             }
-                            println!();                        
                         }
+                          // Use centralized display for monitor grids
+                        let monitor_title = format!("Monitor {} Grid", monitor.monitor_id);
+                        let monitor_bounds = ((monitor.x, monitor.y), (monitor.x + monitor.width, monitor.y + monitor.height));
+                        crate::grid_display::display_grid(
+                            &server_monitor_grid,
+                            &self.config,
+                            0, // Monitor grids don't track window count separately
+                            &crate::grid_display::GridDisplayConfig::default(),
+                            Some(&monitor_title),
+                            Some((monitor.width, monitor.height)),
+                            Some(monitor_bounds),
+                        );
                     }
                 }
             }
@@ -968,9 +975,7 @@ impl GridClient {
                 println!("⚠️ Monitor grids locked, skipping monitor grid display");
             }
         }
-        
-        println!();
-    }    
+    }
     
     pub fn send_command(&mut self, command: ipc::WindowCommand) -> GridClientResult<()> {
         self.command_publisher.send_copy(command)
