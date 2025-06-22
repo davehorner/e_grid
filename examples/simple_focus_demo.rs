@@ -16,13 +16,15 @@ fn main() -> GridClientResult<()> {
     // Set up a simple focus callback
     println!("📋 Registering focus callback...");
     grid_client.set_focus_callback(|focus_event| {
-        let event_name = if focus_event.event_type == 0 { "🟢 FOCUSED" } else { "🔴 DEFOCUSED" };
-        
-        println!("{} - Window: {} (PID: {}) at timestamp: {}", 
-            event_name, 
-            focus_event.hwnd, 
-            focus_event.process_id,
-            focus_event.timestamp
+        let event_name = if focus_event.event_type == 0 {
+            "🟢 FOCUSED"
+        } else {
+            "🔴 DEFOCUSED"
+        };
+
+        println!(
+            "{} - Window: {} (PID: {}) at timestamp: {}",
+            event_name, focus_event.hwnd, focus_event.process_id, focus_event.timestamp
         );
 
         // Show application hash for identification
@@ -40,8 +42,9 @@ fn main() -> GridClientResult<()> {
 
     // Start monitoring
     println!("📡 Starting focus event monitoring...");
-    grid_client.start_background_monitoring()
-        .map_err(|e| e_grid::GridClientError::InitializationError(format!("Failed to start monitoring: {}", e)))?;
+    grid_client.start_background_monitoring().map_err(|e| {
+        e_grid::GridClientError::InitializationError(format!("Failed to start monitoring: {}", e))
+    })?;
 
     println!("✅ Focus monitoring active!");
     println!();
@@ -62,7 +65,10 @@ fn main() -> GridClientResult<()> {
 
         // Print a status update every 30 seconds
         if seconds % 30 == 0 {
-            println!("📊 Demo has been running for {} seconds - focus different windows to see events", seconds);
+            println!(
+                "📊 Demo has been running for {} seconds - focus different windows to see events",
+                seconds
+            );
         }
     }
 }

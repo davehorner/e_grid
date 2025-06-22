@@ -62,7 +62,7 @@ impl HeartbeatService {
     pub fn reset_callback(&self) -> Box<dyn Fn() + Send + Sync> {
         let last_reset = self.last_reset.clone();
         let enabled = self.enabled;
-        
+
         Box::new(move || {
             if enabled {
                 if let Ok(mut reset_time) = last_reset.lock() {
@@ -91,14 +91,14 @@ mod tests {
     #[test]
     fn test_heartbeat_reset() {
         let heartbeat = HeartbeatService::new(Duration::from_millis(100));
-        
+
         // Should not timeout immediately
         assert!(!heartbeat.has_timed_out());
-        
+
         // Wait and check timeout
         thread::sleep(Duration::from_millis(150));
         assert!(heartbeat.has_timed_out());
-        
+
         // Reset should clear timeout
         heartbeat.reset();
         assert!(!heartbeat.has_timed_out());
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn test_disabled_heartbeat() {
         let heartbeat = HeartbeatService::disabled();
-        
+
         // Disabled heartbeat should never timeout
         assert!(!heartbeat.has_timed_out());
         thread::sleep(Duration::from_millis(50));

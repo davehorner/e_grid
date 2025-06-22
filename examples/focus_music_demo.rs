@@ -20,11 +20,11 @@ struct FocusActionManager {
 impl FocusActionManager {
     fn new() -> Self {
         let mut music_map = HashMap::new();
-        
+
         // Pre-populate with some common application patterns
         // In a real implementation, these would be learned or configured
         music_map.insert(0, "🎵 Default Desktop Theme".to_string());
-        
+
         Self {
             app_music_map: Arc::new(Mutex::new(music_map)),
             current_song: Arc::new(Mutex::new(None)),
@@ -33,39 +33,43 @@ impl FocusActionManager {
     }
 
     fn handle_focus_event(&self, focus_event: e_grid::ipc::WindowFocusEvent) {
-        if focus_event.event_type == 0 { // FOCUSED
+        if focus_event.event_type == 0 {
+            // FOCUSED
             self.handle_window_focused(focus_event);
-        } else { // DEFOCUSED
+        } else {
+            // DEFOCUSED
             self.handle_window_defocused(focus_event);
         }
     }
 
     fn handle_window_focused(&self, focus_event: e_grid::ipc::WindowFocusEvent) {
         let app_hash = focus_event.app_name_hash;
-        
+
         println!("🔥 Window {} gained focus", focus_event.hwnd);
-        
+
         // Get or assign a song for this application
         let song = self.get_or_assign_song(app_hash);
-        
+
         // "Play" the song (simulate music control)
         if let Ok(mut current) = self.current_song.lock() {
             *current = Some(song.clone());
         }
-        
+
         println!("🎵 Now playing: {}", song);
-        
+
         // Log the action
-        self.log_action(format!("STARTED: {} (Window: {}, App: 0x{:x})", 
-                               song, focus_event.hwnd, app_hash));
-        
+        self.log_action(format!(
+            "STARTED: {} (Window: {}, App: 0x{:x})",
+            song, focus_event.hwnd, app_hash
+        ));
+
         // Show some visual feedback
         self.print_playback_status();
     }
 
     fn handle_window_defocused(&self, focus_event: e_grid::ipc::WindowFocusEvent) {
         println!("💤 Window {} lost focus", focus_event.hwnd);
-        
+
         // Pause current playback
         if let Ok(mut current) = self.current_song.lock() {
             if let Some(ref song) = *current {
@@ -74,7 +78,7 @@ impl FocusActionManager {
             }
             *current = None;
         }
-        
+
         self.print_playback_status();
     }
 
@@ -84,11 +88,11 @@ impl FocusActionManager {
             if let Some(song) = music_map.get(&app_hash) {
                 return song.clone();
             }
-            
+
             // Assign a new song based on the app hash
             let song = self.generate_song_for_app(app_hash);
             music_map.insert(app_hash, song.clone());
-            
+
             println!("🆕 Assigned new song to app 0x{:x}: {}", app_hash, song);
             song
         } else {
@@ -99,10 +103,10 @@ impl FocusActionManager {
     fn generate_song_for_app(&self, app_hash: u64) -> String {
         // Generate a "song" based on the app hash
         // This simulates how e_midi might assign music to different applications
-        
+
         let songs = [
             "🎼 Coding Symphony",
-            "🎹 Browser Blues", 
+            "🎹 Browser Blues",
             "🥁 Terminal Beats",
             "🎻 Editor's Sonata",
             "🎺 Communication Jazz",
@@ -112,7 +116,7 @@ impl FocusActionManager {
             "🔊 System Sounds",
             "🎧 Focus Flow",
         ];
-        
+
         let index = (app_hash % songs.len() as u64) as usize;
         songs[index].to_string()
     }
@@ -139,7 +143,7 @@ impl FocusActionManager {
 
     fn print_summary(&self) {
         println!("\n🎵 === FOCUS MUSIC CONTROL SUMMARY ===");
-        
+
         // Current playback status
         if let Ok(current) = self.current_song.lock() {
             match current.as_ref() {
@@ -147,19 +151,21 @@ impl FocusActionManager {
                 None => println!("⏹️  Currently Playing: Nothing"),
             }
         }
-        
+
         // Show assigned songs
         if let Ok(music_map) = self.app_music_map.lock() {
-            if music_map.len() > 1 { // More than just default
+            if music_map.len() > 1 {
+                // More than just default
                 println!("🎼 Application Music Assignments:");
                 for (app_hash, song) in music_map.iter() {
-                    if *app_hash != 0 { // Skip default
+                    if *app_hash != 0 {
+                        // Skip default
                         println!("   App 0x{:x}: {}", app_hash, song);
                     }
                 }
             }
         }
-        
+
         // Show recent actions
         if let Ok(history) = self.action_history.lock() {
             if !history.is_empty() {
@@ -169,7 +175,7 @@ impl FocusActionManager {
                 }
             }
         }
-        
+
         println!("=====================================\n");
     }
 }
@@ -196,8 +202,9 @@ fn main() -> GridClientResult<()> {
 
     // Start monitoring
     println!("📡 Starting focus monitoring...");
-    grid_client.start_background_monitoring()
-        .map_err(|e| e_grid::GridClientError::InitializationError(format!("Failed to start monitoring: {}", e)))?;
+    grid_client.start_background_monitoring().map_err(|e| {
+        e_grid::GridClientError::InitializationError(format!("Failed to start monitoring: {}", e))
+    })?;
 
     println!("✅ Music control is now active!");
     println!();
@@ -221,9 +228,11 @@ fn main() -> GridClientResult<()> {
             action_manager.print_summary();
         }
 
-        // Print usage reminder every 2 minutes  
+        // Print usage reminder every 2 minutes
         if iteration % 12 == 0 {
-            println!("💡 Tip: Try switching between different applications to hear different songs!");
+            println!(
+                "💡 Tip: Try switching between different applications to hear different songs!"
+            );
         }
     }
 }
@@ -242,12 +251,12 @@ mod tests {
     #[test]
     fn test_song_assignment() {
         let manager = FocusActionManager::new();
-        
+
         // Test that same app hash gets same song
         let song1 = manager.get_or_assign_song(0x12345);
         let song2 = manager.get_or_assign_song(0x12345);
         assert_eq!(song1, song2);
-        
+
         // Test that different app hash gets different song
         let song3 = manager.get_or_assign_song(0x67890);
         assert_ne!(song1, song3);
@@ -256,7 +265,7 @@ mod tests {
     #[test]
     fn test_focus_event_handling() {
         let manager = FocusActionManager::new();
-        
+
         let focus_event = e_grid::ipc::WindowFocusEvent {
             event_type: 0, // FOCUSED
             hwnd: 12345,

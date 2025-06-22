@@ -1,10 +1,12 @@
-use e_grid::{ipc_server, WindowTracker, window_events};
+use e_grid::{ipc_server, window_events, WindowTracker};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use winapi::shared::minwindef::{BOOL, DWORD, FALSE, TRUE};
 use winapi::um::consoleapi::SetConsoleCtrlHandler;
-use winapi::um::wincon::{CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT};
-use winapi::shared::minwindef::{BOOL, DWORD, TRUE, FALSE};
+use winapi::um::wincon::{
+    CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_C_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
+};
 
 // Global flag to track if we're shutting down
 static mut SHUTDOWN_REQUESTED: bool = false;
@@ -58,7 +60,7 @@ unsafe fn send_shutdown_heartbeat() {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 E-Grid IPC Server Demo - Integrated WinEvent Mode");
     println!("====================================================");
-    
+
     // Setup console control handler for graceful shutdown
     unsafe {
         if SetConsoleCtrlHandler(Some(console_ctrl_handler), TRUE) == 0 {
@@ -67,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("✅ Console control handler registered - supports graceful shutdown");
         }
     }
-    
+
     println!("Starting server with integrated WinEvent monitoring:");
     println!("  🔔 Real-time window event detection (create, move, destroy)");
     println!("  📤 Automatic publishing of window details to clients");
@@ -95,7 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Track server start time for heartbeat uptime
     let start_time = std::time::Instant::now();
 
-    // Set global server pointer for graceful shutdown  
+    // Set global server pointer for graceful shutdown
     // This is handled inside ipc_server.setup_window_events() now
 
     // Setup integrated WinEvent hooks for real-time monitoring
@@ -107,12 +109,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Debug focus tracking setup
         println!("✅ WinEvent hooks successfully established!");
         println!("🎯 Focus tracking is now active - using library-based system");
-        
+
         // IMPORTANT: Test focus tracking immediately
         println!("🔧 Testing focus event system...");
         // This ensures the focus system is working right after setup
     }
-    
+
     // Give the server a moment to be ready
     thread::sleep(Duration::from_millis(500));
 
@@ -147,7 +149,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📊 Server Statistics:");
     if let Ok(tracker) = tracker.lock() {
         println!("  Windows tracked: {}", tracker.windows.len());
-        println!("  Grid size: {}x{}", tracker.config.rows, tracker.config.cols);
+        println!(
+            "  Grid size: {}x{}",
+            tracker.config.rows, tracker.config.cols
+        );
         println!("  Monitors: {}", tracker.monitor_grids.len());
     }
     println!();
@@ -156,7 +161,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  2. Move windows around to see real-time updates");
     println!("  3. Use client commands to assign windows to grid cells");
     println!();
-    println!("Press Ctrl+C to stop the server...");    println!("🔄 Starting message loop with WinEvent processing...");
+    println!("Press Ctrl+C to stop the server...");
+    println!("🔄 Starting message loop with WinEvent processing...");
     let mut iteration = 0;
     let mut last_status_time = std::time::Instant::now();
 
@@ -173,7 +179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Show heartbeat every 100 iterations (1 second)
         if iteration % 100 == 0 {
             println!("💓 Server heartbeat - iteration {}", iteration);
-            
+
             // Send IPC heartbeat to keep clients connected during idle periods
             let uptime_ms = start_time.elapsed().as_millis() as u64;
             if let Err(e) = ipc_server.send_heartbeat(iteration, uptime_ms) {
@@ -182,7 +188,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Process IPC commands frequently for responsiveness
-        if iteration % 10 == 0 {  // Only process commands every 100ms to reduce load
+        if iteration % 10 == 0 {
+            // Only process commands every 100ms to reduce load
             match ipc_server.process_commands() {
                 Ok(()) => {
                     // Commands processed successfully (no output unless there were commands)
@@ -191,17 +198,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("❌ Error processing commands: {}", e);
                 }
             }
-            
+
             // Process grid layout commands
             if let Err(e) = ipc_server.process_layout_commands() {
                 println!("❌ Error processing layout commands: {}", e);
             }
-            
-            // Process animation commands  
+
+            // Process animation commands
             if let Err(e) = ipc_server.process_animation_commands() {
                 println!("❌ Error processing animation commands: {}", e);
             }
-            
+
             // Update animations
             if let Err(e) = ipc_server.update_animations() {
                 println!("❌ Error updating animations: {}", e);
@@ -216,18 +223,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match tracker.try_lock() {
                 Ok(mut tracker_lock) => {
                     let old_count = tracker_lock.windows.len();
-                    
+
                     // Since WinEvents now do minimal processing, we need to periodically
                     // rescan for windows to catch changes
                     tracker_lock.scan_existing_windows();
                     tracker_lock.update_grid();
                     tracker_lock.update_monitor_grids();
-                    
+
                     let new_count = tracker_lock.windows.len();
 
                     if old_count != new_count || iteration % 1000 == 0 {
                         // Also print every 10 seconds
-                        println!("🔄 Grid updated: {} windows tracked (was {})", new_count, old_count);
+                        println!(
+                            "🔄 Grid updated: {} windows tracked (was {})",
+                            new_count, old_count
+                        );
                         tracker_lock.print_grid();
 
                         // Print monitor grids too
@@ -331,12 +341,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Cleanup before shutdown
     println!("🧹 Cleaning up server resources...");
-    
+
     // Send final shutdown heartbeat
     unsafe {
         send_shutdown_heartbeat();
     }
-    
+
     // IPC server cleanup is now handled automatically by the Drop trait
     println!("🧹 IPC server cleanup will be handled automatically");
 

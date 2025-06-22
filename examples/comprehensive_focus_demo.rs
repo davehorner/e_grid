@@ -12,18 +12,18 @@ struct ComprehensiveFocusTracker {
     // Event tracking
     focus_history: Arc<Mutex<Vec<FocusEvent>>>,
     current_focused: Arc<Mutex<Option<FocusedWindow>>>,
-    
-    // Statistics  
+
+    // Statistics
     app_focus_counts: Arc<Mutex<HashMap<u64, u32>>>,
     app_focus_time: Arc<Mutex<HashMap<u64, u64>>>, // Total seconds focused per app
     total_focus_events: Arc<Mutex<u32>>,
     session_start_time: u64,
-    
+
     // Music simulation (like e_midi integration would use)
     app_music_map: Arc<Mutex<HashMap<u64, String>>>,
     current_song: Arc<Mutex<Option<String>>>,
     song_changes: Arc<Mutex<u32>>,
-    
+
     // Application identification
     app_names: Arc<Mutex<HashMap<u64, String>>>, // For display purposes
 }
@@ -73,8 +73,12 @@ impl ComprehensiveFocusTracker {
             .unwrap()
             .as_secs();
 
-        let event_type = if focus_event.event_type == 0 { "FOCUSED" } else { "DEFOCUSED" };
-        
+        let event_type = if focus_event.event_type == 0 {
+            "FOCUSED"
+        } else {
+            "DEFOCUSED"
+        };
+
         // Create our internal focus event
         let internal_event = FocusEvent {
             hwnd: focus_event.hwnd,
@@ -105,18 +109,26 @@ impl ComprehensiveFocusTracker {
     }
 
     fn print_realtime_event(&self, event: &FocusEvent) {
-        let emoji = if event.event_type == "FOCUSED" { "🟢" } else { "🔴" };
+        let emoji = if event.event_type == "FOCUSED" {
+            "🟢"
+        } else {
+            "🔴"
+        };
         let app_name = self.get_app_display_name(event.app_name_hash);
-        
-        println!("{} {} - {} | PID: {} | HWND: {} | Time: {}", 
-            emoji, event.event_type, app_name, event.process_id, event.hwnd, event.timestamp);
-        
+
+        println!(
+            "{} {} - {} | PID: {} | HWND: {} | Time: {}",
+            emoji, event.event_type, app_name, event.process_id, event.hwnd, event.timestamp
+        );
+
         // Show hashes for technical users
         if event.app_name_hash != 0 {
-            println!("   📱 App Hash: 0x{:x} | Title Hash: 0x{:x}", 
-                event.app_name_hash, event.window_title_hash);
+            println!(
+                "   📱 App Hash: 0x{:x} | Title Hash: 0x{:x}",
+                event.app_name_hash, event.window_title_hash
+            );
         }
-        
+
         println!("   ─────────────────────────────────────");
     }
 
@@ -126,23 +138,34 @@ impl ComprehensiveFocusTracker {
                 return name.clone();
             }
         }
-        
+
         // Generate a readable name based on hash
         let app_names = [
-            "Code Editor", "Web Browser", "Terminal", "File Manager", 
-            "Music Player", "Video Player", "Chat App", "Email Client",
-            "System Tool", "Game", "Office App", "Design Tool",
-            "Developer Tool", "System Monitor", "Desktop"
+            "Code Editor",
+            "Web Browser",
+            "Terminal",
+            "File Manager",
+            "Music Player",
+            "Video Player",
+            "Chat App",
+            "Email Client",
+            "System Tool",
+            "Game",
+            "Office App",
+            "Design Tool",
+            "Developer Tool",
+            "System Monitor",
+            "Desktop",
         ];
-        
+
         let index = (app_hash % app_names.len() as u64) as usize;
         let display_name = format!("{} (0x{:x})", app_names[index], app_hash);
-        
+
         // Cache it for future use
         if let Ok(mut names) = self.app_names.lock() {
             names.insert(app_hash, display_name.clone());
         }
-        
+
         display_name
     }
 
@@ -184,12 +207,12 @@ impl ComprehensiveFocusTracker {
             if let Some(ref focused) = *current {
                 if focused.hwnd == focus_event.hwnd {
                     let focus_duration = timestamp - focused.focus_start_time;
-                    
+
                     // Add to total focus time for this app
                     if let Ok(mut times) = self.app_focus_time.lock() {
                         *times.entry(focused.app_name_hash).or_insert(0) += focus_duration;
                     }
-                    
+
                     *current = None;
                 }
             }
@@ -201,16 +224,16 @@ impl ComprehensiveFocusTracker {
 
     fn start_music_for_app(&self, app_hash: u64) {
         let song = self.get_or_assign_song(app_hash);
-        
+
         if let Ok(mut current) = self.current_song.lock() {
             if current.as_ref() != Some(&song) {
                 *current = Some(song.clone());
-                
+
                 // Update song change counter
                 if let Ok(mut changes) = self.song_changes.lock() {
                     *changes += 1;
                 }
-                
+
                 println!("🎵 Now playing: {}", song);
             }
         }
@@ -230,12 +253,15 @@ impl ComprehensiveFocusTracker {
             if let Some(song) = music_map.get(&app_hash) {
                 return song.clone();
             }
-            
+
             let song = self.generate_song_for_app(app_hash);
             music_map.insert(app_hash, song.clone());
-            
-            println!("🆕 Assigned new song to {}: {}", 
-                self.get_app_display_name(app_hash), song);
+
+            println!(
+                "🆕 Assigned new song to {}: {}",
+                self.get_app_display_name(app_hash),
+                song
+            );
             song
         } else {
             "🎵 Default Song".to_string()
@@ -245,7 +271,7 @@ impl ComprehensiveFocusTracker {
     fn generate_song_for_app(&self, app_hash: u64) -> String {
         let songs = [
             "🎼 Coding Symphony in C Major",
-            "🎹 Browser Blues & Scrolling Jazz", 
+            "🎹 Browser Blues & Scrolling Jazz",
             "🥁 Terminal Beats & Command Line Rhythms",
             "🎻 Editor's Sonata in Text Minor",
             "🎺 Communication Concerto",
@@ -260,7 +286,7 @@ impl ComprehensiveFocusTracker {
             "🎻 Chat Application Chamber Music",
             "🎺 Desktop Ambient Soundscape",
         ];
-        
+
         let index = (app_hash % songs.len() as u64) as usize;
         songs[index].to_string()
     }
@@ -270,21 +296,27 @@ impl ComprehensiveFocusTracker {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         let session_duration = now - self.session_start_time;
-        
+
         println!("\n🔥 ===== COMPREHENSIVE FOCUS TRACKING REPORT =====");
-        println!("📊 Session Duration: {} seconds ({} minutes)", 
-            session_duration, session_duration / 60);
-        
+        println!(
+            "📊 Session Duration: {} seconds ({} minutes)",
+            session_duration,
+            session_duration / 60
+        );
+
         // Current status
         if let Ok(current) = self.current_focused.lock() {
             match current.as_ref() {
                 Some(focused) => {
                     let app_name = self.get_app_display_name(focused.app_name_hash);
                     let focus_duration = now - focused.focus_start_time;
-                    println!("🔍 Currently Focused: {} (for {} seconds)", app_name, focus_duration);
-                },
+                    println!(
+                        "🔍 Currently Focused: {} (for {} seconds)",
+                        app_name, focus_duration
+                    );
+                }
                 None => println!("🔍 Currently Focused: None"),
             }
         }
@@ -301,33 +333,33 @@ impl ComprehensiveFocusTracker {
         if let Ok(total) = self.total_focus_events.lock() {
             println!("📈 Total Focus Events: {}", *total);
         }
-        
+
         if let Ok(changes) = self.song_changes.lock() {
             println!("🎶 Song Changes: {}", *changes);
         }
 
         // Application statistics
         self.print_app_statistics();
-        
+
         // Recent history
         self.print_recent_history();
-        
+
         // Music assignments
         self.print_music_assignments();
-        
+
         println!("================================================\n");
     }
 
     fn print_app_statistics(&self) {
         println!("\n🏆 APPLICATION STATISTICS:");
-        
+
         // Focus counts
         if let Ok(counts) = self.app_focus_counts.lock() {
             if !counts.is_empty() {
                 println!("   📊 Focus Count Ranking:");
                 let mut sorted_counts: Vec<_> = counts.iter().collect();
                 sorted_counts.sort_by(|a, b| b.1.cmp(a.1));
-                  for (i, (app_hash, count)) in sorted_counts.iter().take(10).enumerate() {
+                for (i, (app_hash, count)) in sorted_counts.iter().take(10).enumerate() {
                     let app_name = self.get_app_display_name(**app_hash);
                     println!("      {}. {}: {} times", i + 1, app_name, count);
                 }
@@ -340,7 +372,7 @@ impl ComprehensiveFocusTracker {
                 println!("   ⏱️  Focus Time Ranking:");
                 let mut sorted_times: Vec<_> = times.iter().collect();
                 sorted_times.sort_by(|a, b| b.1.cmp(a.1));
-                  for (i, (app_hash, time)) in sorted_times.iter().take(10).enumerate() {
+                for (i, (app_hash, time)) in sorted_times.iter().take(10).enumerate() {
                     let app_name = self.get_app_display_name(**app_hash);
                     let minutes = *time / 60;
                     let seconds = *time % 60;
@@ -356,8 +388,10 @@ impl ComprehensiveFocusTracker {
                 println!("   📜 Recent Events (last 10):");
                 for event in history.iter().rev().take(10) {
                     let app_name = self.get_app_display_name(event.app_name_hash);
-                    println!("      {} {} at {} (PID: {})", 
-                        event.event_type, app_name, event.timestamp, event.process_id);
+                    println!(
+                        "      {} {} at {} (PID: {})",
+                        event.event_type, app_name, event.timestamp, event.process_id
+                    );
                 }
             }
         }
@@ -376,24 +410,38 @@ impl ComprehensiveFocusTracker {
     }
 
     fn get_session_summary(&self) -> String {
-        let total = if let Ok(total) = self.total_focus_events.lock() { *total } else { 0 };
-        let app_count = if let Ok(counts) = self.app_focus_counts.lock() { counts.len() } else { 0 };
-        let song_changes = if let Ok(changes) = self.song_changes.lock() { *changes } else { 0 };
-        
+        let total = if let Ok(total) = self.total_focus_events.lock() {
+            *total
+        } else {
+            0
+        };
+        let app_count = if let Ok(counts) = self.app_focus_counts.lock() {
+            counts.len()
+        } else {
+            0
+        };
+        let song_changes = if let Ok(changes) = self.song_changes.lock() {
+            *changes
+        } else {
+            0
+        };
+
         let current_info = if let Ok(current) = self.current_focused.lock() {
             match current.as_ref() {
                 Some(focused) => {
                     let app_name = self.get_app_display_name(focused.app_name_hash);
                     format!("focused on {}", app_name)
-                },
+                }
                 None => "no focus".to_string(),
             }
         } else {
             "unknown".to_string()
         };
 
-        format!("📊 Session: {} events, {} apps, {} song changes, currently {}", 
-                total, app_count, song_changes, current_info)
+        format!(
+            "📊 Session: {} events, {} apps, {} song changes, currently {}",
+            total, app_count, song_changes, current_info
+        )
     }
 }
 
@@ -413,7 +461,7 @@ fn main() -> GridClientResult<()> {
     // Create grid client
     println!("🔧 Initializing GridClient with comprehensive tracking...");
     let mut grid_client = GridClient::new()?;
-    
+
     // Register our comprehensive focus callback
     println!("🎯 Registering comprehensive focus tracking callback...");
     let tracker_clone = focus_tracker.clone();
@@ -424,8 +472,9 @@ fn main() -> GridClientResult<()> {
 
     // Start background monitoring
     println!("📡 Starting comprehensive focus monitoring...");
-    grid_client.start_background_monitoring()
-        .map_err(|e| e_grid::GridClientError::InitializationError(format!("Failed to start monitoring: {}", e)))?;
+    grid_client.start_background_monitoring().map_err(|e| {
+        e_grid::GridClientError::InitializationError(format!("Failed to start monitoring: {}", e))
+    })?;
 
     println!("✅ Comprehensive focus tracking is now active!");
     println!();
@@ -446,7 +495,11 @@ fn main() -> GridClientResult<()> {
         iteration += 1;
 
         // Brief status every 10 seconds
-        println!("⏱️  [{}s] {}", iteration * 10, focus_tracker.get_session_summary());
+        println!(
+            "⏱️  [{}s] {}",
+            iteration * 10,
+            focus_tracker.get_session_summary()
+        );
 
         // Comprehensive report every 60 seconds
         if iteration % 6 == 0 {
@@ -454,11 +507,13 @@ fn main() -> GridClientResult<()> {
         }
 
         // Usage reminders
-        if iteration % 12 == 0 { // Every 2 minutes
+        if iteration % 12 == 0 {
+            // Every 2 minutes
             println!("💡 Tip: Try switching between different applications to see the full power of focus tracking!");
         }
-        
-        if iteration % 18 == 0 { // Every 3 minutes
+
+        if iteration % 18 == 0 {
+            // Every 3 minutes
             println!("🎵 Notice how each application gets its own unique song assignment!");
         }
     }
@@ -472,7 +527,7 @@ mod tests {
     fn test_comprehensive_tracker_creation() {
         let tracker = ComprehensiveFocusTracker::new();
         assert!(tracker.session_start_time > 0);
-        
+
         let summary = tracker.get_session_summary();
         assert!(summary.contains("0 events"));
         assert!(summary.contains("0 apps"));
@@ -481,11 +536,11 @@ mod tests {
     #[test]
     fn test_app_display_name_generation() {
         let tracker = ComprehensiveFocusTracker::new();
-        
+
         let name1 = tracker.get_app_display_name(0x12345);
         let name2 = tracker.get_app_display_name(0x12345); // Same hash
         let name3 = tracker.get_app_display_name(0x67890); // Different hash
-        
+
         assert_eq!(name1, name2); // Same hash should give same name
         assert_ne!(name1, name3); // Different hash should give different name
         assert!(name1.contains("0x12345")); // Should include hash
@@ -494,11 +549,11 @@ mod tests {
     #[test]
     fn test_song_assignment() {
         let tracker = ComprehensiveFocusTracker::new();
-        
+
         let song1 = tracker.get_or_assign_song(0xABCDEF);
         let song2 = tracker.get_or_assign_song(0xABCDEF); // Same app
         let song3 = tracker.get_or_assign_song(0x123456); // Different app
-        
+
         assert_eq!(song1, song2); // Same app should get same song
         assert_ne!(song1, song3); // Different apps should get different songs
     }
@@ -506,7 +561,7 @@ mod tests {
     #[test]
     fn test_focus_event_handling() {
         let tracker = ComprehensiveFocusTracker::new();
-          let focus_event = e_grid::ipc::WindowFocusEvent {
+        let focus_event = e_grid::ipc::WindowFocusEvent {
             event_type: 0, // FOCUSED
             hwnd: 12345,
             process_id: 1000,

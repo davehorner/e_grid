@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use winapi::shared::windef::{HWND, RECT};
 use winapi::um::winuser::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Copy)]
 pub enum EasingType {
     Linear,
     EaseIn,

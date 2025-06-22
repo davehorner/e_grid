@@ -1,6 +1,6 @@
 //! IPC Protocol types for E-Grid
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 // Add ZeroCopySend and repr(C) for iceoryx2 compatibility
 use iceoryx2::prelude::ZeroCopySend;
 
@@ -101,9 +101,11 @@ pub struct ClientGridRequest {
 
 // Re-export all event/data types and constants needed for IPC
 pub use crate::ipc::{
-    WindowDetails, WindowEvent, WindowFocusEvent, HeartbeatMessage,
-    GRID_EVENTS_SERVICE, GRID_COMMANDS_SERVICE, GRID_RESPONSE_SERVICE, GRID_WINDOW_DETAILS_SERVICE, GRID_FOCUS_EVENTS_SERVICE, GRID_LAYOUT_SERVICE, GRID_CELL_ASSIGNMENTS_SERVICE, ANIMATION_COMMANDS_SERVICE, ANIMATION_STATUS_SERVICE, GRID_HEARTBEAT_SERVICE,
-    AnimationCommand, AnimationStatus, GridLayoutMessage, GridCellAssignment, GridEvent
+    AnimationCommand, AnimationStatus, GridCellAssignment, GridEvent, GridLayoutMessage,
+    HeartbeatMessage, WindowDetails, WindowEvent, WindowFocusEvent, ANIMATION_COMMANDS_SERVICE,
+    ANIMATION_STATUS_SERVICE, GRID_CELL_ASSIGNMENTS_SERVICE, GRID_COMMANDS_SERVICE,
+    GRID_EVENTS_SERVICE, GRID_FOCUS_EVENTS_SERVICE, GRID_HEARTBEAT_SERVICE, GRID_LAYOUT_SERVICE,
+    GRID_RESPONSE_SERVICE, GRID_WINDOW_DETAILS_SERVICE,
 };
 
 #[cfg(test)]
@@ -153,7 +155,9 @@ mod tests {
             name: Some("Virtual".to_string()),
             grid: vec![vec![None; 24]; 8],
         };
-        let list = MonitorList { monitors: vec![grid] };
+        let list = MonitorList {
+            monitors: vec![grid],
+        };
         let json = serde_json::to_string(&list).unwrap();
         let de: MonitorList = serde_json::from_str(&json).unwrap();
         assert_eq!(list.monitors.len(), de.monitors.len());

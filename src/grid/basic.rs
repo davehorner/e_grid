@@ -3,7 +3,7 @@
 
 use crate::config::GridConfig;
 use crate::display::format_hwnd_display;
-use crate::grid::traits::{CellDisplay, GridError, GridResult, GridTrait};
+use crate::grid::traits::{CellDisplay, GridResult, GridTrait};
 use crate::window::WindowInfo;
 use std::collections::HashMap;
 use winapi::shared::windef::{HWND, RECT};

@@ -18,7 +18,7 @@ echo Waiting 2 seconds for server to initialize...
 timeout /t 2 /nobreak >nul
 
 echo Starting Client Demo...
-start "E-Grid Client Demo" cmd /k "cargo run --bin grid_client_demo"
+start "E-Grid Client Demo" cmd /k "cargo run --example grid_client_demo"
 
 echo.
 echo Both demos started!

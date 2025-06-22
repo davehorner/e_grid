@@ -45,7 +45,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let mut event_subscriber = event_service.subscriber_builder().create()?;
+    let event_subscriber = event_service.subscriber_builder().create()?;
 
     // Subscribe to responses
     let response_service = node
@@ -53,7 +53,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
         .publish_subscribe::<ipc::WindowResponse>()
         .open()?;
 
-    let mut response_subscriber = response_service.subscriber_builder().create()?;
+    let response_subscriber = response_service.subscriber_builder().create()?;
     // Create command publisher (optional for multiple clients)
     let command_service = node
         .service_builder(&ServiceName::new(ipc::GRID_COMMANDS_SERVICE)?)
@@ -297,7 +297,8 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                                                                             target_col: col,
                                                                             monitor_id: 0, // Ignored for virtual
                                                                             layout_id: 0,
-                                                                            animation_duration_ms: 0,
+                                                                            animation_duration_ms:
+                                                                                0,
                                                                             easing_type: 0,
                                                                         };
                                                                     if let Err(e) =
@@ -494,8 +495,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ipc_manager.setup_services()?;
 
     // Set up window event hooks
-    let config = window_events::WindowEventConfig::new(tracker_arc.clone())
-        .with_debug(true);
+    let config = window_events::WindowEventConfig::new(tracker_arc.clone()).with_debug(true);
     match window_events::setup_window_events(config) {
         Ok(_) => println!("✅ Window event hooks set up successfully!"),
         Err(e) => {

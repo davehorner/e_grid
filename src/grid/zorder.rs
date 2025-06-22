@@ -9,7 +9,7 @@ use crate::grid::traits::{
 use crate::window::{WindowInfo, WindowTracker};
 use std::collections::{BTreeMap, HashMap};
 use winapi::shared::windef::{HWND, RECT};
-use winapi::um::winuser::{GetWindow, GetWindowRect, IsWindowVisible, GW_HWNDPREV};
+use winapi::um::winuser::{GetWindow, GetWindowRect, GW_HWNDPREV};
 
 #[derive(Debug, Clone)]
 pub enum ZOrderCellState {

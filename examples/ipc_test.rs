@@ -1,7 +1,5 @@
 use e_grid::{ipc, WindowTracker};
-use iceoryx2::prelude::*;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🧪 iceoryx2 IPC Integration Test");

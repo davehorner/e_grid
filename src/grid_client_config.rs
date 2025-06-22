@@ -139,18 +139,18 @@ impl GridClientConfig {
         let config: GridClientConfig = serde_json::from_str(&contents)?;
         Ok(config)
     }
-    
+
     /// Save configuration to file
     pub fn save_to_file(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let contents = serde_json::to_string_pretty(self)?;
         std::fs::write(path, contents)?;
         Ok(())
     }
-    
+
     /// Load configuration from environment variables with fallback to defaults
     pub fn from_env() -> Self {
         let mut config = Self::default();
-        
+
         // Grid configuration
         if let Ok(rows) = std::env::var("GRID_ROWS") {
             if let Ok(rows) = rows.parse::<usize>() {
@@ -162,7 +162,7 @@ impl GridClientConfig {
                 config.grid.cols = cols;
             }
         }
-        
+
         // Display configuration
         if let Ok(auto_display) = std::env::var("GRID_AUTO_DISPLAY") {
             config.display.auto_display = auto_display.to_lowercase() == "true";
@@ -170,55 +170,55 @@ impl GridClientConfig {
         if let Ok(debug) = std::env::var("GRID_DEBUG") {
             config.display.show_debug_info = debug.to_lowercase() == "true";
         }
-        
+
         // Performance configuration
         if let Ok(batch_size) = std::env::var("GRID_BATCH_SIZE") {
             if let Ok(batch_size) = batch_size.parse::<usize>() {
                 config.performance.event_batch_size = batch_size;
             }
         }
-        
+
         // Focus event configuration
         if let Ok(focus_enabled) = std::env::var("GRID_FOCUS_EVENTS_ENABLED") {
             config.focus_events.enabled = focus_enabled.to_lowercase() == "true";
         }
-        
+
         config
     }
-    
+
     /// Get processing interval as Duration
     pub fn processing_interval(&self) -> Duration {
         Duration::from_millis(self.performance.processing_interval_ms)
     }
-    
+
     /// Get idle interval as Duration
     pub fn idle_interval(&self) -> Duration {
         Duration::from_millis(self.performance.idle_interval_ms)
     }
-    
+
     /// Get throttle interval as Duration
     pub fn display_throttle(&self) -> Duration {
         Duration::from_millis(self.display.throttle_ms)
     }
-    
+
     /// Validate configuration values
     pub fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
         if self.grid.rows == 0 || self.grid.cols == 0 {
             return Err("Grid dimensions must be positive".into());
         }
-        
+
         if self.performance.event_batch_size == 0 {
             return Err("Event batch size must be positive".into());
         }
-        
+
         if self.ipc.max_retry_attempts == 0 {
             return Err("Max retry attempts must be positive".into());
         }
-        
+
         if self.focus_events.batch_size == 0 {
             return Err("Focus event batch size must be positive".into());
         }
-        
+
         Ok(())
     }
 }

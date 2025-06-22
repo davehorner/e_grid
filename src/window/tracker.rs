@@ -2,18 +2,16 @@
 // This maintains the core window tracking functionality
 
 use dashmap::DashMap;
-use std::collections::HashMap;
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use winapi::shared::minwindef::LPARAM;
 use winapi::shared::windef::{HWND, RECT};
-use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::winuser::*;
 
 use crate::config::GridConfig;
+use crate::grid::animation::AnimationGrid;
 use crate::monitor::MonitorGrid;
 use crate::window::{WindowAnimation, WindowInfo};
-use crate::grid::animation::{AnimationGrid, EasingType};
 
 // Coverage threshold: percentage of cell area that must be covered by window
 const COVERAGE_THRESHOLD: f32 = 0.3; // 30% coverage required
@@ -129,7 +127,7 @@ impl WindowTracker {
             self.monitor_rect.right,
             self.monitor_rect.bottom,
         );
-        
+
         self.animation_grid = Some(AnimationGrid::new(self.config.clone(), monitor_bounds));
         println!("🎬 Animation grid initialized");
     }
