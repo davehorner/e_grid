@@ -16,6 +16,7 @@ use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use iceoryx2::service::ipc::Service;
+use log::{debug, error, info, trace, warn};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -200,36 +201,12 @@ impl GridIpcServer {
             .open_or_create()?;
 
         self.heartbeat_publisher = Some(heartbeat_service.publisher_builder().create()?);
-
-        println!("✅ E-Grid IPC server services initialized successfully");
-        println!("   📡 Event service: {}", GRID_EVENTS_SERVICE);
-        println!("   📨 Command service: {}", GRID_COMMANDS_SERVICE);
-        println!("   📤 Response service: {}", GRID_RESPONSE_SERVICE);
-        println!(
-            "   📋 Window details service: {}",
-            GRID_WINDOW_DETAILS_SERVICE
-        );
-        println!("   🎯 Focus events service: {}", GRID_FOCUS_EVENTS_SERVICE); // NEW
-        println!("   🗂️  Grid layout service: {}", GRID_LAYOUT_SERVICE);
-        println!(
-            "   📍 Cell assignment service: {}",
-            GRID_CELL_ASSIGNMENTS_SERVICE
-        );
-        println!("   🎬 Animation service: {}", ANIMATION_COMMANDS_SERVICE);
-        println!(
-            "   📊 Animation status service: {}",
-            ANIMATION_STATUS_SERVICE
-        );
-        println!("   💓 Heartbeat service: {}", GRID_HEARTBEAT_SERVICE);
-
         self.is_running = true;
         Ok(())
     }
 
     /// Start the server event loop in the current thread
     pub fn run_event_loop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🔄 Starting E-Grid IPC server event loop...");
-
         while self.is_running {
             // --- NEW: poll move/resize events ---
             if let Some(wes) = self.window_event_system.as_mut() {
@@ -248,8 +225,6 @@ impl GridIpcServer {
             // Small delay to prevent busy waiting
             thread::sleep(Duration::from_millis(10));
         }
-
-        println!("🛑 E-Grid IPC server event loop stopped");
         Ok(())
     }
     /// Start the server event loop in a background thread
@@ -278,7 +253,7 @@ impl GridIpcServer {
         }
         // Process each command
         for command in commands_to_process {
-            println!("📨 Received command: {:?}", command);
+            trace!("📨 Received command: {:?}", command);
             let response = self.handle_ipc_command(command)?;
             self.send_ipc_response(response)?;
         }
@@ -340,9 +315,9 @@ impl GridIpcServer {
             }
             IpcCommandType::GetMonitorList => {
                 // Enumerate monitors and build MonitorList
-                println!("🔍 [DEBUG] Handling GetMonitorList command, enumerating monitors...");
+                debug!("🔍 [DEBUG] Handling GetMonitorList command, enumerating monitors...");
                 let monitor_list = Some(self.enumerate_monitors());
-                println!("🔍 [DEBUG] MonitorList to send: {:?}", monitor_list);
+                debug!("🔍 [DEBUG] MonitorList to send: {:?}", monitor_list);
                 Ok(IpcResponse {
                     response_type: IpcResponseType::MonitorList,
                     grid_state: None,
@@ -395,26 +370,13 @@ impl GridIpcServer {
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ref mut publisher) = self.response_publisher {
             publisher.send_copy(response.clone())?; // FIX: clone before send
-            println!("📤 Sent IpcResponse: {:?}", response);
+            trace!("📤 Sent IpcResponse: {:?}", response);
         }
         Ok(())
     }
 
     /// Process incoming focus events from the channel and publish them via IPC
     pub fn process_focus_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Debug: Always log that this method is being called
-        static mut CALL_COUNT: u32 = 0;
-        unsafe {
-            CALL_COUNT += 1;
-            if CALL_COUNT % 1000 == 1 {
-                // Log every 1000th call to avoid spam
-                println!(
-                    "🔍 [DEBUG] process_focus_events called {} times",
-                    CALL_COUNT
-                );
-            }
-        }
-
         // Collect events first to avoid borrowing conflicts
         let mut events = Vec::new();
         if let Some(ref receiver) = self.focus_event_receiver {
@@ -422,15 +384,7 @@ impl GridIpcServer {
                 events.push(event);
             }
         } else {
-            println!("❌ [DEBUG] focus_event_receiver is None!");
-        }
-
-        // Debug: Log how many events we're processing
-        if !events.is_empty() {
-            println!(
-                "🔍 [DEBUG] Processing {} focus events from channel",
-                events.len()
-            );
+            error!("❌ [DEBUG] focus_event_receiver is None!");
         }
 
         // Process all collected focus events
@@ -438,18 +392,9 @@ impl GridIpcServer {
             // Convert u64 back to HWND and publish via IPC
             let hwnd_ptr = hwnd as HWND;
             let event_type = if is_focused { "FOCUSED" } else { "DEFOCUSED" };
-            println!(
-                "🔍 [DEBUG] About to publish {} event for HWND {}",
-                event_type, hwnd
-            );
 
             if let Err(e) = self.publish_focus_event_from_library(hwnd_ptr, is_focused) {
-                println!("❌ Failed to publish focus event via IPC: {:?}", e);
-            } else {
-                println!(
-                    "✅ [DEBUG] Successfully called publish_focus_event_from_library for {}",
-                    hwnd
-                );
+                error!("❌ Failed to publish focus event via IPC: {:?}", e);
             }
 
             // Reset heartbeat when focus events occur
@@ -480,13 +425,13 @@ impl GridIpcServer {
         // --- Enhanced visual logging for move/resize START/STOP events ---
         match &event {
             GridEvent::WindowMoveStart { .. } | GridEvent::WindowResizeStart { .. } => {
-                println!("\n\n📡 Published event: {:?}", event);
+                info!("\n\n📡 Published event: {:?}", event);
             }
             GridEvent::WindowMoveStop { .. } | GridEvent::WindowResizeStop { .. } => {
-                println!("📡 Published event: {:?}\n\n", event);
+                info!("📡 Published event: {:?}\n\n", event);
             }
             _ => {
-                println!("📡 Published event: {:?}", event);
+                info!("📡 Published event: {:?}", event);
             }
         }
         // Publish via iceoryx2
@@ -513,13 +458,13 @@ impl GridIpcServer {
                 // Then publish (mutable borrow)
                 if let Some(ref mut publisher) = self.window_details_publisher {
                     publisher.send_copy(details)?;
-                    println!("📤 Published window details for HWND {:?}", hwnd);
+                    debug!("Published window details for HWND {:?}", hwnd);
                 }
             } else {
-                println!("⚠️ No WindowInfo found for HWND {:?}", hwnd);
+                warn!("No WindowInfo found for HWND {:?}", hwnd);
             }
         } else {
-            println!("⚠️ Could not acquire tracker lock for HWND {:?}", hwnd);
+            warn!("Could not acquire tracker lock for HWND {:?}", hwnd);
         }
         Ok(())
     }
@@ -528,10 +473,9 @@ impl GridIpcServer {
     pub fn publish_all_window_details(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Get a snapshot of windows to avoid holding the lock during publishing
         let windows_snapshot = if let Ok(tracker) = self.tracker.lock() {
-            println!("📤 Publishing details for {} windows (already filtered by is_manageable_window)...", tracker.windows.len());
+            info!("📤 Publishing details for {} windows (already filtered by is_manageable_window)...", tracker.windows.len());
             tracker.windows.clone()
         } else {
-            println!("❌ Failed to lock window tracker");
             return Err("Failed to lock window tracker".into());
         };
 
@@ -563,17 +507,17 @@ impl GridIpcServer {
                         std::thread::sleep(std::time::Duration::from_millis(50));
                     }
                     Err(e) => {
-                        println!("   ❌ Failed to publish window {}: {}", *hwnd as u64, e);
+                        error!("   ❌ Failed to publish window {}: {}", *hwnd as u64, e);
                         failed_count += 1;
                         // Continue with other windows instead of failing completely
                     }
                 }
             } else {
-                println!("⚠️ Window details publisher not available");
+                error!("⚠️ Window details publisher not available");
                 return Err("Window details publisher not available".into());
             }
         }
-        println!(
+        info!(
             "✅ Successfully published details for {}/{} windows (failed: {})",
             published_count, total_window_count, failed_count
         );
@@ -621,14 +565,14 @@ impl GridIpcServer {
 
             // Publish the focus event
             if let Err(e) = publisher.send_copy(focus_event) {
-                println!("❌ Failed to publish focus event: {:?}", e);
+                error!("❌ Failed to publish focus event: {:?}", e);
             } else {
                 let event_name = if event_type == 0 {
                     "FOCUSED"
                 } else {
                     "DEFOCUSED"
                 };
-                println!(
+                info!(
                     "🎯 Published {} event: HWND {} (PID: {}) Title: '{}'",
                     event_name,
                     hwnd as u64,
@@ -641,7 +585,7 @@ impl GridIpcServer {
                 );
             }
         } else {
-            println!("⚠️ Focus publisher not available");
+            warn!("⚠️ Focus publisher not available");
         }
     }
     /// Publish focus event for window focus tracking (compatible with library-based events)
@@ -650,11 +594,6 @@ impl GridIpcServer {
         hwnd: HWND,
         is_focused: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        println!(
-            "🔍 [DEBUG] publish_focus_event_from_library called for HWND {}",
-            hwnd as u64
-        );
-
         // Get window information for the focus event
         let process_id = unsafe {
             let mut process_id: u32 = 0;
@@ -678,10 +617,7 @@ impl GridIpcServer {
         let app_name_hash = self.hash_string(&format!("Process_{}", process_id));
         let window_title_hash = self.hash_string(&window_title);
 
-        println!("🔍 [DEBUG] About to check focus_publisher availability...");
         if let Some(ref mut publisher) = self.focus_publisher {
-            println!("🔍 [DEBUG] Focus publisher is available, creating focus event...");
-            // Create focus event
             let focus_event = WindowFocusEvent {
                 event_type: if is_focused { 0 } else { 1 }, // 0=FOCUSED, 1=DEFOCUSED
                 hwnd: hwnd as u64,
@@ -694,13 +630,11 @@ impl GridIpcServer {
                 window_title_hash,
                 reserved: [0; 2],
             };
-
-            println!("🔍 [DEBUG] About to call publisher.send_copy...");
             // Publish the focus event
             publisher.send_copy(focus_event)?;
 
             let event_name = if is_focused { "FOCUSED" } else { "DEFOCUSED" };
-            println!(
+            info!(
                 "🎯 Published {} event: HWND {} (PID: {}) Title: '{}'",
                 event_name,
                 hwnd as u64,
@@ -712,7 +646,7 @@ impl GridIpcServer {
                 }
             );
         } else {
-            println!("❌ [DEBUG] Focus publisher is None - not initialized!");
+            error!("❌ [DEBUG] Focus publisher is None - not initialized!");
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "Focus publisher not initialized",
@@ -813,7 +747,7 @@ impl GridIpcServer {
     /// Stop the server
     pub fn stop(&mut self) {
         self.is_running = false;
-        println!("🛑 E-Grid IPC server stopped");
+        error!("🛑 E-Grid IPC server stopped");
     }
 
     /// Get the current grid configuration
@@ -917,9 +851,7 @@ impl GridIpcServer {
         target_row: usize,
         target_col: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🔧 IPC Server: Converting hwnd {} to HWND pointer", hwnd);
         let hwnd_ptr = hwnd as winapi::shared::windef::HWND;
-        println!("🔧 IPC Server: HWND pointer = {:?}", hwnd_ptr);
 
         if let Ok(mut tracker) = self.tracker.lock() {
             tracker
@@ -1291,7 +1223,6 @@ impl GridIpcServer {
 
     /// Setup window event monitoring using the new library-based system
     pub fn setup_window_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🔗 Setting up integrated window event monitoring using library system...");
         // Create a channel for focus events
         let (focus_sender, focus_receiver) = mpsc::channel::<(u64, bool)>();
         self.focus_event_receiver = Some(focus_receiver);
@@ -1310,7 +1241,7 @@ impl GridIpcServer {
         let config = WindowEventConfig {
             tracker: self.tracker.clone(),
             focus_callback: Some(Box::new(move |hwnd: HWND, is_focused: bool| {
-                println!(
+                info!(
                     "🎯 Focus event: HWND {} - {}",
                     hwnd as u64,
                     if is_focused { "FOCUSED" } else { "DEFOCUSED" }
@@ -1319,14 +1250,14 @@ impl GridIpcServer {
             })),
             heartbeat_reset: Some(Box::new(|| {
                 // This callback will be called when window events occur
-                println!("💓 Heartbeat reset triggered by window event");
+                //println!("💓 Heartbeat reset triggered by window event");
             })),
             event_callback: Some(Box::new(move |event: crate::ipc_protocol::GridEvent| {
                 // Debug: Log every event received by the callback
-                println!("[event_callback] Received event: {:?}", event);
+                debug!("[event_callback] Received event: {:?}", event);
                 // Send event to the main event loop via channel
                 if let Err(e) = event_sender_for_config.send(event.clone()) {
-                    println!("❌ Failed to send event via channel: {:?}", e);
+                    error!("❌ Failed to send event via channel: {:?}", e);
                 }
             })),
             debug_mode: true,
@@ -1341,10 +1272,6 @@ impl GridIpcServer {
         // Initialize heartbeat service with 30-second timeout
         self.heartbeat_service = Some(HeartbeatService::new(Duration::from_secs(30)));
         self.window_event_system = Some(wes);
-        println!("✅ Library-based window event monitoring is now active!");
-        println!("🎯 Focus tracking and heartbeat services are operational");
-        println!("📢 Focus events will be published through the main event loop");
-
         Ok(())
     }
 
@@ -1353,27 +1280,27 @@ impl GridIpcServer {
         if let Some(ref mut subscriber) = self.layout_subscriber {
             while let Some(sample) = subscriber.receive()? {
                 let layout_msg = *sample;
-                println!("🗂️ Received layout command: {:?}", layout_msg);
+                info!("🗂️ Received layout command: {:?}", layout_msg);
 
                 match layout_msg.message_type {
                     0 => {
                         // apply_layout
-                        println!("📥 Layout application request received");
+                        info!("📥 Layout application request received");
                     }
                     1 => {
                         // save_current_layout
                         let layout_name = format!("layout_{}", layout_msg.layout_id);
                         if let Ok(mut tracker) = self.tracker.lock() {
                             tracker.save_current_layout(layout_name.clone());
-                            println!("💾 Saved current layout as '{}'", layout_name);
+                            info!("💾 Saved current layout as '{}'", layout_name);
                         }
                     }
                     2 => {
                         // get_saved_layouts
-                        println!("📋 Saved layouts request received");
+                        info!("📋 Saved layouts request received");
                     }
                     _ => {
-                        println!(
+                        warn!(
                             "⚠️ Unknown layout command type: {}",
                             layout_msg.message_type
                         );
@@ -1560,7 +1487,6 @@ impl Drop for GridIpcServer {
     fn drop(&mut self) {
         // Cleanup window events using the library system
         window_events::cleanup_hooks();
-        println!("🧹 GridIpcServer cleanup completed");
     }
 }
 

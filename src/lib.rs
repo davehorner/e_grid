@@ -1724,13 +1724,21 @@ impl WindowEventSystem {
 
     // Call this periodically from the main thread/event loop
     pub fn poll_move_resize_events(&mut self) {
+        //println!("[DEBUG][poll_move_resize_events] Checking for move/resize events");
         while let Some((hwnd_val, is_start)) = self.consumer.try_pop() {
             println!(
                 "[DEBUG][poll_move_resize_events] Popped from ringbuf: hwnd_val={:?}, is_start={}",
                 hwnd_val, is_start
             );
             let hwnd = hwnd_val as HWND;
-            let tracker = self.tracker.lock().unwrap();
+            let mut tracker = self.tracker.lock().unwrap();
+            // First, check if the window exists
+            let window_exists = tracker.windows.get(&hwnd).is_some();
+            if !window_exists {
+                tracker.add_window(hwnd);
+                println!("[WindowEventSystem] Event for unknown HWND={:?}", hwnd);
+            }
+            // Now, safely get the window_info after any possible mutation
             if let Some(window_info) = tracker.windows.get(&hwnd) {
                 println!(
                     "[DEBUG][poll_move_resize_events] Found window_info for HWND={:?}, title={}",

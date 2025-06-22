@@ -122,15 +122,6 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Features enabled:");
-    println!("  📊 Real-time window grid tracking");
-    println!("  🎯 Focus event publishing (FOCUSED/DEFOCUSED)");
-    println!("  📡 Multi-client IPC services (up to 8 clients per service)");
-    println!("  🖥️  Multi-monitor support with per-monitor grids");
-    println!("  🎬 Window animation system");
-    println!("  💾 Layout save/restore");
-    println!();
-
     // Create the window tracker
     let mut tracker = WindowTracker::new();
     println!("📊 Initializing window tracking...");

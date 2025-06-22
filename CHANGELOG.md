@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/davehorner/e_grid/compare/v0.1.0...v0.1.1) - 2025-06-22
+
+### Added
+
+- *(ipc)* add e_midi integration with move/resize and focus event callbacks
+
+### Other
+
+- initial release.  this is a pre-release of e_grid.  developer release.
+
 ## [0.1.0](https://github.com/davehorner/e_grid/releases/tag/v0.1.0) - 2025-06-22
 
 ### Added

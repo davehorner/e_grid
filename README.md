@@ -1,4 +1,4 @@
-# E-Grid: Advanced Window Grid Management System
+# e_grid: Advanced Window Grid Management System
 
 A comprehensive, event-driven window management system that provides real-time window tracking, grid-based positioning, and efficient IPC-based communication across multiple monitors.
 

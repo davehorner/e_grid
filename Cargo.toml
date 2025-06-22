@@ -1,6 +1,6 @@
 [package]
 name = "e_grid"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A real-time, multi-monitor window grid management and tracking system for Windows."
 authors = ["David Horner"]
@@ -10,7 +10,12 @@ documentation = "https://github.com/davehorner/e_grid#readme"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 keywords = ["windows", "grid", "window-management", "tui", "ipc"]
-categories = ["gui", "accessibility", "command-line-utilities","os::windows-apis"]
+categories = [
+  "gui",
+  "accessibility",
+  "command-line-utilities",
+  "os::windows-apis",
+]
 
 [dependencies]
 winapi = { version = "0.3", features = [
@@ -41,3 +46,5 @@ path = "src/main.rs"
 
 [dev-dependencies]
 serial_test = "3.2.0"
+e_midi = "0.1"
+# e_midi = { path = "../e_midi" }
