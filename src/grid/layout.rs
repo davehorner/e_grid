@@ -2,9 +2,7 @@
 
 use crate::config::GridConfig;
 use crate::grid::basic::BasicGrid;
-use crate::grid::traits::{
-    GridError, GridResult, GridTrait, LayoutGrid as LayoutGridTrait,
-};
+use crate::grid::traits::{GridError, GridResult, GridTrait, LayoutGrid as LayoutGridTrait};
 use std::collections::HashMap;
 use winapi::shared::windef::HWND;
 

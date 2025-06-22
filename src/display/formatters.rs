@@ -1,7 +1,6 @@
 // Display formatting utilities
 // Moved from the grid_display module in lib.rs
 
-
 /// Format a window handle for display (last 2 digits in hex)
 pub fn format_hwnd_display(hwnd: u64) -> String {
     let display_val = (hwnd % 100) as u8;

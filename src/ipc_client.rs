@@ -3,10 +3,9 @@ use crate::grid_client_errors::{
     GridClientResult, RetryConfig,
 };
 use crate::ipc_protocol::{
-    HeartbeatMessage, IpcCommand, IpcCommandType, IpcResponse, WindowDetails,
-    WindowEvent, WindowFocusEvent, GRID_COMMANDS_SERVICE, GRID_EVENTS_SERVICE,
-    GRID_FOCUS_EVENTS_SERVICE, GRID_HEARTBEAT_SERVICE, GRID_RESPONSE_SERVICE,
-    GRID_WINDOW_DETAILS_SERVICE,
+    HeartbeatMessage, IpcCommand, IpcCommandType, IpcResponse, WindowDetails, WindowEvent,
+    WindowFocusEvent, GRID_COMMANDS_SERVICE, GRID_EVENTS_SERVICE, GRID_FOCUS_EVENTS_SERVICE,
+    GRID_HEARTBEAT_SERVICE, GRID_RESPONSE_SERVICE, GRID_WINDOW_DETAILS_SERVICE,
 };
 use crate::GridConfig;
 use iceoryx2::port::publisher::Publisher;
@@ -95,6 +94,8 @@ pub struct GridClient {
     focus_callback: Arc<Mutex<Option<Box<dyn Fn(WindowFocusEvent) + Send + Sync>>>>,
     // NEW: Window event callback for demo logging
     window_event_callback: Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
+    move_resize_start_callback: Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
+    move_resize_stop_callback: Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -119,7 +120,29 @@ impl GridClient {
         *cb_lock = Some(Box::new(callback));
         Ok(())
     }
+    pub fn set_move_resize_start_callback<F>(&mut self, callback: F) -> GridClientResult<()>
+    where
+        F: Fn(WindowEvent) + Send + Sync + 'static,
+    {
+        let mut cb_lock = safe_arc_lock(
+            &self.move_resize_start_callback,
+            "move/resize start callback registration",
+        )?;
+        *cb_lock = Some(Box::new(callback));
+        Ok(())
+    }
 
+    pub fn set_move_resize_stop_callback<F>(&mut self, callback: F) -> GridClientResult<()>
+    where
+        F: Fn(WindowEvent) + Send + Sync + 'static,
+    {
+        let mut cb_lock = safe_arc_lock(
+            &self.move_resize_stop_callback,
+            "move/resize stop callback registration",
+        )?;
+        *cb_lock = Some(Box::new(callback));
+        Ok(())
+    }
     /// Request grid configuration from server before creating client
     fn request_grid_config_from_server() -> GridClientResult<GridConfig> {
         // For now, return the same default config as the server
@@ -177,6 +200,8 @@ impl GridClient {
             running: Arc::new(Mutex::new(true)),
             focus_callback: Arc::new(Mutex::new(None)),
             window_event_callback: Arc::new(Mutex::new(None)),
+            move_resize_start_callback: Arc::new(Mutex::new(None)),
+            move_resize_stop_callback: Arc::new(Mutex::new(None)),
         };
 
         info!(
@@ -252,7 +277,10 @@ impl GridClient {
         let running = self.running.clone();
         let focus_callback = self.focus_callback.clone();
         let window_event_callback = self.window_event_callback.clone();
+        let move_resize_start_callback = self.move_resize_start_callback.clone();
+        let move_resize_stop_callback = self.move_resize_stop_callback.clone();
         let config = self.config.clone(); // Clone the config for the background thread
+
         thread::spawn(move || {
             let mut connection_retry_count = 0;
             let max_retries = 5; // Reduced from 10
@@ -291,6 +319,8 @@ impl GridClient {
                             &running,
                             &focus_callback,
                             &window_event_callback,
+                            &move_resize_start_callback,
+                            &move_resize_stop_callback,
                             &config,
                         );
 
@@ -366,6 +396,8 @@ impl GridClient {
         running: &Arc<Mutex<bool>>,
         focus_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowFocusEvent) + Send + Sync>>>>,
         window_event_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
+        move_resize_start_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
+        move_resize_stop_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
         config: &GridConfig,
     ) -> MonitoringResult {
         let mut consecutive_empty_cycles = 0;
@@ -395,6 +427,25 @@ impl GridClient {
                         cb(event.clone());
                     }
                 }
+                if let Ok(cb_lock) = move_resize_start_callback.lock() {
+                    if let Some(ref cb) = *cb_lock {
+                        if event.event_type == 4 {
+                            debug!(
+                                "📦 Move/resize start callback triggered for HWND {}",
+                                event.hwnd
+                            );
+                            cb(event.clone());
+                        }
+                    }
+                }
+                if let Ok(cb_lock) = move_resize_stop_callback.lock() {
+                    if let Some(ref cb) = *cb_lock {
+                        if event.event_type == 5 {
+                            cb(event.clone());
+                        }
+                    }
+                }
+
                 Self::handle_window_event(
                     &event,
                     windows,
@@ -1316,7 +1367,6 @@ impl Drop for GridClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_coordinate_validation_integration() {
