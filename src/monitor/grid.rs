@@ -1,5 +1,5 @@
 use crate::config::GridConfig;
-use crate::grid::traits::{CellDisplay, GridResult, GridTrait};
+use crate::grid::traits::{GridResult, GridTrait};
 use crate::window::WindowInfo;
 use std::collections::HashMap;
 use winapi::shared::windef::{HWND, RECT};

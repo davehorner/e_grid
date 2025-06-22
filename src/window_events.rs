@@ -1,15 +1,13 @@
-use crate::{WindowTracker, WindowEventCallback, WindowInfo};
+use crate::{WindowEventCallback, WindowInfo, WindowTracker};
 use std::ptr;
 use std::sync::{Arc, Mutex};
+use winapi::shared::windef::HWND;
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::winuser::{
-    SetWinEventHook, UnhookWinEvent, 
-    EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE,
-    EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND,
-    WINEVENT_OUTOFCONTEXT, OBJID_WINDOW, CHILDID_SELF
+    SetWinEventHook, UnhookWinEvent, CHILDID_SELF, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
+    EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
+    EVENT_SYSTEM_MINIMIZESTART, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT,
 };
-use winapi::shared::windef::HWND;
-use log::{info, debug, warn};
 
 /// Configuration for window events with optional callbacks
 pub struct WindowEventConfig {
@@ -19,7 +17,8 @@ pub struct WindowEventConfig {
     pub event_callback: Option<Box<dyn Fn(crate::ipc_protocol::GridEvent) + Send + Sync>>, // NEW: event publishing callback
     pub debug_mode: bool,
     // --- ADDED: For move/resize tracking ---
-    pub move_resize_producer: Option<Arc<Mutex<ringbuf::wrap::Prod<Arc<ringbuf::HeapRb<(isize, bool)>>>>>>,
+    pub move_resize_producer:
+        Option<Arc<Mutex<ringbuf::wrap::Prod<Arc<ringbuf::HeapRb<(isize, bool)>>>>>>,
     pub move_resize_states: Option<Arc<dashmap::DashMap<isize, crate::MoveResizeState>>>,
 }
 
@@ -35,25 +34,31 @@ impl WindowEventConfig {
             move_resize_states: None,
         }
     }
-    
-    pub fn with_focus_callback<F>(mut self, callback: F) -> Self 
-    where F: Fn(HWND, bool) + Send + Sync + 'static {
+
+    pub fn with_focus_callback<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(HWND, bool) + Send + Sync + 'static,
+    {
         self.focus_callback = Some(Box::new(callback));
         self
     }
-    
-    pub fn with_heartbeat_reset<F>(mut self, callback: F) -> Self 
-    where F: Fn() + Send + Sync + 'static {
+
+    pub fn with_heartbeat_reset<F>(mut self, callback: F) -> Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
         self.heartbeat_reset = Some(Box::new(callback));
         self
     }
-    
-    pub fn with_event_callback<F>(mut self, callback: F) -> Self 
-    where F: Fn(crate::ipc_protocol::GridEvent) + Send + Sync + 'static {
+
+    pub fn with_event_callback<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(crate::ipc_protocol::GridEvent) + Send + Sync + 'static,
+    {
         self.event_callback = Some(Box::new(callback));
         self
     }
-    
+
     pub fn with_debug(mut self, enabled: bool) -> Self {
         self.debug_mode = enabled;
         self
@@ -68,54 +73,74 @@ impl WindowEventCallback for DebugEventCallback {
         // Only show manageable windows in debug output
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: CREATED (Manageable)");
-            println!("   Window: {}", 
-                if window_info.title.is_empty() { "<No Title>" } else { &window_info.title }
+            println!(
+                "   Window: {}",
+                if window_info.title.is_empty() {
+                    "<No Title>"
+                } else {
+                    &window_info.title
+                }
             );
             println!("   HWND: {:?}", hwnd);
             println!();
         }
     }
-    
+
     fn on_window_destroyed(&self, hwnd: HWND) {
         println!("🔔 WINDOW EVENT: DESTROYED");
         println!("   HWND: {:?}", hwnd);
         println!();
     }
-    
+
     fn on_window_moved(&self, hwnd: HWND, window_info: &WindowInfo) {
         // Only show manageable windows in debug output
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: MOVED/RESIZED (Manageable)");
-            println!("   Window: {}", 
-                if window_info.title.is_empty() { "<No Title>" } else { &window_info.title }
+            println!(
+                "   Window: {}",
+                if window_info.title.is_empty() {
+                    "<No Title>"
+                } else {
+                    &window_info.title
+                }
             );
             println!("   HWND: {:?}", hwnd);
             println!();
         }
     }
-    
+
     fn on_window_activated(&self, hwnd: HWND, window_info: &WindowInfo) {
         // Only show manageable windows in debug output
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: ACTIVATED (Manageable)");
-            println!("   Window: {}", 
-                if window_info.title.is_empty() { "<No Title>" } else { &window_info.title }
+            println!(
+                "   Window: {}",
+                if window_info.title.is_empty() {
+                    "<No Title>"
+                } else {
+                    &window_info.title
+                }
             );
             println!("   HWND: {:?}", hwnd);
             println!();
         }
     }
-    
+
     fn on_window_minimized(&self, hwnd: HWND) {
         println!("🔔 WINDOW EVENT: MINIMIZED");
         println!("   HWND: {:?}", hwnd);
         println!();
     }
-    
+
     fn on_window_restored(&self, hwnd: HWND, window_info: &WindowInfo) {
         println!("🔔 WINDOW EVENT: RESTORED");
-        println!("   Window: {}", 
-            if window_info.title.is_empty() { "<No Title>" } else { &window_info.title }
+        println!(
+            "   Window: {}",
+            if window_info.title.is_empty() {
+                "<No Title>"
+            } else {
+                &window_info.title
+            }
         );
         println!("   HWND: {:?}", hwnd);
         println!();
@@ -147,21 +172,25 @@ pub unsafe extern "system" fn win_event_proc(
     let config = match WINDOW_EVENT_CONFIG.as_ref() {
         Some(config) => config,
         None => return, // No configuration available
-    };    if config.debug_mode {
+    };
+    if config.debug_mode {
         let event_name = match event {
             3 => "EVENT_SYSTEM_FOREGROUND (FOCUS)",
-            32768 => { 
+            32768 => {
                 //"EVENT_OBJECT_SHOW"
                 return; // Skip SHOW events for now
-            },
-            32769 => { 
+            }
+            32769 => {
                 //"EVENT_OBJECT_HIDE"
                 return; // Skip events for now
-            },
+            }
             32779 => "EVENT_OBJECT_LOCATIONCHANGE (MOVE/RESIZE)",
             _ => "OTHER",
         };
-        println!("🔍 WinEvent: event={} ({}), hwnd={:?}", event, event_name, hwnd);
+        println!(
+            "🔍 WinEvent: event={} ({}), hwnd={:?}",
+            event, event_name, hwnd
+        );
     }
 
     // Always try to reset heartbeat if callback is available
@@ -181,7 +210,7 @@ pub unsafe extern "system" fn win_event_proc(
                     focus_callback(prev_hwnd, false); // false = DEFOCUSED
                 }
             }
-            
+
             // Update last focused window and send FOCUSED
             LAST_FOCUSED_WINDOW = Some(hwnd);
             if config.debug_mode {
@@ -196,7 +225,7 @@ pub unsafe extern "system" fn win_event_proc(
         if config.debug_mode {
             println!("🔍 Processing event {} for window {:?}", event, hwnd);
         }
-        
+
         match event {
             EVENT_OBJECT_CREATE => {
                 if WindowTracker::is_manageable_window(hwnd) {
@@ -210,7 +239,10 @@ pub unsafe extern "system" fn win_event_proc(
                 if WindowTracker::is_manageable_window(hwnd) {
                     tracker.update_window(hwnd);
                     // --- ADDED: Move/Resize tracking ---
-                    if let (Some(prod), Some(states)) = (config.move_resize_producer.as_ref(), config.move_resize_states.as_ref()) {
+                    if let (Some(prod), Some(states)) = (
+                        config.move_resize_producer.as_ref(),
+                        config.move_resize_states.as_ref(),
+                    ) {
                         if let Ok(mut prod) = prod.lock() {
                             crate::MoveResizeTracker::update_event(&mut *prod, states, hwnd);
                         }
@@ -232,7 +264,8 @@ pub unsafe extern "system" fn win_event_proc(
                                 real_x: window_info.rect.left,
                                 real_y: window_info.rect.top,
                                 real_width: (window_info.rect.right - window_info.rect.left) as u32,
-                                real_height: (window_info.rect.bottom - window_info.rect.top) as u32,
+                                real_height: (window_info.rect.bottom - window_info.rect.top)
+                                    as u32,
                                 monitor_id: 0,
                             };
                             event_callback(event);
@@ -267,7 +300,7 @@ pub fn setup_window_events(config: WindowEventConfig) -> Result<(), String> {
         // Set up hooks for different window events
         let events_to_hook = [
             (EVENT_OBJECT_CREATE, "Window Creation"),
-            (EVENT_OBJECT_DESTROY, "Window Destruction"), 
+            (EVENT_OBJECT_DESTROY, "Window Destruction"),
             (EVENT_OBJECT_LOCATIONCHANGE, "Window Move/Resize"),
             (EVENT_SYSTEM_FOREGROUND, "Window Activation/Focus"),
             (EVENT_SYSTEM_MINIMIZESTART, "Window Minimize"),
@@ -287,7 +320,10 @@ pub fn setup_window_events(config: WindowEventConfig) -> Result<(), String> {
 
             if hook.is_null() {
                 let error = GetLastError();
-                println!("❌ Failed to set up hook for {}: error {}", description, error);
+                println!(
+                    "❌ Failed to set up hook for {}: error {}",
+                    description, error
+                );
             } else {
                 EVENT_HOOKS.push(hook);
                 println!("✅ Successfully set up hook for {}", description);
@@ -326,28 +362,28 @@ pub fn cleanup_hooks() {
             UnhookWinEvent(*hook);
         }
         EVENT_HOOKS = Vec::new();
-        
+
         // Clear state
         WINDOW_EVENT_CONFIG = None;
         LAST_FOCUSED_WINDOW = None;
-        
+
         println!("🧹 Cleaned up all WinEvent hooks and state");
     }
 }
 
 /// Process Windows messages for WinEvent hooks
-/// 
+///
 /// This function processes the Windows message queue, which is required for WinEvent hooks
 /// to function properly. It should be called regularly in the application's main loop.
-/// 
+///
 /// Returns `Ok(true)` if messages were processed normally, `Ok(false)` if a WM_QUIT message
 /// was received (indicating the application should shut down), or an `Err` if there was an error.
 pub fn process_windows_messages() -> Result<bool, String> {
     unsafe {
         use winapi::um::winuser::{
-            PeekMessageW, TranslateMessage, DispatchMessageW, MSG, PM_REMOVE, WM_QUIT
+            DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
         };
-        
+
         let mut msg = MSG {
             hwnd: std::ptr::null_mut(),
             message: 0,
@@ -364,24 +400,24 @@ pub fn process_windows_messages() -> Result<bool, String> {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-        
+
         Ok(true) // Continue processing
     }
 }
 
 /// Run a complete message loop that processes Windows messages until WM_QUIT is received
-/// 
+///
 /// This is a convenience function for applications that want a simple blocking message loop.
 /// It will process messages and call the provided callback function in each iteration.
-/// 
+///
 /// # Arguments
 /// * `callback` - Function called in each loop iteration. Should return `false` to exit the loop.
-/// 
+///
 /// # Returns
 /// `Ok(())` when the loop exits normally, or an error if message processing fails.
-pub fn run_message_loop<F>(mut callback: F) -> Result<(), String> 
-where 
-    F: FnMut() -> bool 
+pub fn run_message_loop<F>(mut callback: F) -> Result<(), String>
+where
+    F: FnMut() -> bool,
 {
     loop {
         // Process Windows messages
@@ -394,15 +430,15 @@ where
                 // Continue processing
             }
         }
-        
+
         // Call the application callback
         if !callback() {
             break; // Application requested to exit
         }
-        
+
         // Small delay to prevent busy waiting
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    
+
     Ok(())
 }

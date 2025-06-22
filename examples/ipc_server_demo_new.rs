@@ -56,7 +56,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📊 Server Statistics:");
     if let Ok(tracker) = tracker.lock() {
         println!("  Windows tracked: {}", tracker.windows.len());
-        println!("  Grid size: {}x{}", ipc_server.get_config().rows, ipc_server.get_config().cols);
+        println!(
+            "  Grid size: {}x{}",
+            ipc_server.get_config().rows,
+            ipc_server.get_config().cols
+        );
         println!("  Monitors: {}", tracker.monitor_grids.len());
     }
     println!();

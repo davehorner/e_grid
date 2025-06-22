@@ -18,21 +18,21 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
         .publish_subscribe::<ipc::WindowEvent>()
         .open()?;
 
-    let mut event_subscriber = event_service.subscriber_builder().create()?;
+    let event_subscriber = event_service.subscriber_builder().create()?;
 
     // Subscribe to responses
     let response_service = node
         .service_builder(&ServiceName::new(ipc::GRID_RESPONSE_SERVICE)?)
         .publish_subscribe::<ipc::WindowResponse>()
         .open()?;
-    let mut response_subscriber = response_service.subscriber_builder().create()?;
+    let response_subscriber = response_service.subscriber_builder().create()?;
     // Subscribe to individual window details
     let window_details_service = node
         .service_builder(&ServiceName::new(ipc::GRID_WINDOW_DETAILS_SERVICE)?)
         .publish_subscribe::<ipc::WindowDetails>()
         .open()?;
 
-    let mut window_details_subscriber = window_details_service.subscriber_builder().create()?;
+    let window_details_subscriber = window_details_service.subscriber_builder().create()?;
 
     // Create command publisher
     let command_service = node
@@ -40,7 +40,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
         .publish_subscribe::<ipc::WindowCommand>()
         .open()?;
 
-    let mut command_publisher = command_service.publisher_builder().create()?;
+    let command_publisher = command_service.publisher_builder().create()?;
 
     println!("✅ Connected to IPC services");
     println!("📡 Listening for events and responses...");
@@ -290,8 +290,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Instead, we'll process commands in the main loop with non-blocking input
 
     // Set up window event hooks
-    let config = window_events::WindowEventConfig::new(tracker_arc.clone())
-        .with_debug(true);
+    let config = window_events::WindowEventConfig::new(tracker_arc.clone()).with_debug(true);
     match window_events::setup_window_events(config) {
         Ok(_) => println!("✅ Window event hooks set up successfully!"),
         Err(e) => {

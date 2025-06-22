@@ -61,32 +61,32 @@ impl PerformanceMonitor {
             start_time: Instant::now(),
         }
     }
-    
+
     /// Record an event being processed
     pub fn record_event(&self, event_type: EventType, processing_time: Duration) {
         if let Ok(mut metrics) = self.metrics.lock() {
             let now = Instant::now();
-            
+
             // Update counters
             match event_type {
                 EventType::WindowEvent => metrics.total_events_processed += 1,
                 EventType::FocusEvent => metrics.total_focus_events_processed += 1,
                 EventType::WindowDetails => metrics.total_window_details_processed += 1,
             }
-            
+
             // Update timing metrics
             if processing_time > metrics.peak_event_processing_time {
                 metrics.peak_event_processing_time = processing_time;
             }
-            
+
             metrics.last_activity_time = now;
             metrics.background_thread_healthy = true;
         }
-        
+
         // Track event timing for rate calculation
         if let Ok(mut event_times) = self.event_times.lock() {
             event_times.push_back(Instant::now());
-            
+
             // Keep only recent events (last 60 seconds)
             let cutoff = Instant::now() - Duration::from_secs(60);
             while let Some(&front_time) = event_times.front() {
@@ -97,21 +97,21 @@ impl PerformanceMonitor {
                 }
             }
         }
-        
+
         // Track processing times for average calculation
         if let Ok(mut processing_times) = self.processing_times.lock() {
             processing_times.push_back(processing_time);
-            
+
             // Keep only recent processing times (last 1000 events)
             if processing_times.len() > 1000 {
                 processing_times.pop_front();
             }
         }
-        
+
         // Update calculated metrics
         self.update_calculated_metrics();
     }
-    
+
     /// Update metrics that require calculation
     fn update_calculated_metrics(&self) {
         if let Ok(mut metrics) = self.metrics.lock() {
@@ -119,12 +119,13 @@ impl PerformanceMonitor {
             if let Ok(event_times) = self.event_times.lock() {
                 let now = Instant::now();
                 let one_second_ago = now - Duration::from_secs(1);
-                let recent_events = event_times.iter()
+                let recent_events = event_times
+                    .iter()
                     .filter(|&&time| time >= one_second_ago)
                     .count();
                 metrics.events_per_second = recent_events as f64;
             }
-            
+
             // Calculate average processing time
             if let Ok(processing_times) = self.processing_times.lock() {
                 if !processing_times.is_empty() {
@@ -134,49 +135,49 @@ impl PerformanceMonitor {
             }
         }
     }
-    
+
     /// Update window count
     pub fn update_window_count(&self, count: usize) {
         if let Ok(mut metrics) = self.metrics.lock() {
             metrics.active_window_count = count;
         }
     }
-    
+
     /// Update memory usage estimate
     pub fn update_memory_usage(&self, estimated_bytes: usize) {
         if let Ok(mut metrics) = self.metrics.lock() {
             metrics.estimated_memory_usage = estimated_bytes;
         }
     }
-    
+
     /// Mark background thread as unhealthy
     pub fn mark_unhealthy(&self) {
         if let Ok(mut metrics) = self.metrics.lock() {
             metrics.background_thread_healthy = false;
         }
     }
-    
+
     /// Get current performance metrics
     pub fn get_metrics(&self) -> PerformanceMetrics {
         self.update_calculated_metrics();
-        
+
         if let Ok(metrics) = self.metrics.lock() {
             metrics.clone()
         } else {
             PerformanceMetrics::default()
         }
     }
-    
+
     /// Get uptime
     pub fn uptime(&self) -> Duration {
         Instant::now() - self.start_time
     }
-    
+
     /// Generate a performance report
     pub fn generate_report(&self) -> String {
         let metrics = self.get_metrics();
         let uptime = self.uptime();
-        
+
         format!(
             r#"
 🔥 GridClient Performance Report
@@ -202,7 +203,11 @@ System:
 Health: {}
 "#,
             uptime,
-            if metrics.background_thread_healthy { "✅ Healthy" } else { "❌ Unhealthy" },
+            if metrics.background_thread_healthy {
+                "✅ Healthy"
+            } else {
+                "❌ Unhealthy"
+            },
             metrics.total_events_processed,
             metrics.total_focus_events_processed,
             metrics.total_window_details_processed,
@@ -212,21 +217,22 @@ Health: {}
             metrics.active_window_count,
             metrics.estimated_memory_usage as f64 / 1024.0,
             Instant::now() - metrics.last_activity_time,
-            if metrics.background_thread_healthy && 
-               Instant::now() - metrics.last_activity_time < Duration::from_secs(10) {
+            if metrics.background_thread_healthy
+                && Instant::now() - metrics.last_activity_time < Duration::from_secs(10)
+            {
                 "🟢 Excellent"
             } else if metrics.background_thread_healthy {
-                "🟡 Good"  
+                "🟡 Good"
             } else {
                 "🔴 Poor"
             }
         )
     }
-    
+
     /// Check if performance is degraded
     pub fn is_performance_degraded(&self) -> bool {
         let metrics = self.get_metrics();
-        
+
         // Check various performance indicators
         metrics.avg_event_processing_time > Duration::from_millis(100) ||
         metrics.events_per_second > 100.0 || // Too many events

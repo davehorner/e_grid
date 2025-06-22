@@ -1,13 +1,14 @@
-use e_grid::{GridClient, ipc};
-use e_grid::ipc_client::{ClientCellState};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use e_grid::ipc_client::ClientCellState;
+use e_grid::{ipc, GridClient};
+use log::debug;
 use ratatui::{
-    prelude::*,
     layout::{Constraint, Direction, Layout},
+    prelude::*,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
@@ -18,7 +19,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use log::{info, debug, warn, error};
 
 const MAX_LOG_ENTRIES: usize = 1000;
 const LOG_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
@@ -50,7 +50,7 @@ impl LogLevel {
             LogLevel::Event => Color::Magenta,
         }
     }
-    
+
     fn prefix(&self) -> &'static str {
         match self {
             LogLevel::Info => "ℹ️ ",
@@ -132,28 +132,32 @@ impl AppState {
             message,
             level,
         };
-          if let Ok(mut logs) = self.logs.lock() {
+        if let Ok(mut logs) = self.logs.lock() {
             logs.push_back(entry);
             if logs.len() > MAX_LOG_ENTRIES {
                 logs.pop_front();
             }
         }
-    }fn try_connect(&mut self) {
+    }
+    fn try_connect(&mut self) {
         if self.grid_client.is_none() {
             match GridClient::new() {
                 Ok(mut client) => {
                     self.add_log(LogLevel::Info, "Connected to e_grid server".to_string());
-                    
+
                     // Start background monitoring
                     if let Err(e) = client.start_background_monitoring() {
-                        self.add_log(LogLevel::Warning, format!("Failed to start monitoring: {}", e));
+                        self.add_log(
+                            LogLevel::Warning,
+                            format!("Failed to start monitoring: {}", e),
+                        );
                     } else {
                         self.add_log(LogLevel::Info, "Background monitoring started".to_string());
                     }
-                    
+
                     self.grid_client = Some(client);
                     self.connection_status = "Connected".to_string();
-                },
+                }
                 Err(e) => {
                     if self.connection_status != "Reconnecting..." {
                         self.add_log(LogLevel::Warning, format!("Failed to connect: {}", e));
@@ -164,7 +168,8 @@ impl AppState {
         }
         self.monitor_list_received = false;
         self.monitor_list_requested = false;
-    }    fn update_grid_state(&mut self) {
+    }
+    fn update_grid_state(&mut self) {
         if !self.monitor_list_received {
             return;
         }
@@ -172,8 +177,11 @@ impl AppState {
             // Request current grid state from server
             match client.request_grid_state() {
                 Ok(_) => {
-                    self.add_log(LogLevel::Info, "Grid state requested from server".to_string());
-                },
+                    self.add_log(
+                        LogLevel::Info,
+                        "Grid state requested from server".to_string(),
+                    );
+                }
                 Err(e) => {
                     self.add_log(LogLevel::Error, format!("Grid state request failed: {}", e));
                     // Reset connection to trigger reconnection
@@ -186,42 +194,58 @@ impl AppState {
             self.update_from_real_server_data();
         }
         // If not connected, do nothing (no placeholder data)
-    }    // Use REAL server data instead of simulated data
+    } // Use REAL server data instead of simulated data
     fn update_from_real_server_data(&mut self) {
-        let (server_monitors, server_windows, virtual_grid, has_recent_data) = if let Some(ref client) = self.grid_client {
-            (
-                client.get_monitor_data(),
-                client.get_window_data(),
-                client.get_virtual_grid_state(),
-                client.has_recent_data()
-            )
-        } else {
-            return;
-        };
-        
+        let (server_monitors, server_windows, virtual_grid, has_recent_data) =
+            if let Some(ref client) = self.grid_client {
+                (
+                    client.get_monitor_data(),
+                    client.get_window_data(),
+                    client.get_virtual_grid_state(),
+                    client.has_recent_data(),
+                )
+            } else {
+                return;
+            };
+
         // Add debug logging to see what data we're getting
         let monitor_count = server_monitors.len();
         let window_count = server_windows.len();
-        self.add_log(LogLevel::Info, format!("Server data check: {} monitors, {} windows", 
-            monitor_count, window_count));
-        
+        self.add_log(
+            LogLevel::Info,
+            format!(
+                "Server data check: {} monitors, {} windows",
+                monitor_count, window_count
+            ),
+        );
+
         if !server_monitors.is_empty() {
-            self.add_log(LogLevel::Info, format!("Received {} monitors from server", monitor_count));
+            self.add_log(
+                LogLevel::Info,
+                format!("Received {} monitors from server", monitor_count),
+            );
             // Log details for each monitor
             for m in &server_monitors {
-                self.add_log(LogLevel::Debug, format!(
-                    "Monitor id={} name='{}' size={}x{} grid={}x{}",
-                    m.monitor_id,
-                    format!("Monitor {}", m.monitor_id),
-                    m.width, m.height,
-                    m.grid.len(),
-                    m.grid.get(0).map(|row| row.len()).unwrap_or(0)
-                ));
+                self.add_log(
+                    LogLevel::Debug,
+                    format!(
+                        "Monitor id={} name='{}' size={}x{} grid={}x{}",
+                        m.monitor_id,
+                        format!("Monitor {}", m.monitor_id),
+                        m.width,
+                        m.height,
+                        m.grid.len(),
+                        m.grid.get(0).map(|row| row.len()).unwrap_or(0)
+                    ),
+                );
                 if m.width == 0 || m.height == 0 {
-                    self.add_log(LogLevel::Warning, format!("Monitor {} has zero size!", m.monitor_id));
+                    self.add_log(
+                        LogLevel::Warning,
+                        format!("Monitor {} has zero size!", m.monitor_id),
+                    );
                 }
             }
-            
+
             // Convert server monitor data to TUI monitor data
             self.monitors.clear();
             for server_monitor in server_monitors {
@@ -231,12 +255,30 @@ impl AppState {
                     name: monitor_name.clone(),
                     width: server_monitor.width.max(0) as u32,
                     height: server_monitor.height.max(0) as u32,
-                    grid_rows: if server_monitor.grid.is_empty() { 1 } else { server_monitor.grid.len() },
-                    grid_cols: if server_monitor.grid.is_empty() || server_monitor.grid[0].is_empty() { 1 } else { server_monitor.grid[0].len() },
+                    grid_rows: if server_monitor.grid.is_empty() {
+                        1
+                    } else {
+                        server_monitor.grid.len()
+                    },
+                    grid_cols: if server_monitor.grid.is_empty()
+                        || server_monitor.grid[0].is_empty()
+                    {
+                        1
+                    } else {
+                        server_monitor.grid[0].len()
+                    },
                     windows: Vec::new(),
                     last_update: Instant::now(),
                 };
-                debug!("Mapping monitor: id={} name={} size={}x{} grid={}x{}", monitor.id, monitor.name, monitor.width, monitor.height, monitor.grid_rows, monitor.grid_cols);
+                debug!(
+                    "Mapping monitor: id={} name={} size={}x{} grid={}x{}",
+                    monitor.id,
+                    monitor.name,
+                    monitor.width,
+                    monitor.height,
+                    monitor.grid_rows,
+                    monitor.grid_cols
+                );
                 let mut seen_hwnds = std::collections::HashSet::new();
                 for (row_idx, row) in server_monitor.grid.iter().enumerate() {
                     for (col_idx, cell) in row.iter().enumerate() {
@@ -274,16 +316,28 @@ impl AppState {
                 }
                 self.monitors.push(monitor);
             }
-            
+
             // Update total window count from real data
             self.total_windows = window_count as u32;
-            
-            self.add_log(LogLevel::Info, format!("Updated with real server data: {} monitors, {} windows", 
-                self.monitors.len(), self.total_windows));
+
+            self.add_log(
+                LogLevel::Info,
+                format!(
+                    "Updated with real server data: {} monitors, {} windows",
+                    self.monitors.len(),
+                    self.total_windows
+                ),
+            );
         } else if !virtual_grid.is_empty() {
-            self.add_log(LogLevel::Info, format!("Using virtual grid data: {}x{} cells", 
-                virtual_grid.len(), virtual_grid.get(0).map(|row| row.len()).unwrap_or(0)));
-            
+            self.add_log(
+                LogLevel::Info,
+                format!(
+                    "Using virtual grid data: {}x{} cells",
+                    virtual_grid.len(),
+                    virtual_grid.get(0).map(|row| row.len()).unwrap_or(0)
+                ),
+            );
+
             // Create a single virtual monitor from virtual grid data
             let mut virtual_monitor = MonitorState {
                 id: 999, // Virtual monitor ID
@@ -295,7 +349,7 @@ impl AppState {
                 windows: Vec::new(),
                 last_update: Instant::now(),
             };
-            
+
             // Convert virtual grid to windows
             for (row_idx, row) in virtual_grid.iter().enumerate() {
                 for (col_idx, cell) in row.iter().enumerate() {
@@ -318,18 +372,21 @@ impl AppState {
                     }
                 }
             }
-            
+
             self.monitors = vec![virtual_monitor];
             self.total_windows = window_count as u32;
         } else if has_recent_data {
-            self.add_log(LogLevel::Warning, "Client has recent data but no virtual grid".to_string());
+            self.add_log(
+                LogLevel::Warning,
+                "Client has recent data but no virtual grid".to_string(),
+            );
         } else {
             // No real data available yet - client is still connecting or no data
             self.add_log(LogLevel::Warning, "No monitor data received from server yet. Is the server running and reporting monitors?".to_string());
         }
     }
 
- fn process_events(&mut self) {
+    fn process_events(&mut self) {
         // No simulated events, just increment event counter
         self.total_events += 1;
     }
@@ -337,11 +394,11 @@ impl AppState {
     fn process_window_event(&mut self, event: &ipc::WindowEvent) {
         let event_type_str = match event.event_type {
             0 => "CREATED",
-            1 => "DESTROYED", 
+            1 => "DESTROYED",
             2 => "MOVED",
             3 => "STATE_CHANGED",
             4 => "MOVE_START",
-            5 => "MOVE_STOP", 
+            5 => "MOVE_STOP",
             6 => "RESIZE_START",
             7 => "RESIZE_STOP",
             _ => "UNKNOWN",
@@ -362,7 +419,7 @@ impl AppState {
                 event.real_x,
                 event.real_y,
                 event.monitor_id
-            )
+            ),
         );
 
         // Update monitor state based on event
@@ -370,22 +427,24 @@ impl AppState {
     }
 
     fn process_focus_event(&mut self, event: &ipc::WindowFocusEvent) {
-        let event_type_str = if event.event_type == 0 { "FOCUSED" } else { "DEFOCUSED" };
-        
+        let event_type_str = if event.event_type == 0 {
+            "FOCUSED"
+        } else {
+            "DEFOCUSED"
+        };
+
         self.add_log(
             LogLevel::Event,
             format!(
                 "{} - HWND:{} PID:{}",
-                event_type_str,
-                event.hwnd,
-                event.process_id
-            )
+                event_type_str, event.hwnd, event.process_id
+            ),
         );
     }
 
     fn update_monitor_from_event(&mut self, event: &ipc::WindowEvent) {
         let monitor_id = event.monitor_id as usize;
-        
+
         // Ensure we have enough monitor entries
         while self.monitors.len() <= monitor_id {
             self.monitors.push(MonitorState {
@@ -415,7 +474,8 @@ impl AppState {
             window.real_width = event.real_width;
             window.real_height = event.real_height;
             window.last_event_type = event.event_type;
-        } else if event.event_type == 0 { // CREATED
+        } else if event.event_type == 0 {
+            // CREATED
             // Add new window
             monitor.windows.push(WindowGridState {
                 hwnd: event.hwnd,
@@ -433,7 +493,8 @@ impl AppState {
         }
 
         // Remove destroyed windows
-        if event.event_type == 1 { // DESTROYED
+        if event.event_type == 1 {
+            // DESTROYED
             monitor.windows.retain(|w| w.hwnd != event.hwnd);
         }
 
@@ -449,87 +510,119 @@ impl AppState {
         }
     }
 
-   fn update_monitor_list_from_server(&mut self) {
-    if let Some(ref client) = self.grid_client {
-        let server_monitors = client.get_monitor_data();
-        let server_windows = client.get_window_data();
-        let virtual_grid = client.get_virtual_grid_state();
-        let mut new_monitors = Vec::new();
+    fn update_monitor_list_from_server(&mut self) {
+        if let Some(ref client) = self.grid_client {
+            let server_monitors = client.get_monitor_data();
+            let server_windows = client.get_window_data();
+            let virtual_grid = client.get_virtual_grid_state();
+            let mut new_monitors = Vec::new();
 
-        // Always add all physical monitors (ignore grid field)
-        self.add_log(LogLevel::Debug, format!("{} server monitors received", server_monitors.len()));
-        self.add_log(LogLevel::Debug, format!("server_monitors: {:?}", server_monitors));
-        if !server_monitors.is_empty() {
-            self.add_log(LogLevel::Info, format!("Received {} monitors from server", server_monitors.len()));
-            for m in &server_monitors {
-                self.add_log(LogLevel::Debug, format!(
-                    "Monitor id={} name='{}' size={}x{} (physical, grid ignored)",
-                    m.monitor_id, format!("Monitor {}", m.monitor_id), m.width, m.height
-                ));
-                new_monitors.push(MonitorState {
-                    id: m.monitor_id,
-                    name: format!("Monitor {}", m.monitor_id),
-                    width: m.width.max(0) as u32,
-                    height: m.height.max(0) as u32,
-                    grid_rows: m.grid.len().max(1),
-                    grid_cols: m.grid.get(0).map(|row| row.len()).unwrap_or(1),
+            // Always add all physical monitors (ignore grid field)
+            self.add_log(
+                LogLevel::Debug,
+                format!("{} server monitors received", server_monitors.len()),
+            );
+            self.add_log(
+                LogLevel::Debug,
+                format!("server_monitors: {:?}", server_monitors),
+            );
+            if !server_monitors.is_empty() {
+                self.add_log(
+                    LogLevel::Info,
+                    format!("Received {} monitors from server", server_monitors.len()),
+                );
+                for m in &server_monitors {
+                    self.add_log(
+                        LogLevel::Debug,
+                        format!(
+                            "Monitor id={} name='{}' size={}x{} (physical, grid ignored)",
+                            m.monitor_id,
+                            format!("Monitor {}", m.monitor_id),
+                            m.width,
+                            m.height
+                        ),
+                    );
+                    new_monitors.push(MonitorState {
+                        id: m.monitor_id,
+                        name: format!("Monitor {}", m.monitor_id),
+                        width: m.width.max(0) as u32,
+                        height: m.height.max(0) as u32,
+                        grid_rows: m.grid.len().max(1),
+                        grid_cols: m.grid.get(0).map(|row| row.len()).unwrap_or(1),
+                        windows: Vec::new(),
+                        last_update: Instant::now(),
+                    });
+                }
+            }
+
+            // If a virtual grid is present, append a virtual monitor (do not replace physical monitors)
+            if !virtual_grid.is_empty() {
+                self.add_log(
+                    LogLevel::Info,
+                    format!(
+                        "Appending virtual monitor: {}x{} cells",
+                        virtual_grid.len(),
+                        virtual_grid.get(0).map(|row| row.len()).unwrap_or(0)
+                    ),
+                );
+                // Set virtual monitor bounds to cover all physical monitors
+                let width = new_monitors.iter().map(|m| m.width).max().unwrap_or(1920);
+                let height = new_monitors.iter().map(|m| m.height).max().unwrap_or(1080);
+                let mut virtual_monitor = MonitorState {
+                    id: 999,
+                    name: "Virtual Monitor".to_string(),
+                    width,
+                    height,
+                    grid_rows: virtual_grid.len(),
+                    grid_cols: virtual_grid.get(0).map(|row| row.len()).unwrap_or(0),
                     windows: Vec::new(),
                     last_update: Instant::now(),
-                });
-            }
-        }
-
-        // If a virtual grid is present, append a virtual monitor (do not replace physical monitors)
-        if !virtual_grid.is_empty() {
-            self.add_log(LogLevel::Info, format!("Appending virtual monitor: {}x{} cells", virtual_grid.len(), virtual_grid.get(0).map(|row| row.len()).unwrap_or(0)));
-            // Set virtual monitor bounds to cover all physical monitors
-            let width = new_monitors.iter().map(|m| m.width).max().unwrap_or(1920);
-            let height = new_monitors.iter().map(|m| m.height).max().unwrap_or(1080);
-            let mut virtual_monitor = MonitorState {
-                id: 999,
-                name: "Virtual Monitor".to_string(),
-                width,
-                height,
-                grid_rows: virtual_grid.len(),
-                grid_cols: virtual_grid.get(0).map(|row| row.len()).unwrap_or(0),
-                windows: Vec::new(),
-                last_update: Instant::now(),
-            };
-            for (row_idx, row) in virtual_grid.iter().enumerate() {
-                for (col_idx, cell) in row.iter().enumerate() {
-                    if let ClientCellState::Occupied(hwnd) = cell {
-                        if let Some(window_info) = server_windows.get(hwnd) {
-                            virtual_monitor.windows.push(WindowGridState {
-                                hwnd: *hwnd,
-                                title: format!("Window {}", hwnd),
-                                grid_top_left_row: row_idx as u32,
-                                grid_top_left_col: col_idx as u32,
-                                grid_bottom_right_row: row_idx as u32,
-                                grid_bottom_right_col: col_idx as u32,
-                                real_x: window_info.x,
-                                real_y: window_info.y,
-                                real_width: window_info.width.max(0) as u32,
-                                real_height: window_info.height.max(0) as u32,
-                                last_event_type: 0,
-                            });
+                };
+                for (row_idx, row) in virtual_grid.iter().enumerate() {
+                    for (col_idx, cell) in row.iter().enumerate() {
+                        if let ClientCellState::Occupied(hwnd) = cell {
+                            if let Some(window_info) = server_windows.get(hwnd) {
+                                virtual_monitor.windows.push(WindowGridState {
+                                    hwnd: *hwnd,
+                                    title: format!("Window {}", hwnd),
+                                    grid_top_left_row: row_idx as u32,
+                                    grid_top_left_col: col_idx as u32,
+                                    grid_bottom_right_row: row_idx as u32,
+                                    grid_bottom_right_col: col_idx as u32,
+                                    real_x: window_info.x,
+                                    real_y: window_info.y,
+                                    real_width: window_info.width.max(0) as u32,
+                                    real_height: window_info.height.max(0) as u32,
+                                    last_event_type: 0,
+                                });
+                            }
                         }
                     }
                 }
+                new_monitors.push(virtual_monitor);
             }
-            new_monitors.push(virtual_monitor);
-        }
 
-        self.monitors = new_monitors;
-        self.total_windows = self.monitors.iter().map(|m| m.windows.len() as u32).sum();
+            self.monitors = new_monitors;
+            self.total_windows = self.monitors.iter().map(|m| m.windows.len() as u32).sum();
 
-        if !self.monitors.is_empty() {
-            self.add_log(LogLevel::Info, format!("Updated monitor list from server: {} monitors, {} windows", self.monitors.len(), self.total_windows));
-            self.monitor_list_received = true;
-        } else {
-            self.add_log(LogLevel::Warning, "Received empty monitor list from server".to_string());
+            if !self.monitors.is_empty() {
+                self.add_log(
+                    LogLevel::Info,
+                    format!(
+                        "Updated monitor list from server: {} monitors, {} windows",
+                        self.monitors.len(),
+                        self.total_windows
+                    ),
+                );
+                self.monitor_list_received = true;
+            } else {
+                self.add_log(
+                    LogLevel::Warning,
+                    "Received empty monitor list from server".to_string(),
+                );
+            }
         }
     }
-}
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -538,7 +631,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The GridClient's println! statements should be converted to use log macros
     std::env::set_var("RUST_LOG", "error");
     env_logger::init();
-    
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -549,7 +642,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create app state
     let mut app = AppState::new();
     app.add_log(LogLevel::Info, "Real-time Grid Monitor started".to_string());
-    app.add_log(LogLevel::Info, "Press 'h' for help, 'q' to quit".to_string());
+    app.add_log(
+        LogLevel::Info,
+        "Press 'h' for help, 'q' to quit".to_string(),
+    );
 
     // Main loop
     let mut last_tick = Instant::now();
@@ -564,30 +660,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match key.code {
                         KeyCode::Char('q') => {
                             app.should_quit = true;
-                        },
+                        }
                         KeyCode::Char('h') => {
                             app.show_help = !app.show_help;
-                        },
+                        }
                         KeyCode::Char('a') => {
                             app.auto_scroll = !app.auto_scroll;
-                        },
+                        }
                         KeyCode::Char('c') => {
                             // Clear logs
                             if let Ok(mut logs) = app.logs.lock() {
                                 logs.clear();
                             }
                             app.add_log(LogLevel::Info, "Logs cleared".to_string());
-                        },
+                        }
                         KeyCode::Left => {
                             if app.current_monitor > 0 {
                                 app.current_monitor -= 1;
                             }
-                        },
+                        }
                         KeyCode::Right => {
                             if app.current_monitor + 1 < app.monitors.len() {
                                 app.current_monitor += 1;
                             }
-                        },
+                        }
                         _ => {}
                     }
                 }
@@ -608,7 +704,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Process events from server
             app.process_events();
 
-            if app.grid_client.is_some() && !app.monitor_list_received && !app.monitor_list_requested {
+            if app.grid_client.is_some()
+                && !app.monitor_list_received
+                && !app.monitor_list_requested
+            {
                 app.request_monitor_list();
             }
             if app.grid_client.is_some() && !app.monitor_list_received {
@@ -650,9 +749,9 @@ fn render_main_ui(f: &mut Frame, app: &AppState) {
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(3),     // Header
-            Constraint::Min(10),       // Grid area
-            Constraint::Length(8),     // Logs
+            Constraint::Length(3), // Header
+            Constraint::Min(10),   // Grid area
+            Constraint::Length(8), // Logs
         ])
         .split(f.area());
 
@@ -669,17 +768,17 @@ fn render_main_ui(f: &mut Frame, app: &AppState) {
 fn render_header(f: &mut Frame, area: Rect, app: &AppState) {
     let header_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(60),
-            Constraint::Percentage(40),
-        ])
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(area);
 
     // Title and status
     let title = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled("📊 E-Grid Real-time Monitor", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        ]),
+        Line::from(vec![Span::styled(
+            "📊 E-Grid Real-time Monitor",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
         Line::from(vec![
             Span::styled("Status: ", Style::default().fg(Color::White)),
             Span::styled(
@@ -688,7 +787,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &AppState) {
                     "Connected" => Color::Green,
                     "Reconnecting..." => Color::Yellow,
                     _ => Color::Red,
-                })
+                }),
             ),
         ]),
     ])
@@ -700,11 +799,17 @@ fn render_header(f: &mut Frame, area: Rect, app: &AppState) {
     let stats = Paragraph::new(vec![
         Line::from(vec![
             Span::styled("Windows: ", Style::default().fg(Color::White)),
-            Span::styled(app.total_windows.to_string(), Style::default().fg(Color::Green)),
+            Span::styled(
+                app.total_windows.to_string(),
+                Style::default().fg(Color::Green),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Events: ", Style::default().fg(Color::White)),
-            Span::styled(app.total_events.to_string(), Style::default().fg(Color::Magenta)),
+            Span::styled(
+                app.total_events.to_string(),
+                Style::default().fg(Color::Magenta),
+            ),
         ]),
     ])
     .block(Block::default().borders(Borders::ALL).title("Stats"));
@@ -723,10 +828,12 @@ fn render_grid_area(f: &mut Frame, area: Rect, app: &AppState) {
     }
 
     if app.monitors.is_empty() {
-        let placeholder = Paragraph::new("No monitor data available. Connect to e_grid server to see live grids.")
-            .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).title("Grid View"))
-            .wrap(Wrap { trim: true });
+        let placeholder = Paragraph::new(
+            "No monitor data available. Connect to e_grid server to see live grids.",
+        )
+        .style(Style::default().fg(Color::Yellow))
+        .block(Block::default().borders(Borders::ALL).title("Grid View"))
+        .wrap(Wrap { trim: true });
         f.render_widget(placeholder, area);
         return;
     }
@@ -751,9 +858,14 @@ fn render_grid_area(f: &mut Frame, area: Rect, app: &AppState) {
 }
 
 fn render_monitor_grid(f: &mut Frame, area: Rect, monitor: &MonitorState, is_selected: bool) {
-    let title = format!("{} ({}x{}) - {} windows", 
-                       monitor.name, monitor.width, monitor.height, monitor.windows.len());
-    
+    let title = format!(
+        "{} ({}x{}) - {} windows",
+        monitor.name,
+        monitor.width,
+        monitor.height,
+        monitor.windows.len()
+    );
+
     let border_style = if is_selected {
         Style::default().fg(Color::Yellow)
     } else {
@@ -792,8 +904,10 @@ fn render_monitor_grid(f: &mut Frame, area: Rect, monitor: &MonitorState, is_sel
                 height: 1,
             };
             let window_in_cell = monitor.windows.iter().find(|w| {
-                row as u32 >= w.grid_top_left_row && row as u32 <= w.grid_bottom_right_row &&
-                col as u32 >= w.grid_top_left_col && col as u32 <= w.grid_bottom_right_col
+                row as u32 >= w.grid_top_left_row
+                    && row as u32 <= w.grid_bottom_right_row
+                    && col as u32 >= w.grid_top_left_col
+                    && col as u32 <= w.grid_bottom_right_col
             });
             let (cell_char, cell_style) = if let Some(window) = window_in_cell {
                 let color = match window.last_event_type {
@@ -804,17 +918,29 @@ fn render_monitor_grid(f: &mut Frame, area: Rect, monitor: &MonitorState, is_sel
                     1 => Color::Red,
                     _ => Color::White,
                 };
-                let char = if row as u32 == window.grid_top_left_row && col as u32 == window.grid_top_left_col {
+                let char = if row as u32 == window.grid_top_left_row
+                    && col as u32 == window.grid_top_left_col
+                {
                     "┌"
-                } else if row as u32 == window.grid_top_left_row && col as u32 == window.grid_bottom_right_col {
+                } else if row as u32 == window.grid_top_left_row
+                    && col as u32 == window.grid_bottom_right_col
+                {
                     "┐"
-                } else if row as u32 == window.grid_bottom_right_row && col as u32 == window.grid_top_left_col {
+                } else if row as u32 == window.grid_bottom_right_row
+                    && col as u32 == window.grid_top_left_col
+                {
                     "└"
-                } else if row as u32 == window.grid_bottom_right_row && col as u32 == window.grid_bottom_right_col {
+                } else if row as u32 == window.grid_bottom_right_row
+                    && col as u32 == window.grid_bottom_right_col
+                {
                     "┘"
-                } else if row as u32 == window.grid_top_left_row || row as u32 == window.grid_bottom_right_row {
+                } else if row as u32 == window.grid_top_left_row
+                    || row as u32 == window.grid_bottom_right_row
+                {
                     "─"
-                } else if col as u32 == window.grid_top_left_col || col as u32 == window.grid_bottom_right_col {
+                } else if col as u32 == window.grid_top_left_col
+                    || col as u32 == window.grid_bottom_right_col
+                {
                     "│"
                 } else {
                     "█"
@@ -835,14 +961,28 @@ fn render_monitor_grid(f: &mut Frame, area: Rect, monitor: &MonitorState, is_sel
             width: inner.width,
             height: 3,
         };
-        
-        let window_info: Vec<Line> = monitor.windows.iter().take(2).map(|w| {
-            Line::from(format!("HWND:{} '{}' {}x{} at ({},{}) Grid:({},{}-{},{} )", 
-                w.hwnd, w.title, w.real_width, w.real_height, w.real_x, w.real_y,
-                w.grid_top_left_row, w.grid_top_left_col, 
-                w.grid_bottom_right_row, w.grid_bottom_right_col))
-        }).collect();
-        
+
+        let window_info: Vec<Line> = monitor
+            .windows
+            .iter()
+            .take(2)
+            .map(|w| {
+                Line::from(format!(
+                    "HWND:{} '{}' {}x{} at ({},{}) Grid:({},{}-{},{} )",
+                    w.hwnd,
+                    w.title,
+                    w.real_width,
+                    w.real_height,
+                    w.real_x,
+                    w.real_y,
+                    w.grid_top_left_row,
+                    w.grid_top_left_col,
+                    w.grid_bottom_right_row,
+                    w.grid_bottom_right_col
+                ))
+            })
+            .collect();
+
         if !window_info.is_empty() {
             let info_widget = Paragraph::new(window_info)
                 .style(Style::default().fg(Color::Gray))
@@ -861,7 +1001,10 @@ fn render_logs(f: &mut Frame, area: Rect, app: &AppState) {
                 let line = Line::from(vec![
                     Span::styled(time_str, Style::default().fg(Color::DarkGray)),
                     Span::raw(" "),
-                    Span::styled(entry.level.prefix(), Style::default().fg(entry.level.color())),
+                    Span::styled(
+                        entry.level.prefix(),
+                        Style::default().fg(entry.level.color()),
+                    ),
                     Span::raw(" "),
                     Span::raw(&entry.message),
                 ]);
@@ -879,10 +1022,10 @@ fn render_logs(f: &mut Frame, area: Rect, app: &AppState) {
 
 fn render_help(f: &mut Frame, _app: &AppState) {
     let area = f.area();
-    
+
     // Clear the background
     f.render_widget(Clear, area);
-    
+
     // Create help content
     let help_text = vec![
         Line::from("📊 E-Grid Real-time Monitor - Help"),
@@ -927,7 +1070,12 @@ fn render_help(f: &mut Frame, _app: &AppState) {
     ];
 
     let help_widget = Paragraph::new(help_text)
-        .block(Block::default().borders(Borders::ALL).title("Help").title_style(Style::default().fg(Color::Cyan)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Help")
+                .title_style(Style::default().fg(Color::Cyan)),
+        )
         .wrap(Wrap { trim: true })
         .style(Style::default().fg(Color::White));
 

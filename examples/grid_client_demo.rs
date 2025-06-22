@@ -33,33 +33,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match event.event_type {
             4 => {
                 println!("\n\n🚦 MOVE START: {:?}", event);
-            },
+            }
             5 => {
                 println!("🚦 MOVE STOP: {:?}\n\n", event);
-            },
+            }
             6 => {
                 println!("\n\n📏 RESIZE START: {:?}", event);
-            },
+            }
             7 => {
                 println!("📏 RESIZE STOP: {:?}\n\n", event);
-            },
+            }
             _ => {
-                println!("[WINDOW EVENT] {}: HWND {} at ({}, {})", event_name, event.hwnd, event.row, event.col);
+                println!(
+                    "[WINDOW EVENT] {}: HWND {} at ({}, {})",
+                    event_name, event.hwnd, event.row, event.col
+                );
             }
         }
     })?;
 
     println!("📋 Registering focus callback...");
     client.set_focus_callback(|focus_event| {
-        println!("🔍 [DEBUG] DEMO CALLBACK CALLED for event type: {}", focus_event.event_type);
-        
-        let event_name = if focus_event.event_type == 0 { "🟢 FOCUSED" } else { "🔴 DEFOCUSED" };
-        
-        println!("{} - Window: {} (PID: {}) at timestamp: {}", 
-            event_name, 
-            focus_event.hwnd, 
-            focus_event.process_id,
-            focus_event.timestamp
+        println!(
+            "🔍 [DEBUG] DEMO CALLBACK CALLED for event type: {}",
+            focus_event.event_type
+        );
+
+        let event_name = if focus_event.event_type == 0 {
+            "🟢 FOCUSED"
+        } else {
+            "🔴 DEFOCUSED"
+        };
+
+        println!(
+            "{} - Window: {} (PID: {}) at timestamp: {}",
+            event_name, focus_event.hwnd, focus_event.process_id, focus_event.timestamp
         );
 
         // Show application hash for identification

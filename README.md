@@ -2,6 +2,109 @@
 
 A comprehensive, event-driven window management system that provides real-time window tracking, grid-based positioning, and efficient IPC-based communication across multiple monitors.
 
+NOTICE: This repository is in an interesting state; the examples and functionality may or may not be implemented. Have a look at [e_midi](https://crates.io/crates/e_midi) which includes an example of playing a midi sound using the focus and defocused events. Aside from that; Feel free to take a look at the LLM cruft, it will give you an idea of some of the directions this project could go.
+
+Dave Horner 6/25 MIT/Apache License
+
+### Architecture Overview
+
+```
+┌─────────────────────┐    WinEvents     ┌──────────────────────┐
+│   Windows System    │ ──────────────→  │   IPC Server Demo    │
+│ - Window Creation   │                  │  - Minimal callbacks │
+│ - Window Movement   │                  │  - Main loop logic   │
+│ - Focus Changes     │                  │  - Window rescanning │
+│ - Window Destroy    │                  │  - IPC publishing    │
+└─────────────────────┘                  │  - Focus tracking    │
+                                         └──────────┬───────────┘
+                                                    │ iceoryx2 IPC
+                                                    │ Multi-Service:
+                                                    │ • Grid Events
+                                                    │ • Window Details  
+                                                    │ • Focus Events ⭐
+                                                    │ • Commands
+                                                    │ • Responses
+                                                    ▼
+                          ┌─────────────────────────────────────────┐
+                          │              Client Applications         │
+                          ├─────────────────────┬───────────────────┤
+                          │  Grid Client Demo   │  Focus Demo Apps  │
+                          │  - Real-time grids  │  - Focus tracking │
+                          │  - Window details   │  - Event logging  │
+                          │  - Throttled UI     │  - App filtering  │
+                          │  - Non-blocking     │  - Multi-client   │
+                          └─────────────────────┴───────────────────┘
+```
+
+## 📊 Grid Display Example
+
+```
+Virtual Grid (All Monitors):
+════════════════════════════════════════════════════════════════
+    0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 
+ 0 ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· 
+ 1 ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· 
+ 2 ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· 
+ 3 ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· 
+ 4 ██ ██ ██ ·· ·· ·· ·· ██ ██ ██ ██ ██ ·· ·· ·· ·· ·· ·· ·· ██ ██ ██ ██ ██ 
+ 5 ██ ██ ██ ·· ·· ·· ·· ██ ██ ██ ██ ██ ·· ·· ·· ·· ·· ·· ·· ██ ██ ██ ██ ██ 
+ 6 ██ ██ ██ ·· ·· ·· ·· ██ ██ ██ ██ ██ ·· ·· ·· ·· ·· ·· ·· ██ ██ ██ ██ ██ 
+ 7 ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· 
+
+Monitor 0 Grid (1920x1080):
+══════════════════════════════════════════════════════════
+    0  1  2  3  4  5  6  7  8  9 10 11 
+ 0 ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· 
+ 1 ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· 
+ 2 ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· 
+ 3 ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· 
+ 4 ██ ██ ██ ·· ·· ·· ·· ██ ██ ██ ██ ██ 
+ 5 ██ ██ ██ ·· ·· ·· ·· ██ ██ ██ ██ ██ 
+ 6 ██ ██ ██ ·· ·· ·· ·· ██ ██ ██ ██ ██ 
+ 7 ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· 
+
+Active Windows:
+██ Notepad [HWND: 12345678] (cells: 12)
+██ File Explorer [HWND: 87654321] (cells: 20)
+██ VS Code [HWND: 11223344] (cells: 16)
+```
+
+## 🔧 Technical Implementation
+
+### Core Technologies
+- **Rust** with `winapi` for Windows API integration
+- **iceoryx2** for high-performance IPC communication (64KB buffer sizes)
+- **crossterm** for colored terminal output
+- **Windows WinEvents** for real-time event detection with minimal callbacks
+
+### Key Features
+- **Thread-Safe Design**: Uses `Arc<Mutex<>>` for safe concurrent access
+- **Deadlock Prevention**: Minimal WinEvent processing, heavy work in main loops
+- **Multi-Monitor Aware**: Automatic detection and handling of monitor configurations
+- **Memory Safe**: Leverages Rust's ownership system and explicit safety documentation
+- **Modular Architecture**: Clean separation of concerns between tracking, IPC, and UI
+- **Smart Grid Detection**: Coverage-based algorithm with configurable thresholds for precise cell assignment
+- **Non-blocking UI**: Client uses try_lock and display throttling for responsive interface
+
+### Window Management Process
+1. **WinEvent Registration**: Registers for comprehensive window events (CREATE, MOVE, DESTROY, etc.)
+2. **Minimal Callbacks**: WinEvent handlers only log events, preventing deadlocks
+3. **Main Loop Processing**: Server periodically scans windows and updates grid (every 2 seconds)
+4. **Multi-Monitor Detection**: Enumerates all connected monitors and their configurations
+5. **Coverage-Based Grid Calculation**: Calculates intersection areas between windows and grid cells
+6. **Threshold-Based Assignment**: Only assigns cells where window coverage exceeds configurable threshold
+7. **Incremental Updates**: Server publishes only changed window details via IPC
+8. **Real-Time Synchronization**: Client maintains matching grid state through event processing
+9. **IPC Communication**: High-performance message passing through iceoryx2 with large buffers
+
+### Safety and Reliability
+- **Static Safety**: Explicit use of raw pointers with comprehensive safety documentation
+- **Deadlock Prevention**: Minimal processing in system callbacks, heavy work in main loops
+- **Error Handling**: Comprehensive error handling throughout the IPC and windowing layers
+- **Resource Cleanup**: Proper cleanup of hooks, handles, and IPC resources
+- **Thread Safety**: All shared state protected by mutexes with non-blocking try_lock patterns
+- **IPC Reliability**: Large buffer sizes (64KB) and error recovery prevent message loss
+
 ## 🎯 **NEW: Unified E-Grid Binary**
 
 **Major Update**: E-Grid now provides a single, intelligent `e_grid` binary that auto-detects your needs!
@@ -267,35 +370,6 @@ client.set_focus_callback(|focus_event| {
 client.start_background_monitoring()?;
 ```
 
-### Architecture Overview
-
-```
-┌─────────────────────┐    WinEvents     ┌──────────────────────┐
-│   Windows System    │ ──────────────→  │   IPC Server Demo    │
-│ - Window Creation   │                  │  - Minimal callbacks │
-│ - Window Movement   │                  │  - Main loop logic   │
-│ - Focus Changes     │                  │  - Window rescanning │
-│ - Window Destroy    │                  │  - IPC publishing    │
-└─────────────────────┘                  │  - Focus tracking    │
-                                         └──────────┬───────────┘
-                                                    │ iceoryx2 IPC
-                                                    │ Multi-Service:
-                                                    │ • Grid Events
-                                                    │ • Window Details  
-                                                    │ • Focus Events ⭐
-                                                    │ • Commands
-                                                    │ • Responses
-                                                    ▼
-                          ┌─────────────────────────────────────────┐
-                          │              Client Applications         │
-                          ├─────────────────────┬───────────────────┤
-                          │  Grid Client Demo   │  Focus Demo Apps  │
-                          │  - Real-time grids  │  - Focus tracking │
-                          │  - Window details   │  - Event logging  │
-                          │  - Throttled UI     │  - App filtering  │
-                          │  - Non-blocking     │  - Multi-client   │
-                          └─────────────────────┴───────────────────┘
-```
 
 **Key Architecture Features:**
 - **🎯 NEW: Focus Event Integration**: Real-time focus/defocus event publishing
@@ -361,30 +435,6 @@ cargo run --example focus_music_demo
 
 # Focus callback demonstration
 cargo run --example focus_callback_example
-```
-
-### Test Scripts
-```bash
-# Test both FOCUSED and DEFOCUSED events
-test_focus_defocus.bat
-
-# End-to-end integration testing
-test_focus_integration.bat
-
-# Standard grid demos
-run_demos.bat
-```
-
-### Legacy Tools
-```bash
-# Simple grid display (legacy)
-cargo run --bin simple_grid
-
-# Debug window positions  
-cargo run --bin debug_positions
-
-# Basic grid tracking
-cargo run --bin basic_grid
 ```
 
 ## 🎮 Interactive Client Commands
@@ -489,74 +539,6 @@ The server provides these interactive commands:
 - **`h`** / **`help`** - Show available commands
 - **`q`** / **`quit`** - Exit the server
 
-## 📊 Grid Display Example
-
-```
-Virtual Grid (All Monitors):
-════════════════════════════════════════════════════════════════
-    0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 
- 0 ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· 
- 1 ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· 
- 2 ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· 
- 3 ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· 
- 4 ██ ██ ██ ·· ·· ·· ·· ██ ██ ██ ██ ██ ·· ·· ·· ·· ·· ·· ·· ██ ██ ██ ██ ██ 
- 5 ██ ██ ██ ·· ·· ·· ·· ██ ██ ██ ██ ██ ·· ·· ·· ·· ·· ·· ·· ██ ██ ██ ██ ██ 
- 6 ██ ██ ██ ·· ·· ·· ·· ██ ██ ██ ██ ██ ·· ·· ·· ·· ·· ·· ·· ██ ██ ██ ██ ██ 
- 7 ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· 
-
-Monitor 0 Grid (1920x1080):
-══════════════════════════════════════════════════════════
-    0  1  2  3  4  5  6  7  8  9 10 11 
- 0 ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· 
- 1 ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· 
- 2 ·· ·· ·· ██ ██ ██ ██ ·· ·· ·· ·· ·· 
- 3 ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· 
- 4 ██ ██ ██ ·· ·· ·· ·· ██ ██ ██ ██ ██ 
- 5 ██ ██ ██ ·· ·· ·· ·· ██ ██ ██ ██ ██ 
- 6 ██ ██ ██ ·· ·· ·· ·· ██ ██ ██ ██ ██ 
- 7 ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· ·· 
-
-Active Windows:
-██ Notepad [HWND: 12345678] (cells: 12)
-██ File Explorer [HWND: 87654321] (cells: 20)
-██ VS Code [HWND: 11223344] (cells: 16)
-```
-
-## 🔧 Technical Implementation
-
-### Core Technologies
-- **Rust** with `winapi` for Windows API integration
-- **iceoryx2** for high-performance IPC communication (64KB buffer sizes)
-- **crossterm** for colored terminal output
-- **Windows WinEvents** for real-time event detection with minimal callbacks
-
-### Key Features
-- **Thread-Safe Design**: Uses `Arc<Mutex<>>` for safe concurrent access
-- **Deadlock Prevention**: Minimal WinEvent processing, heavy work in main loops
-- **Multi-Monitor Aware**: Automatic detection and handling of monitor configurations
-- **Memory Safe**: Leverages Rust's ownership system and explicit safety documentation
-- **Modular Architecture**: Clean separation of concerns between tracking, IPC, and UI
-- **Smart Grid Detection**: Coverage-based algorithm with configurable thresholds for precise cell assignment
-- **Non-blocking UI**: Client uses try_lock and display throttling for responsive interface
-
-### Window Management Process
-1. **WinEvent Registration**: Registers for comprehensive window events (CREATE, MOVE, DESTROY, etc.)
-2. **Minimal Callbacks**: WinEvent handlers only log events, preventing deadlocks
-3. **Main Loop Processing**: Server periodically scans windows and updates grid (every 2 seconds)
-4. **Multi-Monitor Detection**: Enumerates all connected monitors and their configurations
-5. **Coverage-Based Grid Calculation**: Calculates intersection areas between windows and grid cells
-6. **Threshold-Based Assignment**: Only assigns cells where window coverage exceeds configurable threshold
-7. **Incremental Updates**: Server publishes only changed window details via IPC
-8. **Real-Time Synchronization**: Client maintains matching grid state through event processing
-9. **IPC Communication**: High-performance message passing through iceoryx2 with large buffers
-
-### Safety and Reliability
-- **Static Safety**: Explicit use of raw pointers with comprehensive safety documentation
-- **Deadlock Prevention**: Minimal processing in system callbacks, heavy work in main loops
-- **Error Handling**: Comprehensive error handling throughout the IPC and windowing layers
-- **Resource Cleanup**: Proper cleanup of hooks, handles, and IPC resources
-- **Thread Safety**: All shared state protected by mutexes with non-blocking try_lock patterns
-- **IPC Reliability**: Large buffer sizes (64KB) and error recovery prevent message loss
 
 ## 🎬 Event-Driven Comprehensive Demo
 
@@ -627,3 +609,9 @@ The grid now accurately reflects window positions:
 - ✅ **Large windows** may span multiple cells based on actual coverage
 - ✅ **Small windows** only occupy cells they significantly overlap
 - ✅ **Boundary cases** are handled intelligently with area calculations
+
+NOTICE: This repository is in an interesting state;  the examples and functionality may or may not be implemented.
+Have a look at the [e_midi](https://crates.io/crates/e_midi) which includes an example of playing a midi sound using the focus and defocused events.
+Aside from that; Feel free to take a look at the LLM cruft, it will give you an idea of some of the directions this project could go.
+
+Dave Horner 6/25 MIT/Apache License

@@ -1,13 +1,12 @@
 // Layout Grid - Grid that supports saving and loading window arrangements
 
 use crate::config::GridConfig;
-use crate::grid::basic::{BasicCellState, BasicGrid};
+use crate::grid::basic::BasicGrid;
 use crate::grid::traits::{
-    CellDisplay, GridError, GridResult, GridTrait, LayoutGrid as LayoutGridTrait,
+    GridError, GridResult, GridTrait, LayoutGrid as LayoutGridTrait,
 };
-use crate::window::WindowInfo;
 use std::collections::HashMap;
-use winapi::shared::windef::{HWND, RECT};
+use winapi::shared::windef::HWND;
 
 pub struct LayoutGrid {
     basic_grid: BasicGrid,

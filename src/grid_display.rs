@@ -29,7 +29,7 @@ pub fn display_grid(
     window_count: usize,
     display_config: &GridDisplayConfig,
     title: Option<&str>,
-    monitor_info: Option<(i32, i32)>, // (width, height)
+    monitor_info: Option<(i32, i32)>,              // (width, height)
     bounds_info: Option<((i32, i32), (i32, i32))>, // ((left, top), (right, bottom))
 ) {
     if display_config.show_headers {
@@ -37,22 +37,27 @@ pub fn display_grid(
             println!();
             println!("{}", "=".repeat(60));
         }
-        
+
         if let Some(title) = title {
             println!("{}", title);
         } else {
-            println!("Window Grid Tracker - {}x{} Grid ({} windows)", 
-                config.rows, config.cols, window_count);
+            println!(
+                "Window Grid Tracker - {}x{} Grid ({} windows)",
+                config.rows, config.cols, window_count
+            );
         }
-        
+
         if let Some((width, height)) = monitor_info {
             println!("Monitor: {}x{} px", width, height);
         }
-        
+
         if let Some(((left, top), (right, bottom))) = bounds_info {
-            println!("Grid bounds: ({}, {}) to ({}, {})", left, top, right, bottom);
+            println!(
+                "Grid bounds: ({}, {}) to ({}, {})",
+                left, top, right, bottom
+            );
         }
-        
+
         if !display_config.compact_format {
             println!("{}", "=".repeat(60));
         }
@@ -77,7 +82,7 @@ pub fn display_grid(
         }
         println!();
     }
-    
+
     if display_config.show_headers && !display_config.compact_format {
         println!();
     }
@@ -112,24 +117,33 @@ pub fn display_monitor_grids(
         println!("No monitor grids available");
         return;
     }
-    
+
     println!("\n🖥️ Monitor Grids:");
     for (i, monitor) in monitors.iter().enumerate() {
-        println!("  Monitor {} (ID: {}): {}x{} at ({}, {})", 
-            i, monitor.id, monitor.width, monitor.height, monitor.x, monitor.y);
-          // Convert monitor grid to CellState format for display
-        let server_monitor_grid: Vec<Vec<CellState>> = monitor.grid.iter().map(|row| {
-            row.iter().map(|&cell| {
-                match cell {
-                    Some(hwnd) => CellState::Occupied(hwnd as winapi::shared::windef::HWND),
-                    None => CellState::Empty,
-                }
-            }).collect()
-        }).collect();
-        
+        println!(
+            "  Monitor {} (ID: {}): {}x{} at ({}, {})",
+            i, monitor.id, monitor.width, monitor.height, monitor.x, monitor.y
+        );
+        // Convert monitor grid to CellState format for display
+        let server_monitor_grid: Vec<Vec<CellState>> = monitor
+            .grid
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|&cell| match cell {
+                        Some(hwnd) => CellState::Occupied(hwnd as winapi::shared::windef::HWND),
+                        None => CellState::Empty,
+                    })
+                    .collect()
+            })
+            .collect();
+
         let monitor_title = format!("Monitor {} Grid", monitor.id);
-        let monitor_bounds = ((monitor.x, monitor.y), (monitor.x + monitor.width, monitor.y + monitor.height));
-        
+        let monitor_bounds = (
+            (monitor.x, monitor.y),
+            (monitor.x + monitor.width, monitor.y + monitor.height),
+        );
+
         display_grid(
             &server_monitor_grid,
             config,
@@ -163,20 +177,28 @@ mod tests {
         let config = GridConfig::new(3, 4);
         let grid = vec![vec![CellState::Empty; 4]; 3];
         let display_config = GridDisplayConfig::default();
-        
+
         // Should not panic
         display_grid(&grid, &config, 0, &display_config, None, None, None);
     }
-      #[test]
+    #[test]
     fn test_display_grid_with_windows() {
         let config = GridConfig::new(2, 3);
         let mut grid = vec![vec![CellState::Empty; 3]; 2];
         grid[0][1] = CellState::Occupied(123 as winapi::shared::windef::HWND);
         grid[1][2] = CellState::OffScreen;
-        
+
         let display_config = GridDisplayConfig::default();
-        
+
         // Should not panic and display correctly
-        display_grid(&grid, &config, 2, &display_config, Some("Test Grid"), Some((1920, 1080)), None);
+        display_grid(
+            &grid,
+            &config,
+            2,
+            &display_config,
+            Some("Test Grid"),
+            Some((1920, 1080)),
+            None,
+        );
     }
 }

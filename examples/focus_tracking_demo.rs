@@ -44,11 +44,20 @@ impl FocusTracker {
             .unwrap()
             .as_secs();
 
-        let event_type = if focus_event.event_type == 0 { "FOCUSED" } else { "DEFOCUSED" };
-        
-        println!("🎯 [FOCUS TRACKER] {} - Window: {} (PID: {}) Hash: {:x} Time: {}", 
-            event_type, focus_event.hwnd, focus_event.process_id, 
-            focus_event.app_name_hash, timestamp);
+        let event_type = if focus_event.event_type == 0 {
+            "FOCUSED"
+        } else {
+            "DEFOCUSED"
+        };
+
+        println!(
+            "🎯 [FOCUS TRACKER] {} - Window: {} (PID: {}) Hash: {:x} Time: {}",
+            event_type,
+            focus_event.hwnd,
+            focus_event.process_id,
+            focus_event.app_name_hash,
+            timestamp
+        );
 
         // Create our internal focus event
         let internal_event = FocusEvent {
@@ -70,15 +79,18 @@ impl FocusTracker {
 
         // Update current focused window
         if let Ok(mut current) = self.current_focused.lock() {
-            if focus_event.event_type == 0 { // FOCUSED
+            if focus_event.event_type == 0 {
+                // FOCUSED
                 *current = Some(focus_event.hwnd);
-            } else if Some(focus_event.hwnd) == *current { // DEFOCUSED and it was the current
+            } else if Some(focus_event.hwnd) == *current {
+                // DEFOCUSED and it was the current
                 *current = None;
             }
         }
 
         // Update app focus counts
-        if focus_event.event_type == 0 { // Only count focus events, not defocus
+        if focus_event.event_type == 0 {
+            // Only count focus events, not defocus
             if let Ok(mut counts) = self.app_focus_counts.lock() {
                 *counts.entry(focus_event.app_name_hash).or_insert(0) += 1;
             }
@@ -92,7 +104,7 @@ impl FocusTracker {
 
     fn print_statistics(&self) {
         println!("\n📊 === FOCUS TRACKING STATISTICS ===");
-        
+
         // Current focused window
         if let Ok(current) = self.current_focused.lock() {
             match *current {
@@ -112,7 +124,7 @@ impl FocusTracker {
                 println!("🏆 Top Applications by Focus Count:");
                 let mut sorted_counts: Vec<_> = counts.iter().collect();
                 sorted_counts.sort_by(|a, b| b.1.cmp(a.1));
-                
+
                 for (i, (app_hash, count)) in sorted_counts.iter().take(5).enumerate() {
                     println!("   {}. App {:x}: {} focus events", i + 1, app_hash, count);
                 }
@@ -124,8 +136,10 @@ impl FocusTracker {
             if !history.is_empty() {
                 println!("📜 Recent Focus Events (last 10):");
                 for event in history.iter().rev().take(10) {
-                    println!("   {} Window {} (App {:x}) at {}", 
-                        event.event_type, event.hwnd, event.app_name_hash, event.timestamp);
+                    println!(
+                        "   {} Window {} (App {:x}) at {}",
+                        event.event_type, event.hwnd, event.app_name_hash, event.timestamp
+                    );
                 }
             }
         }
@@ -138,8 +152,10 @@ impl FocusTracker {
         let total = self.total_focus_events.lock().unwrap();
         let app_count = self.app_focus_counts.lock().unwrap().len();
 
-        format!("Focus Status: {} events, {} apps, current: {:?}", 
-                *total, app_count, *current)
+        format!(
+            "Focus Status: {} events, {} apps, current: {:?}",
+            *total, app_count, *current
+        )
     }
 }
 
@@ -155,7 +171,7 @@ fn main() -> GridClientResult<()> {
     // Create grid client
     println!("🔧 Creating GridClient...");
     let mut grid_client = GridClient::new()?;
-    
+
     // Register our focus callback
     println!("🎯 Registering focus tracking callback...");
     let tracker_clone = focus_tracker.clone();
@@ -165,8 +181,9 @@ fn main() -> GridClientResult<()> {
 
     // Start background monitoring
     println!("📡 Starting background monitoring...");
-    grid_client.start_background_monitoring()
-        .map_err(|e| e_grid::GridClientError::InitializationError(format!("Failed to start monitoring: {}", e)))?;
+    grid_client.start_background_monitoring().map_err(|e| {
+        e_grid::GridClientError::InitializationError(format!("Failed to start monitoring: {}", e))
+    })?;
 
     println!("✅ Focus tracking is now active!");
     println!("💡 Switch between different applications/windows to see focus events");
@@ -181,7 +198,11 @@ fn main() -> GridClientResult<()> {
 
         // Print brief status every 5 seconds
         if iteration % 1 == 0 {
-            println!("⏱️  [{}s] {}", iteration * 5, focus_tracker.get_focus_summary());
+            println!(
+                "⏱️  [{}s] {}",
+                iteration * 5,
+                focus_tracker.get_focus_summary()
+            );
         }
 
         // Print detailed statistics every 30 seconds
@@ -203,13 +224,16 @@ mod tests {
     #[test]
     fn test_focus_tracker_creation() {
         let tracker = FocusTracker::new();
-        assert_eq!(tracker.get_focus_summary(), "Focus Status: 0 events, 0 apps, current: None");
+        assert_eq!(
+            tracker.get_focus_summary(),
+            "Focus Status: 0 events, 0 apps, current: None"
+        );
     }
 
-    #[test] 
+    #[test]
     fn test_focus_event_handling() {
         let tracker = FocusTracker::new();
-        
+
         let focus_event = e_grid::ipc::WindowFocusEvent {
             event_type: 0, // FOCUSED
             hwnd: 12345,
@@ -238,7 +262,7 @@ mod tests {
     #[test]
     fn test_defocus_event() {
         let tracker = FocusTracker::new();
-        
+
         // First focus a window
         let focus_event = e_grid::ipc::WindowFocusEvent {
             event_type: 0, // FOCUSED

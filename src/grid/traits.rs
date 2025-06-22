@@ -1,9 +1,8 @@
 // Common traits and types for all grid implementations
 
 use crate::config::GridConfig;
-use crate::window::WindowInfo;
 use std::collections::HashMap;
-use winapi::shared::windef::{HWND, RECT};
+use winapi::shared::windef::HWND;
 
 /// Result type for grid operations
 pub type GridResult<T> = Result<T, GridError>;

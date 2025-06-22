@@ -1,4 +1,4 @@
-use e_grid::{GridClient, GridConfig};
+use e_grid::GridClient;
 use std::thread;
 use std::time::Duration;
 
