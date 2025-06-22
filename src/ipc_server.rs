@@ -1286,3 +1286,44 @@ impl Drop for GridIpcServer {
         println!("🧹 GridIpcServer cleanup completed");
     }
 }
+
+/// Start the E-Grid server in-process, calling the provided callback on each event loop tick.
+/// This function blocks until the server is stopped.
+pub fn start_server_with_tick<F>(mut tick_callback: F) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: FnMut(),
+{
+    // Create the window tracker
+    let tracker = Arc::new(Mutex::new(WindowTracker::new()));
+
+    // Create and setup the IPC server
+    let mut ipc_server = crate::ipc_server::GridIpcServer::new(tracker.clone())?;
+    ipc_server.setup_services()?;
+    ipc_server.start_background_event_loop()?;
+
+    // Setup WinEvent hooks for real-time monitoring (optional, can ignore errors)
+    let _ = ipc_server.setup_window_events();
+
+    // Give the server a moment to be ready
+    thread::sleep(Duration::from_millis(500));
+
+    // Main server event loop (blocks until shutdown)
+    window_events::run_message_loop(|| {
+        ipc_server.poll_move_resize_events();
+        let _ = ipc_server.process_commands();
+        let _ = ipc_server.process_focus_events();
+        let _ = ipc_server.process_window_events();
+        let _ = ipc_server.process_layout_commands();
+        let _ = ipc_server.process_animation_commands();
+        let _ = ipc_server.update_animations();
+        tick_callback(); // Call the user-provided callback
+        true
+    })?;
+
+    Ok(())
+}
+
+// The original function now just calls the new one with an empty closure
+pub fn start_server() -> Result<(), Box<dyn std::error::Error>> {
+    start_server_with_tick(|| {})
+}

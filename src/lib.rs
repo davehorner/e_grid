@@ -1404,7 +1404,6 @@ fn meets_coverage_threshold(window_rect: &RECT, cell_rect: &RECT) -> bool {
 
 // iceoryx2 IPC integration for command and control
 pub mod ipc;
-
 /// Protocol definitions and message types for IPC communication
 pub mod ipc_protocol;
 
@@ -1414,6 +1413,7 @@ pub use ipc_client::GridClient;
 
 // Server module for IPC server functionality
 pub mod ipc_server;
+pub use crate::ipc_server::start_server;
 
 // Window enumeration callback function
 unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> i32 {

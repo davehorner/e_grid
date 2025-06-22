@@ -150,8 +150,14 @@ pub unsafe extern "system" fn win_event_proc(
     };    if config.debug_mode {
         let event_name = match event {
             3 => "EVENT_SYSTEM_FOREGROUND (FOCUS)",
-            32768 => "EVENT_OBJECT_SHOW",
-            32769 => "EVENT_OBJECT_HIDE",
+            32768 => { 
+                //"EVENT_OBJECT_SHOW"
+                return; // Skip SHOW events for now
+            },
+            32769 => { 
+                //"EVENT_OBJECT_HIDE"
+                return; // Skip events for now
+            },
             32779 => "EVENT_OBJECT_LOCATIONCHANGE (MOVE/RESIZE)",
             _ => "OTHER",
         };

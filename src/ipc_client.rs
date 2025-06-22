@@ -139,7 +139,7 @@ impl GridClient {
                 .open().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
             Ok(command_service.publisher_builder().create().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?)
         }, &retry_config)
-        .map_err(|e| GridClientError::IpcError(format!("Failed to create command publisher: {:?}", e)))?;// First, get the grid configuration from the server
+        .map_err(|e| GridClientError::IpcError(format!("Failed to create command publisher: {:?} Check/delete: C:\\Temp\\iceoryx2", e)))?;// First, get the grid configuration from the server
         let config = Self::request_grid_config_from_server()?;
         
         // Now initialize with the dynamic config
