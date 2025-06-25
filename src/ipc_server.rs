@@ -6,12 +6,14 @@ use crate::ipc_protocol::{
     GRID_FOCUS_EVENTS_SERVICE, GRID_HEARTBEAT_SERVICE, GRID_LAYOUT_SERVICE, GRID_RESPONSE_SERVICE,
     GRID_WINDOW_DETAILS_SERVICE,
 };
+use crate::WindowInfo;
 use crate::GridConfig;
 use crate::{
     heartbeat::HeartbeatService,
     window_events::{self, WindowEventConfig},
     WindowTracker,
 };
+use dashmap::DashMap;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
@@ -30,8 +32,10 @@ use winapi::um::winuser::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 /// - Processing client commands (window assignment, grid requests)
 /// - Publishing responses to client requests
 pub struct GridIpcServer {
-    // Core window tracker
+    // Core window tracker (still keep for other logic)
     tracker: Arc<Mutex<WindowTracker>>,
+    // Lock-free window state for event system
+    windows: Arc<DashMap<HWND, WindowInfo>>,
     config: GridConfig,
 
     // IPC Publishers
@@ -63,7 +67,7 @@ pub struct GridIpcServer {
 
 impl GridIpcServer {
     /// Create a new IPC server instance
-    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(tracker: Arc<Mutex<WindowTracker>>, windows: Arc<DashMap<HWND, WindowInfo>>) -> Result<Self, Box<dyn std::error::Error>> {
         // Get the config from the tracker once during initialization
         let config = {
             let tracker_guard = tracker.lock().unwrap();
@@ -72,6 +76,7 @@ impl GridIpcServer {
 
         Ok(Self {
             tracker,
+            windows,
             config,
             event_publisher: None,
             response_publisher: None,
@@ -412,8 +417,18 @@ impl GridIpcServer {
         } else {
             Vec::new()
         };
+        let event_count = events.len();
+        if event_count > 0 {
+            info!("[process_window_events] Processing {} window events...", event_count);
+        }
         for event in events {
-            let _ = self.publish_event(event);
+            info!("[process_window_events] Publishing event: {:?}", event);
+            if let Err(e) = self.publish_event(event) {
+                error!("❌ [process_window_events] Failed to publish event: {:?}", e);
+            }
+        }
+        if event_count > 0 {
+            info!("[process_window_events] Finished processing {} window events.", event_count);
         }
         Ok(())
     }
@@ -436,13 +451,20 @@ impl GridIpcServer {
         }
         // Publish via iceoryx2
         if let Some(ref mut publisher) = self.event_publisher {
-            publisher.send_copy(window_event)?;
+            if let Err(e) = publisher.send_copy(window_event) {
+                error!("❌ Failed to send event to IPC: {:?}", e);
+            } else {
+                debug!("[publish_event] Event sent to IPC: {:?}", event);
+            }
+        } else {
+            error!("❌ Event publisher is None - not initialized!");
         }
 
         // Notify local listeners
         for listener in &self.event_listeners {
             listener(&event);
         }
+        debug!("[publish_event] Event sent to local listeners: {:?}", event);
 
         Ok(())
     }
@@ -1230,11 +1252,12 @@ impl GridIpcServer {
         let (event_sender, event_receiver) = mpsc::channel::<crate::ipc_protocol::GridEvent>();
         self.event_receiver = Some(event_receiver);
         // --- NEW: Setup WindowEventSystem for move/resize ---
-        let mut wes = crate::WindowEventSystem::new(self.tracker.clone());
+        let mut wes = crate::WindowEventSystem::new(self.windows.clone());
         let event_sender_for_wes = event_sender.clone();
+        // Only send to the channel; do not attempt to clone or use the publisher here
         wes.set_event_callback(move |event: crate::ipc_protocol::GridEvent| {
-            // Forward move/resize events to the same channel
-            let _ = event_sender_for_wes.send(event);
+            println!("[SERVER CALLBACK] Window event: {:?}", event);
+            let _ = event_sender_for_wes.send(event.clone());
         });
         // Create window event configuration with focus and event publishing callbacks
         let event_sender_for_config = event_sender.clone();
@@ -1261,7 +1284,7 @@ impl GridIpcServer {
                 }
             })),
             debug_mode: true,
-            move_resize_producer: Some(wes.producer.clone()),
+            move_resize_event_queue: Some(wes.event_queue.clone()),
             move_resize_states: Some(wes.states.clone()),
         };
         // Setup window events using the new library system
@@ -1498,18 +1521,19 @@ where
 {
     // Create the window tracker
     let tracker = Arc::new(Mutex::new(WindowTracker::new()));
-
+    // Get the shared lock-free window state
+    let windows = {
+        let tracker_guard = tracker.lock().unwrap();
+        tracker_guard.windows.clone()
+    };
     // Create and setup the IPC server
-    let mut ipc_server = crate::ipc_server::GridIpcServer::new(tracker.clone())?;
+    let mut ipc_server = crate::ipc_server::GridIpcServer::new(tracker.clone(), Arc::new(windows))?;
     ipc_server.setup_services()?;
     ipc_server.start_background_event_loop()?;
-
     // Setup WinEvent hooks for real-time monitoring (optional, can ignore errors)
     let _ = ipc_server.setup_window_events();
-
     // Give the server a moment to be ready
     thread::sleep(Duration::from_millis(500));
-
     // Main server event loop (blocks until shutdown)
     window_events::run_message_loop(|| {
         ipc_server.poll_move_resize_events();

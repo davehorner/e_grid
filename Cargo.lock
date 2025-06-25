@@ -355,6 +355,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-queue"
+version = "0.3.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f58bbc28f91df819d0aa2a2c00cd19754769c2fad90579b3592b1c9ba7a3115"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-utils"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -494,9 +503,9 @@ dependencies = [
 
 [[package]]
 name = "e_grid"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5589a4d7087216e613eae9084ed706eb1f949bcc1e3aedf458e7b5648c3f6b1"
+checksum = "216c1bead3965c2ce8beea8277025b92a1b61532705a374459a6e9b750922e44"
 dependencies = [
  "crossterm 0.29.0",
  "ctrlc",
@@ -515,8 +524,9 @@ dependencies = [
 
 [[package]]
 name = "e_grid"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
+ "crossbeam-queue",
  "crossterm 0.29.0",
  "ctrlc",
  "dashmap",
@@ -536,15 +546,17 @@ dependencies = [
 
 [[package]]
 name = "e_midi"
-version = "0.1.1"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e3758aded6eb1be417c8d648bf982177be3d40408167599330a11faaaf7a803"
+checksum = "052b11cb3a8565de8d3eef36ff8037a5c92a16cbc699e971f11011994ec99b40"
 dependencies = [
  "ansi_term",
  "clap",
+ "crossbeam-queue",
  "crossterm 0.29.0",
  "ctrlc",
- "e_grid 0.1.0",
+ "dashmap",
+ "e_grid 0.1.1",
  "iceoryx2",
  "midir",
  "midly",
@@ -552,6 +564,7 @@ dependencies = [
  "rimd",
  "serde",
  "serde_json",
+ "winapi",
 ]
 
 [[package]]

@@ -129,7 +129,11 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
     tracker.print_grid();
 
     let tracker = Arc::new(Mutex::new(tracker)); // Create and setup the IPC server
-    let mut ipc_server = ipc_server::GridIpcServer::new(tracker.clone())?;
+    let windows = {
+        let tracker_guard = tracker.lock().unwrap();
+        tracker_guard.windows.clone()
+    };
+    let mut ipc_server = ipc_server::GridIpcServer::new(tracker.clone(), Arc::new(windows))?;
 
     // Set global server pointer for graceful shutdown
     unsafe {

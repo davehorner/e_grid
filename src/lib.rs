@@ -1,3 +1,4 @@
+use crossbeam_queue::SegQueue;
 use dashmap::DashMap;
 use ringbuf::wrap::{Cons, Prod};
 use ringbuf::{traits::*, HeapRb};
@@ -1519,19 +1520,23 @@ impl WindowTracker {
 pub struct MoveResizeState {
     pub last_event: Instant,
     pub in_progress: bool,
+    pub last_rect: RECT, // Track last known window rectangle
+    pub last_type: Option<MoveResizeEventType>, // Track last event type
 }
 
 // Move/resize tracker (shared across threads)
 pub struct MoveResizeTracker {
     pub states: Arc<DashMap<isize, MoveResizeState>>, // Use Arc for sharing
     pub timeout: Duration,
+    pub event_queue: Arc<SegQueue<(isize, MoveResizeEventType)>>,
 }
 
 impl MoveResizeTracker {
-    pub fn new(timeout: Duration, states: Arc<DashMap<isize, MoveResizeState>>) -> Arc<Self> {
+    pub fn new(timeout: Duration, states: Arc<DashMap<isize, MoveResizeState>>, event_queue: Arc<SegQueue<(isize, MoveResizeEventType)>>) -> Arc<Self> {
         Arc::new(Self {
             states: states.clone(),
             timeout,
+            event_queue: event_queue.clone(),
         })
     }
 
@@ -1540,23 +1545,38 @@ impl MoveResizeTracker {
         states: &Arc<DashMap<isize, MoveResizeState>>,
         hwnd: HWND,
     ) {
-        let hwnd_val = hwnd as isize;
-        println!(
-            "[MoveResizeTracker::update_event] Called for HWND={:?}",
-            hwnd
-        ); // DEBUG LOG
-        let mut entry = states.entry(hwnd_val).or_insert(MoveResizeState {
-            last_event: Instant::now(),
-            in_progress: false,
-        });
-        entry.last_event = Instant::now();
-        if !entry.in_progress {
-            println!(
-                "[MoveResizeTracker] Detected move/resize START for HWND={:?}",
-                hwnd
-            );
-            entry.in_progress = true;
-            let _ = producer.try_push((hwnd_val, true));
+        unsafe {
+            if GetParent(hwnd).is_null() && WindowTracker::is_manageable_window(hwnd) {
+                let hwnd_val = hwnd as isize;
+                let mut entry = states.entry(hwnd_val).or_insert(MoveResizeState {
+                    last_event: Instant::now(),
+                    in_progress: false,
+                    last_rect: RECT { left: 0, top: 0, right: 0, bottom: 0 }, // Initialize last_rect
+                    last_type: None, // Initialize last_type
+                });
+                entry.last_event = Instant::now();
+                if !entry.in_progress {
+                    // Print class and title for debug
+                    let mut class_buf = [0u16; 256];
+                    let class_len = GetClassNameW(hwnd, class_buf.as_mut_ptr(), class_buf.len() as i32);
+                    let class = if class_len > 0 {
+                        String::from_utf16_lossy(&class_buf[..class_len as usize])
+                    } else {
+                        String::from("")
+                    };
+                    let title = WindowTracker::get_window_title(hwnd);
+                    println!(
+                        "[MoveResizeTracker] Detected move/resize START for HWND={:?} [class='{}', title='{}']",
+                        hwnd, class, title
+                    );
+                    entry.in_progress = true; // <-- Set before pushing event
+                    let _ = producer.try_push((hwnd_val, true));
+                }
+            } else {
+                // Debug: filtered out
+                // let title = WindowTracker::get_window_title(hwnd);
+                // println!("[MoveResizeTracker] Ignored HWND={:?} (not top-level or not manageable), title='{}'", hwnd, title);
+            }
         }
     }
 }
@@ -1662,55 +1682,80 @@ mod tests {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveResizeEventType {
+    MoveStart,
+    MoveStop,
+    ResizeStart,
+    ResizeStop,
+    BothStart,
+    BothStop,
+}
+
 pub struct WindowEventSystem {
     pub move_resize_tracker: Arc<MoveResizeTracker>,
-    pub tracker: Arc<Mutex<WindowTracker>>, // Reference to main tracker for callbacks
-    pub producer: Arc<Mutex<Prod<Arc<HeapRb<(isize, bool)>>>>>,
-    pub consumer: Cons<Arc<HeapRb<(isize, bool)>>>,
+    pub windows: Arc<DashMap<HWND, WindowInfo>>,
+    pub event_callbacks: Arc<DashMap<usize, Arc<dyn WindowEventCallback>>>,
+    pub event_queue: Arc<crossbeam_queue::SegQueue<(isize, MoveResizeEventType)>>,
     pub states: Arc<DashMap<isize, MoveResizeState>>,
     // Optional event callback for IPC publishing (GridEvent)
-    pub event_callback: Option<Box<dyn Fn(crate::ipc_protocol::GridEvent) + Send + Sync>>,
+    pub event_callback: Option<Arc<dyn Fn(crate::ipc_protocol::GridEvent) + Send + Sync>>,
+    // New: Separate callback registries for move/resize start and stop
+    pub move_resize_start_callbacks: Arc<DashMap<usize, Arc<dyn Fn(HWND, &WindowInfo) + Send + Sync>>>,
+    pub move_resize_stop_callbacks: Arc<DashMap<usize, Arc<dyn Fn(HWND, &WindowInfo) + Send + Sync>>>,
 }
 
 impl WindowEventSystem {
-    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Self {
-        let rb = Arc::new(HeapRb::<(isize, bool)>::new(256));
-        let producer = Arc::new(Mutex::new(Prod::new(rb.clone())));
-        let consumer = Cons::new(rb.clone());
+    pub fn new(windows: Arc<DashMap<HWND, WindowInfo>>) -> Self {
+        let event_queue = Arc::new(crossbeam_queue::SegQueue::new());
         let states = Arc::new(DashMap::new());
-        let move_resize_tracker =
-            MoveResizeTracker::new(Duration::from_millis(200), states.clone());
-        // Spawn the background thread for move/resize stop detection, passing a reference to the producer
+        let move_resize_tracker = MoveResizeTracker::new(Duration::from_millis(200), states.clone(), event_queue.clone());
+        // Spawn the background thread for move/resize stop detection, passing a reference to the event_queue
         let states_ref = states.clone();
-        let producer_thread = producer.clone();
-        let timeout = Duration::from_millis(200);
+        let event_queue_thread = event_queue.clone();
+        let timeout = Duration::from_millis(300);
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_millis(50));
             let now = Instant::now();
             let mut to_stop = Vec::new();
-            for mut entry in states_ref.iter_mut() {
+            for entry in states_ref.iter_mut() {
                 if entry.in_progress && now.duration_since(entry.last_event) > timeout {
                     println!(
                         "[MoveResizeTracker] Detected move/resize STOP for HWND={:?}",
                         *entry.key()
                     );
-                    entry.in_progress = false;
+                    // Do NOT set entry.in_progress = false here! Let main thread do it after delivering stop event.
                     to_stop.push(*entry.key());
                 }
             }
             for hwnd_val in to_stop {
-                if let Ok(mut prod) = producer_thread.lock() {
-                    let _ = prod.try_push((hwnd_val, false));
+                if let Some(mut entry) = states_ref.get_mut(&hwnd_val) {
+                    use crate::MoveResizeEventType::*;
+                    let stop_event = match entry.last_type {
+                        Some(MoveStart) => MoveStop,
+                        Some(ResizeStart) => ResizeStop,
+                        Some(BothStart) => BothStop,
+                        _ => MoveStop, // fallback
+                    };
+                    event_queue_thread.push((hwnd_val, stop_event));
+                    // Optionally update state here, or let main thread do it after event delivery
+                    // entry.in_progress = false;
+                    // entry.last_type = Some(stop_event);
+                } else {
+                    // If state is missing, fallback to MoveStop
+                    event_queue_thread.push((hwnd_val, crate::MoveResizeEventType::MoveStop));
                 }
             }
         });
         Self {
             move_resize_tracker,
-            tracker,
-            producer,
-            consumer,
+            windows,
+            event_callbacks: Arc::new(DashMap::new()),
+            event_queue,
             states,
             event_callback: None,
+            move_resize_start_callbacks: Arc::new(DashMap::new()),
+            move_resize_stop_callbacks: Arc::new(DashMap::new()),
         }
     }
 
@@ -1719,50 +1764,118 @@ impl WindowEventSystem {
     where
         F: Fn(crate::ipc_protocol::GridEvent) + Send + Sync + 'static,
     {
-        self.event_callback = Some(Box::new(callback));
+        self.event_callback = Some(Arc::new(callback));
+    }
+
+    pub fn set_move_resize_start_callback<F>(&self, id: usize, callback: F)
+    where
+        F: Fn(HWND, &WindowInfo) + Send + Sync + 'static,
+    {
+        self.move_resize_start_callbacks.insert(id, Arc::new(callback));
+    }
+
+    pub fn set_move_resize_stop_callback<F>(&self, id: usize, callback: F)
+    where
+        F: Fn(HWND, &WindowInfo) + Send + Sync + 'static,
+    {
+        self.move_resize_stop_callbacks.insert(id, Arc::new(callback));
+    }
+
+    pub fn remove_move_resize_start_callback(&self, id: usize) {
+        self.move_resize_start_callbacks.remove(&id);
+    }
+    pub fn remove_move_resize_stop_callback(&self, id: usize) {
+        self.move_resize_stop_callbacks.remove(&id);
     }
 
     // Call this periodically from the main thread/event loop
     pub fn poll_move_resize_events(&mut self) {
-        //println!("[DEBUG][poll_move_resize_events] Checking for move/resize events");
-        while let Some((hwnd_val, is_start)) = self.consumer.try_pop() {
-            println!(
-                "[DEBUG][poll_move_resize_events] Popped from ringbuf: hwnd_val={:?}, is_start={}",
-                hwnd_val, is_start
-            );
+        while let Some((hwnd_val, event_type)) = self.event_queue.pop() {
             let hwnd = hwnd_val as HWND;
-            let mut tracker = self.tracker.lock().unwrap();
-            // First, check if the window exists
-            let window_exists = tracker.windows.get(&hwnd).is_some();
+            let window_exists = self.windows.get(&hwnd).is_some();
             if !window_exists {
-                tracker.add_window(hwnd);
-                println!("[WindowEventSystem] Event for unknown HWND={:?}", hwnd);
+                println!("[WindowEventSystem] Adding tracking for HWND={:?}", hwnd);
+                // Lock-free add_window logic:
+                if let Some(rect) = crate::WindowTracker::get_window_rect(hwnd) {
+                    let title = crate::WindowTracker::get_window_title(hwnd);
+                    let grid_cells = vec![]; // Optionally, call window_to_grid_cells if you have config
+                    let monitor_cells = std::collections::HashMap::new();
+                    let window_info = crate::WindowInfo {
+                        hwnd,
+                        title,
+                        rect,
+                        grid_cells,
+                        monitor_cells,
+                    };
+                    self.windows.insert(hwnd, window_info);
+                } else {
+                    println!("[WindowEventSystem] Could not get rect for HWND={:?}, skipping add.", hwnd);
+                    continue;
+                }
             }
-            // Now, safely get the window_info after any possible mutation
-            if let Some(window_info) = tracker.windows.get(&hwnd) {
-                println!(
-                    "[DEBUG][poll_move_resize_events] Found window_info for HWND={:?}, title={}",
-                    hwnd, window_info.title
-                );
-                for callback in &tracker.event_callbacks {
-                    if is_start {
-                        println!(
-                            "[WindowEventSystem] on_window_move_resize_start: HWND={:?}, title={}",
-                            hwnd, window_info.title
-                        );
-                        callback.on_window_move_resize_start(hwnd, &*window_info);
-                    } else {
-                        println!(
-                            "[WindowEventSystem] on_window_move_resize_stop: HWND={:?}, title={}",
-                            hwnd, window_info.title
-                        );
-                        callback.on_window_move_resize_stop(hwnd, &*window_info);
+
+            if let Some(window_info) = self.windows.get(&hwnd) {
+                let mut should_call = false;
+                use crate::MoveResizeEventType::*;
+                match event_type {
+                    MoveStart => {
+                        for cb in self.move_resize_start_callbacks.iter() {
+                            cb.value()(hwnd, &*window_info);
+                        }
+                    }
+                    MoveStop => {
+                        if let Some(mut entry) = self.states.get_mut(&hwnd_val) {
+                            if entry.in_progress {
+                                entry.in_progress = false;
+                                should_call = true;
+                            }
+                        }
+                        if should_call {
+                            for cb in self.move_resize_stop_callbacks.iter() {
+                                cb.value()(hwnd, &*window_info);
+                            }
+                        }
+                    }
+                    ResizeStart => {
+                        for cb in self.move_resize_start_callbacks.iter() {
+                            cb.value()(hwnd, &*window_info);
+                        }
+                    }
+                    ResizeStop => {
+                        if let Some(mut entry) = self.states.get_mut(&hwnd_val) {
+                            if entry.in_progress {
+                                entry.in_progress = false;
+                                should_call = true;
+                            }
+                        }
+                        if should_call {
+                            for cb in self.move_resize_stop_callbacks.iter() {
+                                cb.value()(hwnd, &*window_info);
+                            }
+                        }
+                    }
+                    BothStart => {
+                        for cb in self.move_resize_start_callbacks.iter() {
+                            cb.value()(hwnd, &*window_info);
+                        }
+                    }
+                    BothStop => {
+                        if let Some(mut entry) = self.states.get_mut(&hwnd_val) {
+                            if entry.in_progress {
+                                entry.in_progress = false;
+                                should_call = true;
+                            }
+                        }
+                        if should_call {
+                            for cb in self.move_resize_stop_callbacks.iter() {
+                                cb.value()(hwnd, &*window_info);
+                            }
+                        }
                     }
                 }
                 // Publish to IPC if callback is set
                 if let Some(ref cb) = self.event_callback {
                     use crate::ipc_protocol::GridEvent;
-                    // Fill in real values for the event fields
                     let title = window_info.title.clone();
                     let (row, col) = window_info.grid_cells.get(0).cloned().unwrap_or((0, 0));
                     let grid_top_left_row = row;
@@ -1772,49 +1885,86 @@ impl WindowEventSystem {
                     let real_x = window_info.rect.left;
                     let real_y = window_info.rect.top;
                     let real_width = (window_info.rect.right - window_info.rect.left).max(0) as u32;
-                    let real_height =
-                        (window_info.rect.bottom - window_info.rect.top).max(0) as u32;
+                    let real_height = (window_info.rect.bottom - window_info.rect.top).max(0) as u32;
                     let monitor_id = 0; // TODO: fill with real monitor id if available
-                    let event = if is_start {
-                        println!("[DEBUG][poll_move_resize_events] Creating GridEvent::WindowMoveStart for HWND={:?}", hwnd);
-                        GridEvent::WindowMoveStart {
-                            hwnd: hwnd as u64,
-                            title,
-                            current_row: row,
-                            current_col: col,
-                            grid_top_left_row,
-                            grid_top_left_col,
-                            grid_bottom_right_row,
-                            grid_bottom_right_col,
-                            real_x,
-                            real_y,
-                            real_width,
-                            real_height,
-                            monitor_id,
-                        }
-                    } else {
-                        println!("[DEBUG][poll_move_resize_events] Creating GridEvent::WindowMoveStop for HWND={:?}", hwnd);
-                        GridEvent::WindowMoveStop {
-                            hwnd: hwnd as u64,
-                            title,
-                            final_row: row,
-                            final_col: col,
-                            grid_top_left_row,
-                            grid_top_left_col,
-                            grid_bottom_right_row,
-                            grid_bottom_right_col,
-                            real_x,
-                            real_y,
-                            real_width,
-                            real_height,
-                            monitor_id,
-                        }
+                    let event = match event_type {
+                        MoveStart => {
+                            log::debug!("[SERVER] Publishing WindowMoveStart: hwnd={:?} row={} col={}", hwnd, row, col);
+                            GridEvent::WindowMoveStart {
+                                hwnd: hwnd as u64,
+                                title,
+                                current_row: row,
+                                current_col: col,
+                                grid_top_left_row,
+                                grid_top_left_col,
+                                grid_bottom_right_row,
+                                grid_bottom_right_col,
+                                real_x,
+                                real_y,
+                                real_width,
+                                real_height,
+                                monitor_id,
+                            }
+                        },
+                        MoveStop => {
+                            log::debug!("[SERVER] Publishing WindowMoveStop: hwnd={:?} row={} col={}", hwnd, row, col);
+                            GridEvent::WindowMoveStop {
+                                hwnd: hwnd as u64,
+                                title,
+                                final_row: row,
+                                final_col: col,
+                                grid_top_left_row,
+                                grid_top_left_col,
+                                grid_bottom_right_row,
+                                grid_bottom_right_col,
+                                real_x,
+                                real_y,
+                                real_width,
+                                real_height,
+                                monitor_id,
+                            }
+                        },
+                        ResizeStart | BothStart => {
+                            log::debug!("[SERVER] Publishing WindowResizeStart: hwnd={:?} row={} col={}", hwnd, row, col);
+                            GridEvent::WindowResizeStart {
+                                hwnd: hwnd as u64,
+                                title,
+                                current_row: row,
+                                current_col: col,
+                                grid_top_left_row,
+                                grid_top_left_col,
+                                grid_bottom_right_row,
+                                grid_bottom_right_col,
+                                real_x,
+                                real_y,
+                                real_width,
+                                real_height,
+                                monitor_id,
+                            }
+                        },
+                        ResizeStop | BothStop => {
+                            log::debug!("[SERVER] Publishing WindowResizeStop: hwnd={:?} row={} col={}", hwnd, row, col);
+                            GridEvent::WindowResizeStop {
+                                hwnd: hwnd as u64,
+                                title,
+                                final_row: row,
+                                final_col: col,
+                                grid_top_left_row,
+                                grid_top_left_col,
+                                grid_bottom_right_row,
+                                grid_bottom_right_col,
+                                real_x,
+                                real_y,
+                                real_width,
+                                real_height,
+                                monitor_id,
+                            }
+                        },
                     };
-                    println!("[DEBUG][poll_move_resize_events] Invoking event_callback for HWND={:?}, is_start={}", hwnd, is_start);
                     cb(event);
                 }
             } else {
-                println!("[WindowEventSystem] Event for unknown HWND={:?}", hwnd);
+                println!("DAVE [WindowEventSystem] Event for unknown HWND={:?}", hwnd);
             };
         }
     }

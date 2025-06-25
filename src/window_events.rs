@@ -16,9 +16,8 @@ pub struct WindowEventConfig {
     pub heartbeat_reset: Option<Box<dyn Fn() + Send + Sync>>,
     pub event_callback: Option<Box<dyn Fn(crate::ipc_protocol::GridEvent) + Send + Sync>>, // NEW: event publishing callback
     pub debug_mode: bool,
-    // --- ADDED: For move/resize tracking ---
-    pub move_resize_producer:
-        Option<Arc<Mutex<ringbuf::wrap::Prod<Arc<ringbuf::HeapRb<(isize, bool)>>>>>>,
+    // --- UPDATED: For move/resize tracking ---
+    pub move_resize_event_queue: Option<Arc<crossbeam_queue::SegQueue<(isize, crate::MoveResizeEventType)>>>,
     pub move_resize_states: Option<Arc<dashmap::DashMap<isize, crate::MoveResizeState>>>,
 }
 
@@ -30,7 +29,7 @@ impl WindowEventConfig {
             heartbeat_reset: None,
             event_callback: None, // NEW
             debug_mode: false,
-            move_resize_producer: None,
+            move_resize_event_queue: None,
             move_resize_states: None,
         }
     }
@@ -173,25 +172,25 @@ pub unsafe extern "system" fn win_event_proc(
         Some(config) => config,
         None => return, // No configuration available
     };
-    if config.debug_mode {
-        let event_name = match event {
-            3 => "EVENT_SYSTEM_FOREGROUND (FOCUS)",
-            32768 => {
-                //"EVENT_OBJECT_SHOW"
-                return; // Skip SHOW events for now
-            }
-            32769 => {
-                //"EVENT_OBJECT_HIDE"
-                return; // Skip events for now
-            }
-            32779 => "EVENT_OBJECT_LOCATIONCHANGE (MOVE/RESIZE)",
-            _ => "OTHER",
-        };
-        println!(
-            "🔍 WinEvent: event={} ({}), hwnd={:?}",
-            event, event_name, hwnd
-        );
-    }
+    // if config.debug_mode {
+    //     let event_name = match event {
+    //         3 => "EVENT_SYSTEM_FOREGROUND (FOCUS)",
+    //         32768 => {
+    //             //"EVENT_OBJECT_SHOW"
+    //             return; // Skip SHOW events for now
+    //         }
+    //         32769 => {
+    //             //"EVENT_OBJECT_HIDE"
+    //             return; // Skip events for now
+    //         }
+    //         32779 => "EVENT_OBJECT_LOCATIONCHANGE (MOVE/RESIZE)",
+    //         _ => "OTHER",
+    //     };
+    //     println!(
+    //         "🔍 WinEvent: event={} ({}), hwnd={:?}",
+    //         event, event_name, hwnd
+    //     );
+    // }
 
     // Always try to reset heartbeat if callback is available
     if let Some(ref heartbeat_reset) = config.heartbeat_reset {
@@ -222,9 +221,9 @@ pub unsafe extern "system" fn win_event_proc(
 
     // Update window tracker
     if let Ok(mut tracker) = config.tracker.try_lock() {
-        if config.debug_mode {
-            println!("🔍 Processing event {} for window {:?}", event, hwnd);
-        }
+        // if config.debug_mode {
+        //     println!("🔍 Processing event {} for window {:?}", event, hwnd);
+        // }
 
         match event {
             EVENT_OBJECT_CREATE => {
@@ -236,42 +235,76 @@ pub unsafe extern "system" fn win_event_proc(
                 tracker.remove_window(hwnd);
             }
             EVENT_OBJECT_LOCATIONCHANGE => {
+                println!("🔍 LOCATIONCHANGE event for HWND {:?}", hwnd);
                 if WindowTracker::is_manageable_window(hwnd) {
+                    println!("   ...is manageable!");
+                    // Ensure window is tracked before updating
+                    if !tracker.windows.contains_key(&hwnd) {
+                        println!("   [DEBUG] Window not in tracker.windows, calling add_window for HWND {:?}", hwnd);
+                        tracker.add_window(hwnd);
+                    }
                     tracker.update_window(hwnd);
                     // --- ADDED: Move/Resize tracking ---
-                    if let (Some(prod), Some(states)) = (
-                        config.move_resize_producer.as_ref(),
+                    if config.move_resize_event_queue.is_none() {
+                        println!("   [DEBUG] move_resize_event_queue is None");
+                    }
+                    if config.move_resize_states.is_none() {
+                        println!("   [DEBUG] move_resize_states is None");
+                    }
+                    if let (Some(event_queue), Some(states)) = (
+                        config.move_resize_event_queue.as_ref(),
                         config.move_resize_states.as_ref(),
                     ) {
-                        if let Ok(mut prod) = prod.lock() {
-                            crate::MoveResizeTracker::update_event(&mut *prod, states, hwnd);
+                        let hwnd_val = hwnd as isize;
+                        if !tracker.windows.contains_key(&hwnd) {
+                            println!("   [DEBUG] tracker.windows.get(&hwnd) is None for HWND {:?}", hwnd);
                         }
-                    }
-                    // NEW: Publish move event
-                    if let Some(ref event_callback) = config.event_callback {
                         if let Some(window_info) = tracker.windows.get(&hwnd) {
-                            let event = crate::ipc_protocol::GridEvent::WindowMoved {
-                                hwnd: hwnd as u64,
-                                title: window_info.title.clone(),
-                                old_row: 0, // TODO: track previous row/col if needed
-                                old_col: 0,
-                                new_row: 0, // TODO: fill with actual grid info
-                                new_col: 0,
-                                grid_top_left_row: 0,
-                                grid_top_left_col: 0,
-                                grid_bottom_right_row: 0,
-                                grid_bottom_right_col: 0,
-                                real_x: window_info.rect.left,
-                                real_y: window_info.rect.top,
-                                real_width: (window_info.rect.right - window_info.rect.left) as u32,
-                                real_height: (window_info.rect.bottom - window_info.rect.top)
-                                    as u32,
-                                monitor_id: 0,
-                            };
-                            event_callback(event);
+                            let new_rect = window_info.rect;
+                            let mut entry = states.entry(hwnd_val).or_insert(crate::MoveResizeState {
+                                last_event: std::time::Instant::now(),
+                                in_progress: false,
+                                last_rect: new_rect,
+                                last_type: None, // Track last event type
+                            });
+                            entry.last_event = std::time::Instant::now();
+                            let prev_rect = entry.last_rect;
+                            // --- DEBUG PRINTS: Show prev_rect and new_rect ---
+                            println!("[MOVE/RESIZE DEBUG] HWND {:?} prev_rect: l={},t={},r={},b={} | new_rect: l={},t={},r={},b={}",
+                                hwnd,
+                                prev_rect.left, prev_rect.top, prev_rect.right, prev_rect.bottom,
+                                new_rect.left, new_rect.top, new_rect.right, new_rect.bottom
+                            );
+                            let moved = prev_rect.left != new_rect.left || prev_rect.top != new_rect.top;
+                            let resized = (prev_rect.right - prev_rect.left != new_rect.right - new_rect.left)
+                                || (prev_rect.bottom - prev_rect.top != new_rect.bottom - new_rect.top);
+                            use crate::MoveResizeEventType::*;
+                            if !entry.in_progress {
+                                // Only emit a start event if not already in progress
+                                if moved && !resized {
+                                    println!("[MOVE/RESIZE] Gesture detected: MoveStart for HWND {:?}", hwnd);
+                                    event_queue.push((hwnd_val, MoveStart));
+                                    entry.in_progress = true;
+                                    entry.last_type = Some(MoveStart);
+                                } else if resized && !moved {
+                                    println!("[MOVE/RESIZE] Gesture detected: ResizeStart for HWND {:?}", hwnd);
+                                    event_queue.push((hwnd_val, ResizeStart));
+                                    entry.in_progress = true;
+                                    entry.last_type = Some(ResizeStart);
+                                } else if moved && resized {
+                                    println!("[MOVE/RESIZE] Gesture detected: BothStart for HWND {:?}", hwnd);
+                                    event_queue.push((hwnd_val, BothStart));
+                                    entry.in_progress = true;
+                                    entry.last_type = Some(BothStart);
+                                }
+                            }
+                            entry.last_rect = new_rect;
                         }
                     }
+                } else {
+                    println!("   ...NOT manageable!");
                 }
+                // ...existing code...
             }
             EVENT_SYSTEM_MINIMIZESTART => {
                 tracker.remove_window(hwnd);
