@@ -125,8 +125,12 @@ fn test_ipc_server_client() {
 fn test_server_with_config(config: GridConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Create a WindowTracker with the given config, then create server
     let tracker = Arc::new(Mutex::new(WindowTracker::new_with_config(config.clone())));
-    let server = GridIpcServer::new(tracker)?;
-    println!(
+    let windows = {
+         let tracker_guard = tracker.lock().unwrap();
+        tracker_guard.windows.clone()
+    };
+    let mut server = GridIpcServer::new(tracker.clone(),Arc::new(windows)).unwrap();
+     println!(
         "   🔧 Server initialized with {}x{} grid",
         server.get_config().rows,
         server.get_config().cols

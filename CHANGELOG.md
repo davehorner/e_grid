@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/davehorner/e_grid/compare/v0.1.1...v0.1.2) - 2025-06-25
+
+### Added
+
+- add lock-free window event system with move/resize detection and crossbeam queues
+
+### Other
+
+- *(ipc)* add e_midi integration with move/resize and focus event callbacks  - Integrated `e_midi` as a local dependency with a new `e_midi_demo` example. - Introduced support for `move_resize_start` and `move_resize_stop` callbacks in `GridClient`. - Enhanced window event tracking to trigger MIDI playback on focus and window interaction. - Refactored `GridIpcServer` to replace println! with structured `log` macros. - Reduced console noise and centralized debug output via the `log` crate. - Improved robustness of event polling with fallback for missing HWNDs. - Added missing crates to `Cargo.lock` including ALSA, CoreMIDI, midir, wasm-bindgen, and dependencies.
+- initial release.  this is a pre-release of e_grid.  developer release.
+
 ## [0.1.1](https://github.com/davehorner/e_grid/compare/v0.1.0...v0.1.1) - 2025-06-22
 
 ### Added

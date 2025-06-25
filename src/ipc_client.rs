@@ -8,6 +8,7 @@ use crate::ipc_protocol::{
     GRID_HEARTBEAT_SERVICE, GRID_RESPONSE_SERVICE, GRID_WINDOW_DETAILS_SERVICE,
 };
 use crate::GridConfig;
+use crossbeam_queue::ArrayQueue;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
@@ -306,7 +307,12 @@ impl GridClient {
                         }
                         connection_retry_count = 0; // Reset retry count on successful connection
                                                     // Main monitoring loop - process events while connected
-                        let monitoring_result = Self::run_monitoring_loop(
+                        // Create lock-free queues for event passing
+                        let window_event_queue = Arc::new(ArrayQueue::new(1024));
+                        let window_details_queue = Arc::new(ArrayQueue::new(1024));
+                        let focus_event_queue = Arc::new(ArrayQueue::new(1024));
+
+                        let monitoring_result = Self::run_monitoring_loop_with_queues(
                             &event_subscriber,
                             &window_details_subscriber,
                             &focus_subscriber,
@@ -322,6 +328,9 @@ impl GridClient {
                             &move_resize_start_callback,
                             &move_resize_stop_callback,
                             &config,
+                            &window_event_queue,
+                            &window_details_queue,
+                            &focus_event_queue,
                         );
 
                         match monitoring_result {
@@ -383,7 +392,13 @@ impl GridClient {
         Ok(())
     }
 
-    fn run_monitoring_loop(
+    // If you want to avoid Arc<Mutex<...>> locking for sharing data between threads,
+    // you can use lock-free ring buffers (e.g., crossbeam::ArrayQueue, heapless::spsc::Queue, or similar).
+    // This requires changing your data structures to use these queues for communication.
+    // Example: Replace Arc<Mutex<HashMap<...>>> with a lock-free queue for events.
+
+    // For illustration, here's how you might change the function signature to use ring buffers:
+    fn run_monitoring_loop_with_queues(
         event_subscriber: &Subscriber<Service, WindowEvent, ()>,
         window_details_subscriber: &Subscriber<Service, WindowDetails, ()>,
         focus_subscriber: &Subscriber<Service, WindowFocusEvent, ()>,
@@ -399,6 +414,9 @@ impl GridClient {
         move_resize_start_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
         move_resize_stop_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
         config: &GridConfig,
+        window_event_queue: &Arc<ArrayQueue<WindowEvent>>,
+        window_details_queue: &Arc<ArrayQueue<WindowDetails>>,
+        focus_event_queue: &Arc<ArrayQueue<WindowFocusEvent>>,
     ) -> MonitoringResult {
         let mut consecutive_empty_cycles = 0;
         let max_empty_cycles = 200; // If no data for 200 cycles (10+ seconds), assume disconnection
@@ -416,11 +434,7 @@ impl GridClient {
                 let event = *event_sample;
                 _events_received += 1;
                 had_activity = true;
-                // Debug log for all received window events
-                println!(
-                    "[DEBUG] Received WindowEvent: type={} hwnd={} row={} col={}",
-                    event.event_type, event.hwnd, event.row, event.col
-                );
+                println!("[DEBUG] Received WindowEvent: type={} hwnd={} row={} col={}", event.event_type, event.hwnd, event.row, event.col);
                 // Call user callback if set
                 if let Ok(cb_lock) = window_event_callback.lock() {
                     if let Some(ref cb) = *cb_lock {
@@ -429,10 +443,11 @@ impl GridClient {
                 }
                 if let Ok(cb_lock) = move_resize_start_callback.lock() {
                     if let Some(ref cb) = *cb_lock {
-                        if event.event_type == 4 {
+                        // Trigger for any start event: 4 (MoveStart), 6 (ResizeStart), 8 (BothStart)
+                        if matches!(event.event_type, 4 | 6 | 8) {
                             debug!(
-                                "📦 Move/resize start callback triggered for HWND {}",
-                                event.hwnd
+                                "📦 Move/resize start callback triggered for HWND {} (type={})",
+                                event.hwnd, event.event_type
                             );
                             cb(event.clone());
                         }
@@ -440,7 +455,8 @@ impl GridClient {
                 }
                 if let Ok(cb_lock) = move_resize_stop_callback.lock() {
                     if let Some(ref cb) = *cb_lock {
-                        if event.event_type == 5 {
+                        // Trigger for any stop event: 5 (MoveStop), 7 (ResizeStop), 9 (BothStop)
+                        if matches!(event.event_type, 5 | 7 | 9) {
                             cb(event.clone());
                         }
                     }
@@ -454,6 +470,9 @@ impl GridClient {
                     auto_display,
                     config,
                 );
+
+                // Add event to queue
+                let _ = window_event_queue.push(event.clone());
             }
 
             // Process focus events (real-time, process all available)
@@ -466,6 +485,9 @@ impl GridClient {
                     focus_event.hwnd, focus_event.process_id, focus_event.timestamp
                 );
                 Self::handle_focus_event(&focus_event, focus_callback);
+
+                // Add focus event to queue
+                let _ = focus_event_queue.push(focus_event.clone());
             }
 
             // Process window details updates (real-time, process all available)
@@ -482,6 +504,9 @@ impl GridClient {
                     auto_display,
                     config,
                 );
+
+                // Add details to queue
+                let _ = window_details_queue.push(details.clone());
             } // Process heartbeat messages to keep connection alive
             while let Some(heartbeat_sample) = heartbeat_subscriber.receive().unwrap_or(None) {
                 let heartbeat = *heartbeat_sample;

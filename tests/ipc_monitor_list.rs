@@ -22,7 +22,11 @@ fn setup_server_and_client() -> (
     Subscriber<Service, e_grid::ipc_protocol::IpcResponse, ()>,
 ) {
     let tracker = Arc::new(Mutex::new(WindowTracker::new()));
-    let mut server = GridIpcServer::new(tracker.clone()).unwrap();
+    let windows = {
+         let tracker_guard = tracker.lock().unwrap();
+        tracker_guard.windows.clone()
+    };
+    let mut server = GridIpcServer::new(tracker.clone(),Arc::new(windows)).unwrap();
     server.setup_services().unwrap();
     let node = NodeBuilder::new().create::<Service>().unwrap();
     let command_service = node
