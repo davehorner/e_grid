@@ -307,7 +307,7 @@ impl GridClient {
                         }
                         connection_retry_count = 0; // Reset retry count on successful connection
                                                     // Main monitoring loop - process events while connected
-                        // Create lock-free queues for event passing
+                                                    // Create lock-free queues for event passing
                         let window_event_queue = Arc::new(ArrayQueue::new(1024));
                         let window_details_queue = Arc::new(ArrayQueue::new(1024));
                         let focus_event_queue = Arc::new(ArrayQueue::new(1024));
@@ -434,7 +434,10 @@ impl GridClient {
                 let event = *event_sample;
                 _events_received += 1;
                 had_activity = true;
-                println!("[DEBUG] Received WindowEvent: type={} hwnd={} row={} col={}", event.event_type, event.hwnd, event.row, event.col);
+                println!(
+                    "[DEBUG] Received WindowEvent: type={} hwnd={} row={} col={}",
+                    event.event_type, event.hwnd, event.row, event.col
+                );
                 // Call user callback if set
                 if let Ok(cb_lock) = window_event_callback.lock() {
                     if let Some(ref cb) = *cb_lock {
@@ -1032,7 +1035,7 @@ impl GridClient {
                         .map(|cell| match cell {
                             ClientCellState::Empty => crate::CellState::Empty,
                             ClientCellState::Occupied(hwnd) => {
-                                crate::CellState::Occupied(*hwnd as crate::HWND)
+                                crate::CellState::Occupied(*hwnd as u64)
                             }
                             ClientCellState::OffScreen => crate::CellState::OffScreen,
                         })
@@ -1123,7 +1126,7 @@ impl GridClient {
                         .map(|cell| match cell {
                             ClientCellState::Empty => crate::CellState::Empty,
                             ClientCellState::Occupied(hwnd) => {
-                                crate::CellState::Occupied(*hwnd as crate::HWND)
+                                crate::CellState::Occupied(*hwnd as u64)
                             }
                             ClientCellState::OffScreen => crate::CellState::OffScreen,
                         })
@@ -1161,9 +1164,7 @@ impl GridClient {
                             for col in 0..self.config.cols {
                                 if row < monitor.grid.len() && col < monitor.grid[row].len() {
                                     server_monitor_grid[row][col] = match monitor.grid[row][col] {
-                                        Some(hwnd) => {
-                                            crate::CellState::Occupied(hwnd as crate::HWND)
-                                        }
+                                        Some(hwnd) => crate::CellState::Occupied(hwnd as u64),
                                         None => crate::CellState::Empty,
                                     };
                                 }

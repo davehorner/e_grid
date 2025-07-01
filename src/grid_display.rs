@@ -131,7 +131,7 @@ pub fn display_monitor_grids(
             .map(|row| {
                 row.iter()
                     .map(|&cell| match cell {
-                        Some(hwnd) => CellState::Occupied(hwnd as winapi::shared::windef::HWND),
+                        Some(hwnd) => CellState::Occupied(hwnd),
                         None => CellState::Empty,
                     })
                     .collect()
@@ -185,7 +185,7 @@ mod tests {
     fn test_display_grid_with_windows() {
         let config = GridConfig::new(2, 3);
         let mut grid = vec![vec![CellState::Empty; 3]; 2];
-        grid[0][1] = CellState::Occupied(123 as winapi::shared::windef::HWND);
+        grid[0][1] = CellState::Occupied(123 as winapi::shared::windef::HWND as u64);
         grid[1][2] = CellState::OffScreen;
 
         let display_config = GridDisplayConfig::default();

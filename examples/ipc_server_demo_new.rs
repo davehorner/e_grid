@@ -23,10 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create and setup the IPC server
     let windows = {
-         let tracker_guard = tracker.lock().unwrap();
+        let tracker_guard = tracker.lock().unwrap();
         tracker_guard.windows.clone()
     };
-    let mut ipc_server = ipc_server::GridIpcServer::new(tracker.clone(),Arc::new(windows))?;
+    let mut ipc_server = ipc_server::GridIpcServer::new(tracker.clone(), Arc::new(windows))?;
     println!("\n🔧 Setting up IPC server...");
     ipc_server.setup_services()?;
 

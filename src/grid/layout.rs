@@ -3,20 +3,29 @@
 use crate::config::GridConfig;
 use crate::grid::basic::BasicGrid;
 use crate::grid::traits::{GridError, GridResult, GridTrait, LayoutGrid as LayoutGridTrait};
+use crate::window_tracker::WindowTracker;
+use crate::CellState;
 use std::collections::HashMap;
-use winapi::shared::windef::HWND;
+use std::time::Instant;
 
 pub struct LayoutGrid {
     basic_grid: BasicGrid,
     saved_layouts: HashMap<String, GridLayout>,
 }
-
+#[derive(Clone, Debug)]
+pub struct MonitorGridLayout {
+    pub monitor_id: usize,
+    pub config: GridConfig,
+    pub grid: Vec<Vec<Option<u64>>>,
+}
 #[derive(Debug, Clone)]
 pub struct GridLayout {
     pub name: String,
     pub config: GridConfig,
+    pub virtual_grid: Vec<Vec<Option<u64>>>,
+    pub monitor_grids: Vec<MonitorGridLayout>,
     pub window_positions: HashMap<String, (usize, usize)>, // window_title -> (row, col)
-    pub created_at: std::time::SystemTime,
+    pub created_at: Instant,
 }
 
 impl LayoutGrid {
@@ -35,7 +44,7 @@ impl LayoutGrid {
     }
 
     /// Get the current layout as a snapshot
-    fn capture_current_layout(&self, name: String) -> GridLayout {
+    pub fn capture_current_layout(&self, name: String) -> GridLayout {
         let mut window_positions = HashMap::new();
         // Capture current window positions
         for (hwnd, window_info) in self.basic_grid.windows() {
@@ -54,8 +63,23 @@ impl LayoutGrid {
         GridLayout {
             name,
             config: self.basic_grid.config().clone(),
+            // Build the virtual_grid as a 2D Vec of Option<u64> based on the current grid state
+            virtual_grid: (0..self.basic_grid.config().rows)
+                .map(|row| {
+                    (0..self.basic_grid.config().cols)
+                        .map(|col| {
+                            let cell_windows = self
+                                .basic_grid
+                                .get_cell_windows(row, col)
+                                .unwrap_or_default();
+                            cell_windows.get(0).copied()
+                        })
+                        .collect()
+                })
+                .collect(),
+            monitor_grids: Vec::new(),
             window_positions,
-            created_at: std::time::SystemTime::now(),
+            created_at: std::time::Instant::now(),
         }
     }
 
@@ -82,6 +106,50 @@ impl LayoutGrid {
         );
         Ok(())
     }
+    pub fn new_with_config(name: String, config: GridConfig) -> GridLayout {
+        let virtual_grid = vec![vec![None; config.cols]; config.rows];
+        GridLayout {
+            name,
+            config,
+            virtual_grid,
+            monitor_grids: Vec::new(),
+            window_positions: HashMap::new(),
+            created_at: Instant::now(),
+        }
+    }
+    pub fn from_current_state(tracker: &WindowTracker, name: String) -> GridLayout {
+        let mut layout = Self::new_with_config(name, tracker.config.clone());
+
+        // Extract virtual grid layout
+        for row in 0..tracker.config.rows {
+            for col in 0..tracker.config.cols {
+                if let CellState::Occupied(hwnd) = tracker.grid[row][col] {
+                    layout.virtual_grid[row][col] = Some(hwnd);
+                }
+            }
+        }
+
+        // Extract monitor grid layouts
+        for monitor_grid in &tracker.monitor_grids {
+            let mut monitor_layout = MonitorGridLayout {
+                monitor_id: monitor_grid.monitor_id,
+                config: monitor_grid.config.clone(),
+                grid: vec![vec![None; monitor_grid.config.cols]; monitor_grid.config.rows],
+            };
+
+            for row in 0..monitor_grid.config.rows {
+                for col in 0..monitor_grid.config.cols {
+                    if let CellState::Occupied(hwnd) = monitor_grid.grid[row][col] {
+                        monitor_layout.grid[row][col] = Some(hwnd);
+                    }
+                }
+            }
+
+            layout.monitor_grids.push(monitor_layout);
+        }
+
+        layout
+    }
 }
 
 impl GridTrait for LayoutGrid {
@@ -105,19 +173,19 @@ impl GridTrait for LayoutGrid {
         self.basic_grid.is_cell_occupied(row, col)
     }
 
-    fn get_cell_windows(&self, row: usize, col: usize) -> GridResult<Vec<HWND>> {
+    fn get_cell_windows(&self, row: usize, col: usize) -> GridResult<Vec<u64>> {
         self.basic_grid.get_cell_windows(row, col)
     }
 
-    fn assign_window(&mut self, hwnd: HWND, row: usize, col: usize) -> GridResult<()> {
+    fn assign_window(&mut self, hwnd: u64, row: usize, col: usize) -> GridResult<()> {
         self.basic_grid.assign_window(hwnd, row, col)
     }
 
-    fn remove_window(&mut self, hwnd: HWND) -> GridResult<()> {
+    fn remove_window(&mut self, hwnd: u64) -> GridResult<()> {
         self.basic_grid.remove_window(hwnd)
     }
 
-    fn get_all_windows(&self) -> Vec<HWND> {
+    fn get_all_windows(&self) -> Vec<u64> {
         self.basic_grid.get_all_windows()
     }
 }

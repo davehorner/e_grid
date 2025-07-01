@@ -12,6 +12,7 @@ use crate::config::GridConfig;
 use crate::grid::animation::AnimationGrid;
 use crate::monitor::MonitorGrid;
 use crate::window::{WindowAnimation, WindowInfo};
+use crate::CellState;
 
 // Coverage threshold: percentage of cell area that must be covered by window
 const COVERAGE_THRESHOLD: f32 = 0.3; // 30% coverage required
@@ -24,7 +25,7 @@ static WINDOW_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 pub struct WindowTracker {
     pub config: GridConfig, // Dynamic grid configuration
     pub grid: Vec<Vec<CellState>>,
-    pub windows: DashMap<HWND, WindowInfo>,
+    pub windows: DashMap<u64, WindowInfo>,
     pub monitor_grids: Vec<MonitorGrid>,
     pub monitor_rect: RECT, // Combined bounds of all monitors
     pub active_animations: DashMap<HWND, WindowAnimation>,
@@ -32,12 +33,12 @@ pub struct WindowTracker {
     pub animation_grid: Option<AnimationGrid>, // Animation system integration
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum CellState {
-    Empty,          // No window (on-screen area)
-    Occupied(HWND), // Window present
-    OffScreen,      // Off-screen area (outside actual monitor bounds)
-}
+// #[derive(Debug, Clone, PartialEq)]
+// pub enum CellState {
+//     Empty,          // No window (on-screen area)
+//     Occupied(HWND), // Window present
+//     OffScreen,      // Off-screen area (outside actual monitor bounds)
+// }
 
 impl WindowTracker {
     pub fn new() -> Self {
@@ -257,14 +258,14 @@ impl WindowTracker {
     /// Add a window to tracking
     pub fn add_window(&mut self, hwnd: HWND, title: String, rect: RECT) {
         let window_info = WindowInfo::new(hwnd, title, rect);
-        self.windows.insert(hwnd, window_info);
+        self.windows.insert(hwnd as u64, window_info);
         self.update_grid();
         self.update_monitor_grids();
     }
 
     /// Remove a window from tracking
     pub fn remove_window(&mut self, hwnd: HWND) {
-        self.windows.remove(&hwnd);
+        self.windows.remove(&(hwnd as u64));
         self.active_animations.remove(&hwnd);
         self.update_grid();
         self.update_monitor_grids();
@@ -273,7 +274,7 @@ impl WindowTracker {
     pub fn update_window(&mut self, hwnd: HWND, new_rect: RECT) {
         // Update window info in a separate scope to avoid borrowing conflicts
         {
-            if let Some(mut window_info) = self.windows.get_mut(&hwnd) {
+            if let Some(mut window_info) = self.windows.get_mut(&(hwnd as u64)) {
                 window_info.update_rect(new_rect);
             }
         }

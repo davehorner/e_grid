@@ -61,11 +61,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔄 Event-driven system ready - message processing will happen in main thread...");
     // Step 3: Create and setup the IPC server (main thread for HWND safety)
     println!("🔧 Creating IPC server...");
-        let windows = {
-         let tracker_guard = tracker.lock().unwrap();
+    let windows = {
+        let tracker_guard = tracker.lock().unwrap();
         tracker_guard.windows.clone()
     };
-    let mut server = GridIpcServer::new(tracker.clone(),Arc::new(windows)).unwrap();
+    let mut server = GridIpcServer::new(tracker.clone(), Arc::new(windows)).unwrap();
     server.setup_services()?;
     // Note: NOT calling server.setup_window_events() to avoid duplicate hooks
     // The window_events::setup_window_events() above already set up the hooks

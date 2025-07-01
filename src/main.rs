@@ -502,11 +502,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("🎮 Starting client in interactive mode...");
 
         // Start a detached client first
-        if let Err(e) = start_detached_client() {
-            println!("⚠️ Failed to start detached client: {}", e);
-        } else {
-            thread::sleep(Duration::from_millis(1000)); // Let client start
-        }
+        // if let Err(e) = start_detached_client() {
+        //     println!("⚠️ Failed to start detached client: {}", e);
+        // } else {
+        //     thread::sleep(Duration::from_millis(1000)); // Let client start
+        // }
 
         // Then start interactive mode
         interactive_mode()

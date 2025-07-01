@@ -6,7 +6,7 @@ use winapi::shared::windef::{HWND, RECT};
 
 #[derive(Clone)]
 pub struct WindowInfo {
-    pub hwnd: HWND,
+    pub hwnd: u64,
     pub title: String,
     pub rect: RECT,
     pub grid_cells: Vec<(usize, usize)>, // Virtual grid cells this window occupies
@@ -42,7 +42,7 @@ impl fmt::Debug for WindowInfo {
 impl WindowInfo {
     pub fn new(hwnd: HWND, title: String, rect: RECT) -> Self {
         Self {
-            hwnd,
+            hwnd: hwnd as u64,
             title,
             rect,
             grid_cells: Vec::new(),

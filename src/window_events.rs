@@ -12,12 +12,13 @@ use winapi::um::winuser::{
 /// Configuration for window events with optional callbacks
 pub struct WindowEventConfig {
     pub tracker: Arc<Mutex<WindowTracker>>,
-    pub focus_callback: Option<Box<dyn Fn(HWND, bool) + Send + Sync>>, // hwnd, is_focused
+    pub focus_callback: Option<Box<dyn Fn(u64, bool) + Send + Sync>>, // hwnd, is_focused
     pub heartbeat_reset: Option<Box<dyn Fn() + Send + Sync>>,
     pub event_callback: Option<Box<dyn Fn(crate::ipc_protocol::GridEvent) + Send + Sync>>, // NEW: event publishing callback
     pub debug_mode: bool,
     // --- UPDATED: For move/resize tracking ---
-    pub move_resize_event_queue: Option<Arc<crossbeam_queue::SegQueue<(isize, crate::MoveResizeEventType)>>>,
+    pub move_resize_event_queue:
+        Option<Arc<crossbeam_queue::SegQueue<(isize, crate::MoveResizeEventType)>>>,
     pub move_resize_states: Option<Arc<dashmap::DashMap<isize, crate::MoveResizeState>>>,
 }
 
@@ -36,7 +37,7 @@ impl WindowEventConfig {
 
     pub fn with_focus_callback<F>(mut self, callback: F) -> Self
     where
-        F: Fn(HWND, bool) + Send + Sync + 'static,
+        F: Fn(u64, bool) + Send + Sync + 'static,
     {
         self.focus_callback = Some(Box::new(callback));
         self
@@ -68,7 +69,7 @@ impl WindowEventConfig {
 pub struct DebugEventCallback;
 
 impl WindowEventCallback for DebugEventCallback {
-    fn on_window_created(&self, hwnd: HWND, window_info: &WindowInfo) {
+    fn on_window_created(&self, hwnd: u64, window_info: &WindowInfo) {
         // Only show manageable windows in debug output
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: CREATED (Manageable)");
@@ -81,17 +82,16 @@ impl WindowEventCallback for DebugEventCallback {
                 }
             );
             println!("   HWND: {:?}", hwnd);
-            println!();
         }
     }
 
-    fn on_window_destroyed(&self, hwnd: HWND) {
+    fn on_window_destroyed(&self, hwnd: u64) {
         println!("🔔 WINDOW EVENT: DESTROYED");
         println!("   HWND: {:?}", hwnd);
         println!();
     }
 
-    fn on_window_moved(&self, hwnd: HWND, window_info: &WindowInfo) {
+    fn on_window_moved(&self, hwnd: u64, window_info: &WindowInfo) {
         // Only show manageable windows in debug output
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: MOVED/RESIZED (Manageable)");
@@ -108,7 +108,7 @@ impl WindowEventCallback for DebugEventCallback {
         }
     }
 
-    fn on_window_activated(&self, hwnd: HWND, window_info: &WindowInfo) {
+    fn on_window_activated(&self, hwnd: u64, window_info: &WindowInfo) {
         // Only show manageable windows in debug output
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: ACTIVATED (Manageable)");
@@ -125,13 +125,13 @@ impl WindowEventCallback for DebugEventCallback {
         }
     }
 
-    fn on_window_minimized(&self, hwnd: HWND) {
+    fn on_window_minimized(&self, hwnd: u64) {
         println!("🔔 WINDOW EVENT: MINIMIZED");
         println!("   HWND: {:?}", hwnd);
         println!();
     }
 
-    fn on_window_restored(&self, hwnd: HWND, window_info: &WindowInfo) {
+    fn on_window_restored(&self, hwnd: u64, window_info: &WindowInfo) {
         println!("🔔 WINDOW EVENT: RESTORED");
         println!(
             "   Window: {}",
@@ -150,7 +150,7 @@ impl WindowEventCallback for DebugEventCallback {
 // These are accessed only from the main thread and properly synchronized
 static mut WINDOW_EVENT_CONFIG: Option<WindowEventConfig> = None;
 static mut EVENT_HOOKS: Vec<winapi::shared::windef::HWINEVENTHOOK> = Vec::new();
-static mut LAST_FOCUSED_WINDOW: Option<HWND> = None;
+static mut LAST_FOCUSED_WINDOW: Option<u64> = None;
 
 // WinEvent hook procedure - unified event handling with optional callbacks
 pub unsafe extern "system" fn win_event_proc(
@@ -202,7 +202,7 @@ pub unsafe extern "system" fn win_event_proc(
         if let Some(ref focus_callback) = config.focus_callback {
             // Send DEFOCUSED for previous window if it exists
             if let Some(prev_hwnd) = LAST_FOCUSED_WINDOW {
-                if prev_hwnd != hwnd && !prev_hwnd.is_null() {
+                if prev_hwnd != hwnd as u64 {
                     if config.debug_mode {
                         println!("🎯 Focus: DEFOCUSED HWND {:?}", prev_hwnd);
                     }
@@ -211,11 +211,11 @@ pub unsafe extern "system" fn win_event_proc(
             }
 
             // Update last focused window and send FOCUSED
-            LAST_FOCUSED_WINDOW = Some(hwnd);
+            LAST_FOCUSED_WINDOW = Some(hwnd as u64);
             if config.debug_mode {
                 println!("🎯 Focus: FOCUSED HWND {:?}", hwnd);
             }
-            focus_callback(hwnd, true); // true = FOCUSED
+            focus_callback(hwnd as u64, true); // true = FOCUSED
         }
     }
 
@@ -227,23 +227,23 @@ pub unsafe extern "system" fn win_event_proc(
 
         match event {
             EVENT_OBJECT_CREATE => {
-                if WindowTracker::is_manageable_window(hwnd) {
-                    tracker.add_window(hwnd);
+                if WindowTracker::is_manageable_window(hwnd as u64) {
+                    tracker.add_window(hwnd as u64);
                 }
             }
             EVENT_OBJECT_DESTROY => {
-                tracker.remove_window(hwnd);
+                tracker.remove_window(hwnd as u64);
             }
             EVENT_OBJECT_LOCATIONCHANGE => {
-                println!("🔍 LOCATIONCHANGE event for HWND {:?}", hwnd);
-                if WindowTracker::is_manageable_window(hwnd) {
-                    println!("   ...is manageable!");
+                // println!("🔍 LOCATIONCHANGE event for HWND {:?}", hwnd);
+                if WindowTracker::is_manageable_window(hwnd as u64) {
+                    // println!("   ...is manageable!");
                     // Ensure window is tracked before updating
-                    if !tracker.windows.contains_key(&hwnd) {
+                    if !tracker.windows.contains_key(&(hwnd as u64)) {
                         println!("   [DEBUG] Window not in tracker.windows, calling add_window for HWND {:?}", hwnd);
-                        tracker.add_window(hwnd);
+                        tracker.add_window(hwnd as u64);
                     }
-                    tracker.update_window(hwnd);
+                    tracker.update_window(hwnd as u64);
                     // --- ADDED: Move/Resize tracking ---
                     if config.move_resize_event_queue.is_none() {
                         println!("   [DEBUG] move_resize_event_queue is None");
@@ -256,62 +256,77 @@ pub unsafe extern "system" fn win_event_proc(
                         config.move_resize_states.as_ref(),
                     ) {
                         let hwnd_val = hwnd as isize;
-                        if !tracker.windows.contains_key(&hwnd) {
-                            println!("   [DEBUG] tracker.windows.get(&hwnd) is None for HWND {:?}", hwnd);
+                        if !tracker.windows.contains_key(&(hwnd as u64)) {
+                            println!(
+                                "   [DEBUG] tracker.windows.get(&hwnd) is None for HWND {:?}",
+                                hwnd
+                            );
                         }
-                        if let Some(window_info) = tracker.windows.get(&hwnd) {
-                            let new_rect = window_info.rect;
-                            let mut entry = states.entry(hwnd_val).or_insert(crate::MoveResizeState {
-                                last_event: std::time::Instant::now(),
-                                in_progress: false,
-                                last_rect: new_rect,
-                                last_type: None, // Track last event type
-                            });
+                        if let Some(window_info) = tracker.windows.get(&(hwnd as u64)) {
+                            let mut entry =
+                                states.entry(hwnd_val).or_insert(crate::MoveResizeState {
+                                    last_event: std::time::Instant::now(),
+                                    in_progress: false,
+                                    last_rect: window_info.rect,
+                                    last_type: None, // Track last event type
+                                });
                             entry.last_event = std::time::Instant::now();
                             let prev_rect = entry.last_rect;
                             // --- DEBUG PRINTS: Show prev_rect and new_rect ---
-                            println!("[MOVE/RESIZE DEBUG] HWND {:?} prev_rect: l={},t={},r={},b={} | new_rect: l={},t={},r={},b={}",
-                                hwnd,
-                                prev_rect.left, prev_rect.top, prev_rect.right, prev_rect.bottom,
-                                new_rect.left, new_rect.top, new_rect.right, new_rect.bottom
-                            );
-                            let moved = prev_rect.left != new_rect.left || prev_rect.top != new_rect.top;
-                            let resized = (prev_rect.right - prev_rect.left != new_rect.right - new_rect.left)
-                                || (prev_rect.bottom - prev_rect.top != new_rect.bottom - new_rect.top);
+                            // println!("[MOVE/RESIZE DEBUG] HWND {:?} prev_rect: l={},t={},r={},b={} | new_rect: l={},t={},r={},b={}",
+                            //     hwnd,
+                            //     prev_rect.left, prev_rect.top, prev_rect.right, prev_rect.bottom,
+                            //     window_info.rect.left, window_info.rect.top, window_info.rect.right, window_info.rect.bottom
+                            // );
+                            let moved = prev_rect.left != window_info.rect.left
+                                || prev_rect.top != window_info.rect.top;
+                            let resized = (prev_rect.right - prev_rect.left
+                                != window_info.rect.right - window_info.rect.left)
+                                || (prev_rect.bottom - prev_rect.top
+                                    != window_info.rect.bottom - window_info.rect.top);
                             use crate::MoveResizeEventType::*;
                             if !entry.in_progress {
                                 // Only emit a start event if not already in progress
                                 if moved && !resized {
-                                    println!("[MOVE/RESIZE] Gesture detected: MoveStart for HWND {:?}", hwnd);
+                                    println!(
+                                        "[MOVE/RESIZE] Gesture detected: MoveStart for HWND {:?}",
+                                        hwnd
+                                    );
                                     event_queue.push((hwnd_val, MoveStart));
                                     entry.in_progress = true;
                                     entry.last_type = Some(MoveStart);
                                 } else if resized && !moved {
-                                    println!("[MOVE/RESIZE] Gesture detected: ResizeStart for HWND {:?}", hwnd);
+                                    println!(
+                                        "[MOVE/RESIZE] Gesture detected: ResizeStart for HWND {:?}",
+                                        hwnd
+                                    );
                                     event_queue.push((hwnd_val, ResizeStart));
                                     entry.in_progress = true;
                                     entry.last_type = Some(ResizeStart);
                                 } else if moved && resized {
-                                    println!("[MOVE/RESIZE] Gesture detected: BothStart for HWND {:?}", hwnd);
+                                    println!(
+                                        "[MOVE/RESIZE] Gesture detected: BothStart for HWND {:?}",
+                                        hwnd
+                                    );
                                     event_queue.push((hwnd_val, BothStart));
                                     entry.in_progress = true;
                                     entry.last_type = Some(BothStart);
                                 }
                             }
-                            entry.last_rect = new_rect;
+                            entry.last_rect = window_info.rect;
                         }
                     }
                 } else {
-                    println!("   ...NOT manageable!");
+                    // println!("   ...NOT manageable!");
                 }
                 // ...existing code...
             }
             EVENT_SYSTEM_MINIMIZESTART => {
-                tracker.remove_window(hwnd);
+                tracker.remove_window(hwnd as u64);
             }
             EVENT_SYSTEM_MINIMIZEEND => {
-                if WindowTracker::is_manageable_window(hwnd) {
-                    tracker.add_window(hwnd);
+                if WindowTracker::is_manageable_window(hwnd as u64) {
+                    tracker.add_window(hwnd as u64);
                 }
             }
             _ => {} // Unhandled event types

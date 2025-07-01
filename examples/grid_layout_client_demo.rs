@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup command publisher
     let command_service = node
         .service_builder(&ServiceName::new(ipc::GRID_COMMANDS_SERVICE)?)
-        .publish_subscribe::<ipc::WindowCommand>()
+        .publish_subscribe::<e_grid::ipc_protocol::IpcCommand>()
         .open()?;
     let mut command_publisher = command_service.publisher_builder().create()?;
 

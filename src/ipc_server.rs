@@ -7,7 +7,9 @@ use crate::ipc_protocol::{
     GRID_WINDOW_DETAILS_SERVICE,
 };
 use crate::WindowInfo;
-use crate::GridConfig;
+// use crate::GridConfig;
+use crate::config::grid_config::GridConfig;
+use crate::ipc_protocol::GridCommand;
 use crate::{
     heartbeat::HeartbeatService,
     window_events::{self, WindowEventConfig},
@@ -35,7 +37,7 @@ pub struct GridIpcServer {
     // Core window tracker (still keep for other logic)
     tracker: Arc<Mutex<WindowTracker>>,
     // Lock-free window state for event system
-    windows: Arc<DashMap<HWND, WindowInfo>>,
+    windows: Arc<DashMap<u64, crate::WindowInfo>>,
     config: GridConfig,
 
     // IPC Publishers
@@ -67,7 +69,10 @@ pub struct GridIpcServer {
 
 impl GridIpcServer {
     /// Create a new IPC server instance
-    pub fn new(tracker: Arc<Mutex<WindowTracker>>, windows: Arc<DashMap<HWND, WindowInfo>>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(
+        tracker: Arc<Mutex<WindowTracker>>,
+        windows: Arc<DashMap<u64, crate::WindowInfo>>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         // Get the config from the tracker once during initialization
         let config = {
             let tracker_guard = tracker.lock().unwrap();
@@ -106,6 +111,10 @@ impl GridIpcServer {
         let node = NodeBuilder::new().create::<Service>()?;
 
         // Setup event publishing service
+        println!(
+            "[IPC] Creating service: {} (type: WindowEvent)",
+            GRID_EVENTS_SERVICE
+        );
         let event_service = node
             .service_builder(&ServiceName::new(GRID_EVENTS_SERVICE)?)
             .publish_subscribe::<WindowEvent>()
@@ -115,35 +124,53 @@ impl GridIpcServer {
         self.event_publisher = Some(event_service.publisher_builder().create()?);
 
         // Setup response publishing service
+        println!(
+            "[IPC] Creating service: {} (type: IpcResponse)",
+            GRID_RESPONSE_SERVICE
+        );
         let response_service = node
             .service_builder(&ServiceName::new(GRID_RESPONSE_SERVICE)?)
             .publish_subscribe::<IpcResponse>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
-        self.response_publisher = Some(response_service.publisher_builder().create()?); // Setup window details publishing service
+        self.response_publisher = Some(response_service.publisher_builder().create()?);
+
+        // Setup window details publishing service
+        println!(
+            "[IPC] Creating service: {} (type: WindowDetails)",
+            GRID_WINDOW_DETAILS_SERVICE
+        );
         let window_details_service = node
             .service_builder(&ServiceName::new(GRID_WINDOW_DETAILS_SERVICE)?)
             .publish_subscribe::<WindowDetails>()
             .max_publishers(8)
             .max_subscribers(8)
-            .history_size(32) // Keep more messages in history
-            .subscriber_max_buffer_size(64) // Larger buffer for subscribers
+            .history_size(32)
+            .subscriber_max_buffer_size(64)
             .open_or_create()?;
         self.window_details_publisher = Some(window_details_service.publisher_builder().create()?);
 
-        // Setup focus events publishing service (NEW: for e_midi integration)
+        // Setup focus events publishing service
+        println!(
+            "[IPC] Creating service: {} (type: WindowFocusEvent)",
+            GRID_FOCUS_EVENTS_SERVICE
+        );
         let focus_service = node
             .service_builder(&ServiceName::new(GRID_FOCUS_EVENTS_SERVICE)?)
             .publish_subscribe::<WindowFocusEvent>()
             .max_publishers(8)
             .max_subscribers(8)
-            .history_size(16) // Keep recent focus events in history
-            .subscriber_max_buffer_size(32) // Buffer for focus event subscribers
+            .history_size(16)
+            .subscriber_max_buffer_size(32)
             .open_or_create()?;
         self.focus_publisher = Some(focus_service.publisher_builder().create()?);
 
         // Setup command subscription service
+        println!(
+            "[IPC DEBUG] Opening command service: {} (GridCommand)",
+            GRID_COMMANDS_SERVICE
+        );
         let command_service = node
             .service_builder(&ServiceName::new(GRID_COMMANDS_SERVICE)?)
             .publish_subscribe::<IpcCommand>()
@@ -153,58 +180,73 @@ impl GridIpcServer {
         self.command_subscriber = Some(command_service.subscriber_builder().create()?);
 
         // Setup grid layout services
+        println!(
+            "[IPC] Creating service: {} (type: GridLayoutMessage)",
+            GRID_LAYOUT_SERVICE
+        );
         let layout_service = node
             .service_builder(&ServiceName::new(GRID_LAYOUT_SERVICE)?)
             .publish_subscribe::<GridLayoutMessage>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
-
         self.layout_publisher = Some(layout_service.publisher_builder().create()?);
         self.layout_subscriber = Some(layout_service.subscriber_builder().create()?);
 
         // Setup cell assignment services
+        println!(
+            "[IPC] Creating service: {} (type: GridCellAssignment)",
+            GRID_CELL_ASSIGNMENTS_SERVICE
+        );
         let cell_assignment_service = node
             .service_builder(&ServiceName::new(GRID_CELL_ASSIGNMENTS_SERVICE)?)
             .publish_subscribe::<GridCellAssignment>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
-
         self.cell_assignment_publisher =
             Some(cell_assignment_service.publisher_builder().create()?);
         self.cell_assignment_subscriber =
             Some(cell_assignment_service.subscriber_builder().create()?);
 
         // Setup animation services
+        println!(
+            "[IPC] Creating service: {} (type: AnimationCommand)",
+            ANIMATION_COMMANDS_SERVICE
+        );
         let animation_service = node
             .service_builder(&ServiceName::new(ANIMATION_COMMANDS_SERVICE)?)
             .publish_subscribe::<AnimationCommand>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
-
         self.animation_subscriber = Some(animation_service.subscriber_builder().create()?);
 
         // Setup animation status service
+        println!(
+            "[IPC] Creating service: {} (type: AnimationStatus)",
+            ANIMATION_STATUS_SERVICE
+        );
         let animation_status_service = node
             .service_builder(&ServiceName::new(ANIMATION_STATUS_SERVICE)?)
             .publish_subscribe::<AnimationStatus>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
-
         self.animation_status_publisher =
             Some(animation_status_service.publisher_builder().create()?);
 
         // Setup heartbeat service
+        println!(
+            "[IPC] Creating service: {} (type: HeartbeatMessage)",
+            GRID_HEARTBEAT_SERVICE
+        );
         let heartbeat_service = node
             .service_builder(&ServiceName::new(GRID_HEARTBEAT_SERVICE)?)
             .publish_subscribe::<HeartbeatMessage>()
             .max_publishers(8)
             .max_subscribers(8)
             .open_or_create()?;
-
         self.heartbeat_publisher = Some(heartbeat_service.publisher_builder().create()?);
         self.is_running = true;
         Ok(())
@@ -395,10 +437,9 @@ impl GridIpcServer {
         // Process all collected focus events
         for (hwnd, is_focused) in events {
             // Convert u64 back to HWND and publish via IPC
-            let hwnd_ptr = hwnd as HWND;
             let event_type = if is_focused { "FOCUSED" } else { "DEFOCUSED" };
 
-            if let Err(e) = self.publish_focus_event_from_library(hwnd_ptr, is_focused) {
+            if let Err(e) = self.publish_focus_event_from_library(hwnd, is_focused) {
                 error!("❌ Failed to publish focus event via IPC: {:?}", e);
             }
 
@@ -419,16 +460,25 @@ impl GridIpcServer {
         };
         let event_count = events.len();
         if event_count > 0 {
-            info!("[process_window_events] Processing {} window events...", event_count);
+            info!(
+                "[process_window_events] Processing {} window events...",
+                event_count
+            );
         }
         for event in events {
             info!("[process_window_events] Publishing event: {:?}", event);
             if let Err(e) = self.publish_event(event) {
-                error!("❌ [process_window_events] Failed to publish event: {:?}", e);
+                error!(
+                    "❌ [process_window_events] Failed to publish event: {:?}",
+                    e
+                );
             }
         }
         if event_count > 0 {
-            info!("[process_window_events] Finished processing {} window events.", event_count);
+            info!(
+                "[process_window_events] Finished processing {} window events.",
+                event_count
+            );
         }
         Ok(())
     }
@@ -470,7 +520,7 @@ impl GridIpcServer {
     }
 
     /// Publish details for a specific window
-    pub fn publish_window_details(&mut self, hwnd: HWND) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn publish_window_details(&mut self, hwnd: u64) -> Result<(), Box<dyn std::error::Error>> {
         // Use try_lock to avoid blocking if the tracker is locked elsewhere.
         if let Ok(tracker) = self.tracker.try_lock() {
             if let Some(window_info) = tracker.windows.get(&hwnd) {
@@ -546,19 +596,22 @@ impl GridIpcServer {
         Ok(())
     }
     /// Publish focus event for window focus tracking (NEW: for e_midi integration)
-    pub fn publish_focus_event(&mut self, hwnd: HWND, event_type: u8) {
+    pub fn publish_focus_event(&mut self, hwnd: u64, event_type: u8) {
         // Get window information for the focus event
         let process_id = unsafe {
             let mut process_id: u32 = 0;
-            winapi::um::winuser::GetWindowThreadProcessId(hwnd, &mut process_id);
+            winapi::um::winuser::GetWindowThreadProcessId(hwnd as HWND, &mut process_id);
             process_id
         };
 
         // Get window title for hashing
         let window_title = unsafe {
             let mut buffer: [u16; 256] = [0; 256];
-            let len =
-                winapi::um::winuser::GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
+            let len = winapi::um::winuser::GetWindowTextW(
+                hwnd as HWND,
+                buffer.as_mut_ptr(),
+                buffer.len() as i32,
+            );
             if len > 0 {
                 String::from_utf16_lossy(&buffer[..len as usize])
             } else {
@@ -574,7 +627,7 @@ impl GridIpcServer {
             // Create focus event
             let focus_event = WindowFocusEvent {
                 event_type,
-                hwnd: hwnd as u64,
+                hwnd,
                 process_id,
                 timestamp: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -613,28 +666,27 @@ impl GridIpcServer {
     /// Publish focus event for window focus tracking (compatible with library-based events)
     pub fn publish_focus_event_from_library(
         &mut self,
-        hwnd: HWND,
+        hwnd: u64,
         is_focused: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Get window information for the focus event
         let process_id = unsafe {
             let mut process_id: u32 = 0;
-            winapi::um::winuser::GetWindowThreadProcessId(hwnd, &mut process_id);
+            winapi::um::winuser::GetWindowThreadProcessId(hwnd as HWND, &mut process_id);
             process_id
         };
-
-        // Get window title for hashing
         let window_title = unsafe {
             let mut buffer: [u16; 256] = [0; 256];
-            let len =
-                winapi::um::winuser::GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
+            let len = winapi::um::winuser::GetWindowTextW(
+                hwnd as HWND,
+                buffer.as_mut_ptr(),
+                buffer.len() as i32,
+            );
             if len > 0 {
                 String::from_utf16_lossy(&buffer[..len as usize])
             } else {
                 "(No Title)".to_string()
             }
         };
-
         // Calculate hashes before borrowing publisher
         let app_name_hash = self.hash_string(&format!("Process_{}", process_id));
         let window_title_hash = self.hash_string(&window_title);
@@ -642,7 +694,7 @@ impl GridIpcServer {
         if let Some(ref mut publisher) = self.focus_publisher {
             let focus_event = WindowFocusEvent {
                 event_type: if is_focused { 0 } else { 1 }, // 0=FOCUSED, 1=DEFOCUSED
-                hwnd: hwnd as u64,
+                hwnd,
                 process_id,
                 timestamp: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -688,10 +740,14 @@ impl GridIpcServer {
     /// Create window details without holding the tracker lock to avoid deadlocks
     fn create_window_details_safe(
         &self,
-        hwnd: HWND,
+        hwnd: u64,
         window_info: &crate::WindowInfo,
     ) -> WindowDetails {
-        let rect = &window_info.rect;
+        // Use WindowInfo rect fields directly
+        let left = window_info.rect.left;
+        let top = window_info.rect.top;
+        let right = window_info.rect.right;
+        let bottom = window_info.rect.bottom;
 
         // Get screen dimensions for proper grid calculation
         let screen_width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
@@ -700,33 +756,29 @@ impl GridIpcServer {
         let cell_width = screen_width / self.config.cols as i32;
         let cell_height = screen_height / self.config.rows as i32;
 
-        let virtual_row = if cell_height > 0 && rect.top >= 0 {
-            ((rect.top / cell_height)
-                .max(0)
-                .min(self.config.rows as i32 - 1)) as u32
+        let virtual_row = if cell_height > 0 && top >= 0 {
+            ((top / cell_height).max(0).min(self.config.rows as i32 - 1)) as u32
         } else {
             0
         };
 
-        let virtual_col = if cell_width > 0 && rect.left >= 0 {
-            ((rect.left / cell_width)
-                .max(0)
-                .min(self.config.cols as i32 - 1)) as u32
+        let virtual_col = if cell_width > 0 && left >= 0 {
+            ((left / cell_width).max(0).min(self.config.cols as i32 - 1)) as u32
         } else {
             0
         };
 
         // Calculate end positions based on window size
-        let virtual_row_end = if cell_height > 0 && rect.bottom > rect.top {
-            ((rect.bottom / cell_height)
+        let virtual_row_end = if cell_height > 0 && bottom > top {
+            ((bottom / cell_height)
                 .max(virtual_row as i32)
                 .min(self.config.rows as i32)) as u32
         } else {
             virtual_row + 1
         };
 
-        let virtual_col_end = if cell_width > 0 && rect.right > rect.left {
-            ((rect.right / cell_width)
+        let virtual_col_end = if cell_width > 0 && right > left {
+            ((right / cell_width)
                 .max(virtual_col as i32)
                 .min(self.config.cols as i32)) as u32
         } else {
@@ -734,11 +786,11 @@ impl GridIpcServer {
         };
 
         WindowDetails {
-            hwnd: hwnd as u64,
-            x: rect.left,
-            y: rect.top,
-            width: rect.right - rect.left,
-            height: rect.bottom - rect.top,
+            hwnd,
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
 
             // Virtual grid positions - proper calculation based on screen dimensions
             virtual_row_start: virtual_row,
@@ -877,7 +929,7 @@ impl GridIpcServer {
 
         if let Ok(mut tracker) = self.tracker.lock() {
             tracker
-                .move_window_to_cell(hwnd_ptr, target_row, target_col)
+                .move_window_to_cell(hwnd, target_row, target_col)
                 .map_err(|e| e.into())
         } else {
             Err("Failed to acquire tracker lock".into())
@@ -893,11 +945,7 @@ impl GridIpcServer {
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(mut tracker) = self.tracker.lock() {
             tracker
-                .assign_window_to_virtual_cell(
-                    hwnd as winapi::shared::windef::HWND,
-                    target_row,
-                    target_col,
-                )
+                .assign_window_to_virtual_cell(hwnd, target_row, target_col)
                 .map_err(|e| e.into())
         } else {
             Err("Failed to acquire tracker lock".into())
@@ -914,12 +962,7 @@ impl GridIpcServer {
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(mut tracker) = self.tracker.lock() {
             tracker
-                .assign_window_to_monitor_cell(
-                    hwnd as winapi::shared::windef::HWND,
-                    target_row,
-                    target_col,
-                    monitor_id,
-                )
+                .assign_window_to_monitor_cell(hwnd, target_row, target_col, monitor_id)
                 .map_err(|e| e.into())
         } else {
             Err("Failed to acquire tracker lock".into())
@@ -980,12 +1023,7 @@ impl GridIpcServer {
         if let Ok(mut tracker) = self.tracker.lock() {
             let duration = std::time::Duration::from_millis(duration_ms as u64);
             tracker
-                .start_window_animation(
-                    hwnd as winapi::shared::windef::HWND,
-                    target_rect,
-                    duration,
-                    easing_type,
-                )
+                .start_window_animation(hwnd, target_rect, duration, easing_type)
                 .map_err(|e| e.into())
         } else {
             Err("Failed to acquire tracker lock".into())
@@ -995,9 +1033,7 @@ impl GridIpcServer {
     /// Stop animation for a specific window
     pub fn stop_window_animation(&mut self, hwnd: u64) -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(tracker) = self.tracker.lock() {
-            tracker
-                .active_animations
-                .remove(&(hwnd as winapi::shared::windef::HWND));
+            tracker.active_animations.remove(&hwnd);
             Ok(())
         } else {
             Err("Failed to acquire tracker lock".into())
@@ -1008,11 +1044,11 @@ impl GridIpcServer {
     pub fn get_animation_status(
         &self,
         hwnd: u64,
-    ) -> Result<Option<crate::WindowAnimation>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<crate::window::animation::WindowAnimation>, Box<dyn std::error::Error>> {
         if let Ok(tracker) = self.tracker.lock() {
             Ok(tracker
                 .active_animations
-                .get(&(hwnd as winapi::shared::windef::HWND))
+                .get(&hwnd)
                 .map(|anim_ref| anim_ref.clone()))
         } else {
             Err("Failed to acquire tracker lock".into())
@@ -1252,7 +1288,15 @@ impl GridIpcServer {
         let (event_sender, event_receiver) = mpsc::channel::<crate::ipc_protocol::GridEvent>();
         self.event_receiver = Some(event_receiver);
         // --- NEW: Setup WindowEventSystem for move/resize ---
-        let mut wes = crate::WindowEventSystem::new(self.windows.clone());
+        // Convert Arc<DashMap<u64, WindowInfo>> to Arc<DashMap<*mut winapi::shared::windef::HWND__, WindowInfo>>
+        let hwnd_map: Arc<DashMap<*mut winapi::shared::windef::HWND__, crate::WindowInfo>> =
+            Arc::new(DashMap::new());
+        for entry in self.windows.iter() {
+            let (hwnd_u64, win_info) = entry.pair();
+            let hwnd_ptr = *hwnd_u64 as *mut winapi::shared::windef::HWND__;
+            hwnd_map.insert(hwnd_ptr, win_info.clone());
+        }
+        let mut wes = crate::WindowEventSystem::new(hwnd_map.clone());
         let event_sender_for_wes = event_sender.clone();
         // Only send to the channel; do not attempt to clone or use the publisher here
         wes.set_event_callback(move |event: crate::ipc_protocol::GridEvent| {
@@ -1263,13 +1307,13 @@ impl GridIpcServer {
         let event_sender_for_config = event_sender.clone();
         let config = WindowEventConfig {
             tracker: self.tracker.clone(),
-            focus_callback: Some(Box::new(move |hwnd: HWND, is_focused: bool| {
+            focus_callback: Some(Box::new(move |hwnd: u64, is_focused: bool| {
                 info!(
                     "🎯 Focus event: HWND {} - {}",
-                    hwnd as u64,
+                    hwnd,
                     if is_focused { "FOCUSED" } else { "DEFOCUSED" }
                 );
-                let _ = focus_sender.send((hwnd as u64, is_focused));
+                let _ = focus_sender.send((hwnd, is_focused));
             })),
             heartbeat_reset: Some(Box::new(|| {
                 // This callback will be called when window events occur
@@ -1293,7 +1337,7 @@ impl GridIpcServer {
                 as Box<dyn std::error::Error>
         })?;
         // Initialize heartbeat service with 30-second timeout
-        self.heartbeat_service = Some(HeartbeatService::new(Duration::from_secs(30)));
+        self.heartbeat_service = Some(HeartbeatService::new(Duration::from_secs(3)));
         self.window_event_system = Some(wes);
         Ok(())
     }
@@ -1340,7 +1384,6 @@ impl GridIpcServer {
             while let Some(sample) = subscriber.receive()? {
                 let anim_cmd = *sample;
                 println!("🎬 Received animation command: {:?}", anim_cmd);
-
                 match anim_cmd.command_type {
                     0 => {
                         // start_animation
@@ -1350,7 +1393,6 @@ impl GridIpcServer {
                             right: anim_cmd.target_x + anim_cmd.target_width as i32,
                             bottom: anim_cmd.target_y + anim_cmd.target_height as i32,
                         };
-
                         let easing_type = match anim_cmd.easing_type {
                             0 => crate::EasingType::Linear,
                             1 => crate::EasingType::EaseIn,
@@ -1361,12 +1403,11 @@ impl GridIpcServer {
                             6 => crate::EasingType::Back,
                             _ => crate::EasingType::Linear,
                         };
-
                         if let Ok(mut tracker) = self.tracker.lock() {
                             let duration =
                                 std::time::Duration::from_millis(anim_cmd.duration_ms as u64);
                             if let Err(e) = tracker.start_window_animation(
-                                anim_cmd.hwnd as winapi::shared::windef::HWND,
+                                anim_cmd.hwnd,
                                 target_rect,
                                 duration,
                                 easing_type,
@@ -1385,9 +1426,7 @@ impl GridIpcServer {
                                 tracker.active_animations.clear();
                                 println!("🛑 Stopped all animations");
                             } else {
-                                tracker
-                                    .active_animations
-                                    .remove(&(anim_cmd.hwnd as winapi::shared::windef::HWND));
+                                tracker.active_animations.remove(&anim_cmd.hwnd);
                                 println!("🛑 Stopped animation for window {}", anim_cmd.hwnd);
                             }
                         }

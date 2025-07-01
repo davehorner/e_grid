@@ -1,5 +1,5 @@
 //! Integration test: server-client monitor list exchange
-use e_grid::ipc_protocol::{IpcCommand, IpcCommandType, IpcResponseType};
+use e_grid::ipc_protocol::{GridCommand, IpcCommand, IpcCommandType, IpcResponseType};
 use e_grid::ipc_server::GridIpcServer;
 use e_grid::WindowTracker;
 use iceoryx2::port::publisher::Publisher;
@@ -23,10 +23,10 @@ fn setup_server_and_client() -> (
 ) {
     let tracker = Arc::new(Mutex::new(WindowTracker::new()));
     let windows = {
-         let tracker_guard = tracker.lock().unwrap();
+        let tracker_guard = tracker.lock().unwrap();
         tracker_guard.windows.clone()
     };
-    let mut server = GridIpcServer::new(tracker.clone(),Arc::new(windows)).unwrap();
+    let mut server = GridIpcServer::new(tracker.clone(), Arc::new(windows)).unwrap();
     server.setup_services().unwrap();
     let node = NodeBuilder::new().create::<Service>().unwrap();
     let command_service = node

@@ -4,11 +4,11 @@
 use crate::grid::animation::EasingType;
 use std::fmt;
 use std::time::{Duration, Instant};
-use winapi::shared::windef::{HWND, RECT};
+use winapi::shared::windef::RECT;
 
 #[derive(Clone)]
 pub struct WindowAnimation {
-    pub hwnd: HWND,
+    pub hwnd: u64,
     pub start_rect: RECT,
     pub target_rect: RECT,
     pub start_time: Instant,
@@ -51,7 +51,7 @@ impl fmt::Debug for WindowAnimation {
 
 impl WindowAnimation {
     pub fn new(
-        hwnd: HWND,
+        hwnd: u64,
         start_rect: RECT,
         target_rect: RECT,
         duration: Duration,

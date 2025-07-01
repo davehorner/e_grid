@@ -9,8 +9,8 @@ use winapi::shared::windef::{HWND, RECT};
 pub struct MonitorGrid {
     pub monitor_id: usize,
     pub config: GridConfig,
-    pub windows: HashMap<HWND, WindowInfo>,
-    pub cells: Vec<Vec<Option<HWND>>>,
+    pub windows: HashMap<u64, WindowInfo>,
+    pub cells: Vec<Vec<Option<u64>>>,
     pub monitor_bounds: (i32, i32, i32, i32), // (left, top, right, bottom)
 }
 
@@ -74,7 +74,7 @@ impl MonitorGrid {
     }
 
     /// Update monitor grid from window information
-    pub fn update_from_windows(&mut self, windows: &dashmap::DashMap<HWND, WindowInfo>) {
+    pub fn update_from_windows(&mut self, windows: &dashmap::DashMap<u64, WindowInfo>) {
         // Clear current grid state
         self.clear();
 
@@ -187,27 +187,22 @@ impl GridTrait for MonitorGrid {
         Ok(self.cells[row][col].is_some())
     }
 
-    fn get_cell_windows(&self, row: usize, col: usize) -> GridResult<Vec<HWND>> {
+    fn get_cell_windows(&self, row: usize, col: usize) -> GridResult<Vec<u64>> {
         self.validate_coordinates(row, col)?;
         Ok(self.cells[row][col].into_iter().collect())
     }
 
-    fn assign_window(&mut self, hwnd: HWND, row: usize, col: usize) -> GridResult<()> {
+    fn assign_window(&mut self, hwnd: u64, row: usize, col: usize) -> GridResult<()> {
         self.validate_coordinates(row, col)?;
-
-        // Clear previous position if window exists
         if self.windows.contains_key(&hwnd) {
             self.remove_window(hwnd)?;
         }
-
-        // Update cell
         self.cells[row][col] = Some(hwnd);
-
         Ok(())
     }
 
-    fn remove_window(&mut self, hwnd: HWND) -> GridResult<()> {
-        // Remove from cells
+    fn remove_window(&mut self, hwnd: u64) -> GridResult<()> {
+        self.windows.remove(&hwnd);
         for row in &mut self.cells {
             for cell in row {
                 if *cell == Some(hwnd) {
@@ -215,14 +210,10 @@ impl GridTrait for MonitorGrid {
                 }
             }
         }
-
-        // Remove from windows
-        self.windows.remove(&hwnd);
-
         Ok(())
     }
 
-    fn get_all_windows(&self) -> Vec<HWND> {
+    fn get_all_windows(&self) -> Vec<u64> {
         self.windows.keys().copied().collect()
     }
 }

@@ -194,9 +194,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[e_midi_demo] Registered move/resize stop callback");
 
     // Set up window event callback for debug
-    client.set_window_event_callback(|event| {
-        println!("[CALLBACK] WindowEvent: type={} hwnd={}", event.event_type, event.hwnd);
-    }).unwrap();
+    client
+        .set_window_event_callback(|event| {
+            println!(
+                "[CALLBACK] WindowEvent: type={} hwnd={}",
+                event.event_type, event.hwnd
+            );
+        })
+        .unwrap();
     println!("[e_midi_demo] Registered window event callback");
 
     // Set up focus callback (lock-free)
