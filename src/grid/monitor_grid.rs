@@ -94,22 +94,46 @@ impl MonitorGrid {
 
     pub fn update_grid(&mut self, windows: &DashMap<HWND, WindowInfo>) {
         // Reset grid to empty
+        println!("[DEBUG] Resetting grid to empty for monitor_id {}", self.monitor_id);
         for row in 0..self.config.rows {
             for col in 0..self.config.cols {
-                self.grid[row][col] = CellState::Empty;
+            self.grid[row][col] = CellState::Empty;
             }
         }
 
         // Place windows on the grid
+        println!("[DEBUG] Placing windows on the grid for monitor_id {}", self.monitor_id);
         for entry in windows {
             let (hwnd, window_info) = entry.pair();
-            let grid_cells = self.window_to_grid_cells(&window_info.rect);
-            for (row, col) in grid_cells {
-                if row < self.config.rows && col < self.config.cols {
-                    self.grid[row][col] = CellState::Occupied(*hwnd as u64);
-                }
+            println!(
+            "[DEBUG] Processing window HWND={:?}, rect=({},{},{},{})",
+            hwnd,
+            window_info.window_rect.left,
+            window_info.window_rect.top,
+            window_info.window_rect.right,
+            window_info.window_rect.bottom
+            );
+            let grid_cells = self.window_to_grid_cells(&window_info.window_rect);
+            println!(
+            "[DEBUG] Window HWND={:?} covers grid cells: {:?}",
+            hwnd, grid_cells
+            );
+            for (row, col) in grid_cells.iter().cloned() {
+            if row < self.config.rows && col < self.config.cols {
+                println!(
+                "[DEBUG] Marking cell ({},{}) as Occupied by HWND={:?}",
+                row, col, hwnd
+                );
+                self.grid[row][col] = CellState::Occupied(*hwnd as u64);
+            } else {
+                println!(
+                "[DEBUG] Skipping out-of-bounds cell ({},{}) for HWND={:?}",
+                row, col, hwnd
+                );
+            }
             }
         }
+        println!("[DEBUG] Grid update complete for monitor_id {}", self.monitor_id);
     }
 
     pub fn print_grid(&self) {

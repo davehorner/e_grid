@@ -285,12 +285,12 @@ fn main() {
 
         // Create animation
         let animation = WindowAnimation::new(
-                    *hwnd as u64,
-                    *original_rect,
-                    grid_rect,
-                    Duration::from_millis(duration_ms),
-                    easing_type,
-                );
+            *hwnd as u64,
+            *original_rect,
+            grid_rect,
+            Duration::from_millis(duration_ms),
+            easing_type,
+        );
 
         animations.push(animation);
 
@@ -366,12 +366,12 @@ fn main() {
         }
 
         let return_animation = WindowAnimation::new(
-                    *hwnd as u64,
-                    current_rect,
-                    *original_rect,
-                    Duration::from_millis(duration_ms),
-                    easing_type,
-                );
+            *hwnd as u64,
+            current_rect,
+            *original_rect,
+            Duration::from_millis(duration_ms),
+            easing_type,
+        );
 
         // Animate back to original position
         let animation_start = std::time::Instant::now();

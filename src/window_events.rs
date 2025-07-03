@@ -75,7 +75,11 @@ impl WindowEventCallback for DebugEventCallback {
             println!("🔔 WINDOW EVENT: CREATED (Manageable)");
             let title_str = {
                 // Convert &[u16; 256] to String, trimming at null terminator
-                let nul_pos = window_info.title.iter().position(|&c| c == 0).unwrap_or(window_info.title.len());
+                let nul_pos = window_info
+                    .title
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(window_info.title.len());
                 String::from_utf16_lossy(&window_info.title[..nul_pos])
             };
             println!(
@@ -101,7 +105,11 @@ impl WindowEventCallback for DebugEventCallback {
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: MOVED/RESIZED (Manageable)");
             let title_str = {
-                let nul_pos = window_info.title.iter().position(|&c| c == 0).unwrap_or(window_info.title.len());
+                let nul_pos = window_info
+                    .title
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(window_info.title.len());
                 String::from_utf16_lossy(&window_info.title[..nul_pos])
             };
             println!(
@@ -123,7 +131,11 @@ impl WindowEventCallback for DebugEventCallback {
             println!("🔔 WINDOW EVENT: ACTIVATED (Manageable)");
             let title_str = {
                 // Convert &[u16; 256] to String, trimming at null terminator
-                let nul_pos = window_info.title.iter().position(|&c| c == 0).unwrap_or(window_info.title.len());
+                let nul_pos = window_info
+                    .title
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(window_info.title.len());
                 String::from_utf16_lossy(&window_info.title[..nul_pos])
             };
             println!(
@@ -149,7 +161,11 @@ impl WindowEventCallback for DebugEventCallback {
         println!("🔔 WINDOW EVENT: RESTORED");
         let title_str = {
             // Convert &[u16; 256] to String, trimming at null terminator
-            let nul_pos = window_info.title.iter().position(|&c| c == 0).unwrap_or(window_info.title.len());
+            let nul_pos = window_info
+                .title
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(window_info.title.len());
             String::from_utf16_lossy(&window_info.title[..nul_pos])
         };
         println!(
@@ -256,13 +272,17 @@ pub unsafe extern "system" fn win_event_proc(
             EVENT_OBJECT_LOCATIONCHANGE => {
                 // println!("🔍 LOCATIONCHANGE event for HWND {:?}", hwnd);
                 if WindowTracker::is_manageable_window(hwnd as u64) {
-                    // println!("   ...is manageable!");
-                    // Ensure window is tracked before updating
-                    if !tracker.windows.contains_key(&(hwnd as u64)) {
-                        println!("   [DEBUG] Window not in tracker.windows, calling add_window for HWND {:?}", hwnd);
-                        tracker.add_window(hwnd as u64);
-                    }
-                    tracker.update_window(hwnd as u64);
+                    // Quick validation: check if we can get a valid rect before processing
+                    if let Some(rect) = WindowTracker::get_window_rect(hwnd as u64) {
+                        // Ensure rect is reasonable (not zero-sized or negative)
+                        if rect.right > rect.left && rect.bottom > rect.top {
+                            // println!("   ...is manageable!");
+                            // Ensure window is tracked before updating
+                            if !tracker.windows.contains_key(&(hwnd as u64)) {
+                                println!("   [DEBUG] Window not in tracker.windows, calling add_window for HWND {:?}", hwnd);
+                                tracker.add_window(hwnd as u64);
+                            }
+                            tracker.update_window(hwnd as u64);
                     // --- ADDED: Move/Resize tracking ---
                     if config.move_resize_event_queue.is_none() {
                         println!("   [DEBUG] move_resize_event_queue is None");
@@ -286,7 +306,7 @@ pub unsafe extern "system" fn win_event_proc(
                                 states.entry(hwnd_val).or_insert(crate::MoveResizeState {
                                     last_event: std::time::Instant::now(),
                                     in_progress: false,
-                                    last_rect: window_info.rect.0,
+                                    last_rect: window_info.window_rect.0,
                                     last_type: None, // Track last event type
                                 });
                             entry.last_event = std::time::Instant::now();
@@ -297,12 +317,12 @@ pub unsafe extern "system" fn win_event_proc(
                             //     prev_rect.left, prev_rect.top, prev_rect.right, prev_rect.bottom,
                             //     window_info.rect.left, window_info.rect.top, window_info.rect.right, window_info.rect.bottom
                             // );
-                            let moved = prev_rect.left != window_info.rect.left
-                                || prev_rect.top != window_info.rect.top;
+                            let moved = prev_rect.left != window_info.window_rect.left
+                                || prev_rect.top != window_info.window_rect.top;
                             let resized = (prev_rect.right - prev_rect.left
-                                != window_info.rect.right - window_info.rect.left)
+                                != window_info.window_rect.right - window_info.window_rect.left)
                                 || (prev_rect.bottom - prev_rect.top
-                                    != window_info.rect.bottom - window_info.rect.top);
+                                    != window_info.window_rect.bottom - window_info.window_rect.top);
                             use crate::MoveResizeEventType::*;
                             if !entry.in_progress {
                                 // Only emit a start event if not already in progress
@@ -332,8 +352,14 @@ pub unsafe extern "system" fn win_event_proc(
                                     entry.last_type = Some(BothStart);
                                 }
                             }
-                            entry.last_rect = window_info.rect.0;
+                            entry.last_rect = window_info.window_rect.0;
                         }
+                    }
+                        } else {
+                            println!("   [DEBUG] Skipping HWND {:?} - invalid rect dimensions", hwnd);
+                        }
+                    } else {
+                        println!("   [DEBUG] Skipping HWND {:?} - could not get window rect", hwnd);
                     }
                 } else {
                     // println!("   ...NOT manageable!");

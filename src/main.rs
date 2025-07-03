@@ -3,10 +3,11 @@ use crossterm::{
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{self, Clear, ClearType},
 };
-use e_grid::{ipc_server, window_events, GridClient, WindowTracker};
+use e_grid::{ipc_server, window_events, GridClient};
+use e_grid::window_tracker::WindowTracker;
 use iceoryx2::prelude::*;
 use iceoryx2::service::ipc::Service;
-use std::io::{self, Write};
+use std::{io::{self, Write}, sync::atomic::AtomicBool};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -126,7 +127,8 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
     let mut tracker = WindowTracker::new();
     println!("📊 Initializing window tracking...");
     tracker.scan_existing_windows();
-    tracker.print_grid();
+    tracker.update_grid();
+    tracker.print_virtual_grid();
 
     let tracker = Arc::new(Mutex::new(tracker)); // Create and setup the IPC server
     let windows = {
@@ -205,6 +207,29 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
     let mut _loop_count = 0u32;
     let mut last_update = std::time::Instant::now(); // Use the reusable message loop from the library
                                                      // This automatically handles Windows message processing for WinEvent callbacks
+    let print_grid = Arc::new(AtomicBool::new(false));
+    let print_grid_for_thread = Arc::clone(&print_grid);
+    let rec = ipc_server.event_receiver.take();
+    // If there's a receiver, print something on event
+    if let Some(receiver) = rec {
+        thread::spawn(move || {
+            while let Ok(event) = receiver.recv() {
+                match &event {
+                    e_grid::ipc_protocol::GridEvent::WindowFocused { hwnd, title, process_id } => {
+                        println!("🎯 FOCUS: Window 0x{:X} '{}' (PID: {}) gained focus", hwnd, title, process_id);
+                    }
+                    e_grid::ipc_protocol::GridEvent::WindowDefocused { hwnd, title, process_id } => {
+                        println!("🎯 DEFOCUS: Window 0x{:X} '{}' (PID: {}) lost focus", hwnd, title, process_id);
+                    }
+                    _ => {
+                        println!("📥 Received event: {:?}", event);
+                    }
+                }
+                print_grid_for_thread.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+    }
+
     window_events::run_message_loop(|| {
         // Check for shutdown request from console control handler
         unsafe {
@@ -213,6 +238,13 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
                 return false; // Exit the loop
             }
         }
+
+        if print_grid.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Ok(tracker) = tracker.lock() {
+                tracker.print_all_grids();
+            }
+            print_grid.store(false, std::sync::atomic::Ordering::SeqCst);
+        }   
 
         // Poll move/resize events (required for move/resize start/stop detection)
         ipc_server.poll_move_resize_events();

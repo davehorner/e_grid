@@ -92,7 +92,7 @@ impl BasicGrid {
         self.windows.insert(hwnd, window_info.clone());
 
         // Calculate which cells this window occupies
-        let cells = self.window_to_cells(&window_info.rect);
+        let cells = self.window_to_cells(&window_info.window_rect);
 
         for (row, col) in cells {
             self.grid[row][col] = BasicCellState::Occupied(hwnd);

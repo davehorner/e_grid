@@ -34,7 +34,7 @@ use crate::grid::GridConfig;
 pub use crate::grid_client_config::GridClientConfig;
 pub use crate::performance_monitor::{EventType, OperationTimer, PerformanceMonitor};
 pub use crate::window::WindowInfo;
-pub use crate::window_tracker::WindowTracker;
+use crate::window_tracker::WindowTracker;
 pub use grid::animation::EasingType;
 
 // Import the heartbeat service module
@@ -47,7 +47,7 @@ pub use window_events::{cleanup_hooks, setup_window_events, WindowEventConfig};
 
 // Coverage threshold: percentage of cell area that must be covered by window
 // to consider the window as occupying that cell (0.0 to 1.0)
-pub const COVERAGE_THRESHOLD: f32 = 0.3; // 30% coverage required
+pub const COVERAGE_THRESHOLD: f32 = 0.01; // 30% coverage required
 pub const MAX_WINDOW_GRID_CELLS: usize = 64;
 // Animation and Tweening System
 // #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -305,7 +305,7 @@ impl MoveResizeTracker {
     ) {
         unsafe {
             if GetParent(hwnd).is_null()
-                && window_tracker::WindowTracker::is_manageable_window(hwnd as u64)
+                && WindowTracker::is_manageable_window(hwnd as u64)
             {
                 let hwnd_val = hwnd as isize;
                 let mut entry = states.entry(hwnd_val).or_insert(MoveResizeState {
@@ -446,6 +446,8 @@ pub struct WindowEventSystem {
         Arc<DashMap<usize, Arc<dyn Fn(HWND, &WindowInfo) + Send + Sync>>>,
     pub move_resize_stop_callbacks:
         Arc<DashMap<usize, Arc<dyn Fn(HWND, &WindowInfo) + Send + Sync>>>,
+    // New: Blacklist for problematic HWNDs that consistently fail rect retrieval
+    pub blacklisted_hwnds: Arc<DashMap<HWND, std::time::Instant>>,
 }
 
 impl WindowEventSystem {
@@ -503,6 +505,7 @@ impl WindowEventSystem {
             event_callback: None,
             move_resize_start_callbacks: Arc::new(DashMap::new()),
             move_resize_stop_callbacks: Arc::new(DashMap::new()),
+            blacklisted_hwnds: Arc::new(DashMap::new()),
         }
     }
 
@@ -539,16 +542,45 @@ impl WindowEventSystem {
 
     // Call this periodically from the main thread/event loop
     pub fn poll_move_resize_events(&mut self) {
+        // Clean up old blacklisted HWNDs (older than 5 minutes)
+        let now = Instant::now();
+        let cleanup_threshold = Duration::from_secs(300); // 5 minutes
+        let to_remove: Vec<HWND> = self.blacklisted_hwnds
+            .iter()
+            .filter_map(|entry| {
+                if now.duration_since(*entry.value()) > cleanup_threshold {
+                    Some(*entry.key())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        
+        for hwnd in to_remove {
+            self.blacklisted_hwnds.remove(&hwnd);
+            println!("[WindowEventSystem] Removed HWND={:?} from blacklist after cleanup", hwnd);
+        }
+
         while let Some((hwnd_val, event_type)) = self.event_queue.pop() {
             let hwnd = hwnd_val as HWND;
+            
+            // Check blacklist first, before any processing
+            if self.blacklisted_hwnds.contains_key(&hwnd) {
+                println!(
+                    "[WindowEventSystem] Skipping blacklisted HWND={:?} for event {:?}",
+                    hwnd, event_type
+                );
+                continue;
+            }
+            
             let window_exists = self.windows.get(&hwnd).is_some();
             if !window_exists {
                 println!("[WindowEventSystem] Adding tracking for HWND={:?}", hwnd);
                 // Lock-free add_window logic:
                 if let Some(rect) = crate::WindowTracker::get_window_rect(hwnd as u64) {
                     let title = crate::WindowTracker::get_window_title(hwnd as u64);
-                    let grid_cells = vec![]; // Optionally, call window_to_grid_cells if you have config
-                    let monitor_cells: std::collections::HashMap<usize, Vec<(usize, usize)>> = std::collections::HashMap::new();
+                    let monitor_cells: std::collections::HashMap<usize, Vec<(usize, usize)>> =
+                        std::collections::HashMap::new();
                     let process_id =
                         crate::WindowTracker::get_window_process_id(hwnd as u64).unwrap_or(0);
                     let class_name = crate::WindowTracker::get_window_class_name(hwnd as u64);
@@ -556,6 +588,7 @@ impl WindowEventSystem {
                     let is_minimized = crate::WindowTracker::is_window_minimized(hwnd as u64);
                     let window_info = crate::WindowInfo {
                         hwnd: hwnd as u64,
+                        window_rect: window::info::RectWrapper(rect),
                         title: {
                             let mut title_buf = [0u16; 256];
                             let utf16: Vec<u16> = title.encode_utf16().collect();
@@ -564,14 +597,15 @@ impl WindowEventSystem {
                             title_buf
                         },
                         title_len: title.len() as u32,
-                        grid_cells: {
-                            let mut arr = [(0usize, 0usize); MAX_WINDOW_GRID_CELLS];
-                            for (i, v) in grid_cells.iter().take(MAX_WINDOW_GRID_CELLS).enumerate() {
-                                arr[i] = *v;
-                            }
-                            arr
-                        },
-                        grid_cells_len: grid_cells.len() as u32,
+                        // grid_cells: {
+                        //     let mut arr = [(0usize, 0usize); MAX_WINDOW_GRID_CELLS];
+                        //     for (i, v) in grid_cells.iter().take(MAX_WINDOW_GRID_CELLS).enumerate()
+                        //     {
+                        //         arr[i] = *v;
+                        //     }
+                        //     arr
+                        // },
+                        // grid_cells_len: grid_cells.len() as u32,
                         monitor_ids: {
                             let mut arr = [0usize; 8];
                             let ids: Vec<usize> = monitor_cells.keys().cloned().collect();
@@ -580,24 +614,25 @@ impl WindowEventSystem {
                             }
                             arr
                         },
-                        monitor_cells: {
-                            let mut arr = [[(0usize, 0usize); 8]; 8];
-                            for (i, cells) in monitor_cells.iter().enumerate().take(8) {
-                                for (j, cell) in cells.1.iter().take(8).enumerate() {
-                                    arr[i][j] = *cell;
-                                }
-                            }
-                            arr
-                        },
-                        monitor_cells_lens: {
-                            let mut arr = [0u32; 8];
-                            for (i, v) in monitor_cells.values().enumerate().take(8) {
-                                arr[i] = v.len() as u32;
-                            }
-                            arr
-                        },
-                        monitor_cells_len: monitor_cells.len() as u32,
-                        rect: crate::window::info::RectWrapper::from_rect(rect),
+                        // monitor_cells: {
+                        //     let mut arr = [[(0usize, 0usize); 8]; 8];
+                        //     for (i, cells) in monitor_cells.iter().enumerate().take(8) {
+                        //         for (j, cell) in cells.1.iter().take(8).enumerate() {
+                        //             arr[i][j] = *cell;
+                        //         }
+                        //     }
+                        //     arr
+                        // },
+                        // monitor_cells_lens: {
+                        //     let mut arr = [0u32; 8];
+                        //     for (i, v) in monitor_cells.values().enumerate().take(8) {
+                        //         arr[i] = v.len() as u32;
+                        //     }
+                        //     arr
+                        // // },
+                        // monitor_cells_len: monitor_cells.len() as u32,
+                        // window_rect: crate::window::info::RectWrapper::from_rect(rect),
+                        // grid_rect: crate::window::info::UsizeRect::from_bounds(0, 0, 8, 12), // Provide a default or calculated value
                         is_visible,
                         is_minimized,
                         process_id,
@@ -614,9 +649,11 @@ impl WindowEventSystem {
                     self.windows.insert(hwnd, window_info);
                 } else {
                     println!(
-                        "[WindowEventSystem] Could not get rect for HWND={:?}, skipping add.",
+                        "[WindowEventSystem] Could not get rect for HWND={:?}, adding to blacklist.",
                         hwnd
                     );
+                    // Add to blacklist to prevent future attempts
+                    self.blacklisted_hwnds.insert(hwnd, Instant::now());
                     continue;
                 }
             }
@@ -685,17 +722,22 @@ impl WindowEventSystem {
                     use crate::ipc_protocol::GridEvent;
                     // Convert [u16; 256] title buffer to String
                     let title = String::from_utf16_lossy(
-                        &window_info.title[..window_info.title_len as usize]
+                        &window_info.title[..window_info.title_len as usize],
                     );
-                    let (row, col) = window_info.grid_cells.get(0).cloned().unwrap_or((0, 0));
-                    let grid_top_left_row = row;
-                    let grid_top_left_col = col;
-                    let grid_bottom_right_row = row;
-                    let grid_bottom_right_col = col;
-                    let real_x = window_info.rect.left;
-                    let real_y = window_info.rect.top;
-                    let real_width = window_info.rect.right - window_info.rect.left;
-                    let real_height = window_info.rect.bottom - window_info.rect.top;
+                    let grid_rect = crate::window::info::rect_to_grid_rect(
+                        &window_info.window_rect,
+                        &crate::GridConfig::default(),
+                    );
+                    let row = grid_rect.left;
+                    let col = grid_rect.top;
+                    let grid_top_left_row = row as usize;
+                    let grid_top_left_col = col as usize;
+                    let grid_bottom_right_row = grid_rect.bottom as usize;
+                    let grid_bottom_right_col = grid_rect.right as usize;
+                    let real_x = window_info.window_rect.left;
+                    let real_y = window_info.window_rect.top;
+                    let real_width = window_info.window_rect.right - window_info.window_rect.left;
+                    let real_height = window_info.window_rect.bottom - window_info.window_rect.top;
                     let monitor_id = 0; // TODO: fill with real monitor id if available
                     let event = match event_type {
                         MoveStart => {
@@ -797,5 +839,42 @@ impl WindowEventSystem {
                 println!("DAVE [WindowEventSystem] Event for unknown HWND={:?}", hwnd);
             };
         }
+    }
+
+    /// Check if an HWND can be safely processed (not blacklisted and has valid rect)
+    pub fn is_hwnd_processable(&self, hwnd: HWND) -> bool {
+        // Check if blacklisted
+        if self.blacklisted_hwnds.contains_key(&hwnd) {
+            return false;
+        }
+        
+        // Check if we can get a valid rect
+        crate::WindowTracker::get_window_rect(hwnd as u64).is_some()
+    }
+
+    /// Manually add an HWND to the blacklist
+    pub fn blacklist_hwnd(&self, hwnd: HWND, reason: &str) {
+        println!("[WindowEventSystem] Blacklisting HWND={:?}, reason: {}", hwnd, reason);
+        self.blacklisted_hwnds.insert(hwnd, Instant::now());
+    }
+
+    /// Remove an HWND from the blacklist
+    pub fn unblacklist_hwnd(&self, hwnd: HWND) -> bool {
+        if self.blacklisted_hwnds.remove(&hwnd).is_some() {
+            println!("[WindowEventSystem] Removed HWND={:?} from blacklist", hwnd);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the number of blacklisted HWNDs
+    pub fn blacklist_count(&self) -> usize {
+        self.blacklisted_hwnds.len()
+    }
+
+    /// Check if a specific HWND is blacklisted
+    pub fn is_blacklisted(&self, hwnd: HWND) -> bool {
+        self.blacklisted_hwnds.contains_key(&hwnd)
     }
 }

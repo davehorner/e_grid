@@ -20,6 +20,7 @@ pub struct GridIpcManager {
     command_subscriber: Option<Subscriber<ipc::Service, IpcCommand, ()>>,
     command_publisher: Option<Publisher<ipc::Service, IpcCommand, ()>>,
     response_publisher: Option<Publisher<ipc::Service, IpcResponse, ()>>,
+    response_subscriber: Option<Subscriber<ipc::Service, IpcResponse, ()>>,
     window_details_publisher: Option<Publisher<ipc::Service, WindowDetails, ()>>,
     layout_publisher: Option<Publisher<ipc::Service, GridLayoutMessage, ()>>,
     layout_subscriber: Option<Subscriber<ipc::Service, GridLayoutMessage, ()>>,
@@ -29,7 +30,8 @@ pub struct GridIpcManager {
     animation_subscriber: Option<Subscriber<ipc::Service, AnimationCommand, ()>>,
     animation_status_publisher: Option<Publisher<ipc::Service, AnimationStatus, ()>>,
     heartbeat_publisher: Option<Publisher<ipc::Service, HeartbeatMessage, ()>>,
-    window_list_subscriber: Option<Subscriber<ipc::Service, crate::ipc_protocol::WindowListMessage, ()>>,
+    window_list_subscriber:
+        Option<Subscriber<ipc::Service, crate::ipc_protocol::WindowListMessage, ()>>,
 
     is_running: bool,
 }
@@ -68,7 +70,9 @@ impl GridIpcManager {
             node: None,
             event_publisher: None,
             command_subscriber: None,
+            command_publisher: None,
             response_publisher: None,
+            response_subscriber: None,
             window_details_publisher: None, // Initialize window details publisher
             layout_publisher: None,
             layout_subscriber: None,
@@ -78,7 +82,6 @@ impl GridIpcManager {
             animation_subscriber: None,
             animation_status_publisher: None,
             heartbeat_publisher: None,
-            command_publisher: None,
             window_list_subscriber: None,
             is_running: false,
         })
@@ -100,7 +103,6 @@ impl GridIpcManager {
         }
         Ok(())
     }
-
 
     /// Setup only the requested IPC services. All booleans default to true for backward compatibility.
     pub fn setup_services(
@@ -153,7 +155,7 @@ impl GridIpcManager {
         // Setup response publishing service
         if responses {
             println!(
-                "[IPC DEBUG] Opening response service: {} (WindowResponse)",
+                "[IPC DEBUG] Opening response service: {} (IpcResponse)",
                 GRID_RESPONSE_SERVICE
             );
             let response_service = node
@@ -163,6 +165,7 @@ impl GridIpcManager {
                 .max_subscribers(8)
                 .open_or_create()?;
             self.response_publisher = Some(response_service.publisher_builder().create()?);
+            self.response_subscriber = Some(response_service.subscriber_builder().create()?);
         }
 
         // Setup window details publishing service
@@ -261,20 +264,20 @@ impl GridIpcManager {
                 .open_or_create()?;
             self.heartbeat_publisher = Some(heartbeat_service.publisher_builder().create()?);
         }
-if commands {
-    println!(
-        "[IPC DEBUG] Opening command service: {} (IpcCommand)",
-        GRID_COMMANDS_SERVICE
-    );
-    let command_service = node
-        .service_builder(&ServiceName::new(GRID_COMMANDS_SERVICE)?)
-        .publish_subscribe::<IpcCommand>()
-        .max_publishers(8)
-        .max_subscribers(8)
-        .open_or_create()?;
-    self.command_subscriber = Some(command_service.subscriber_builder().create()?);
-    self.command_publisher = Some(command_service.publisher_builder().create()?);
-}
+        if commands {
+            println!(
+                "[IPC DEBUG] Opening command service: {} (IpcCommand)",
+                GRID_COMMANDS_SERVICE
+            );
+            let command_service = node
+                .service_builder(&ServiceName::new(GRID_COMMANDS_SERVICE)?)
+                .publish_subscribe::<IpcCommand>()
+                .max_publishers(8)
+                .max_subscribers(8)
+                .open_or_create()?;
+            self.command_subscriber = Some(command_service.subscriber_builder().create()?);
+            self.command_publisher = Some(command_service.publisher_builder().create()?);
+        }
         // Store the node
         self.node = Some(node);
         info!("✅ iceoryx2 IPC services initialized successfully");
@@ -319,19 +322,18 @@ if commands {
         Ok(())
     }
 
-
-pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
-    if let Some(ref mut subscriber) = self.window_list_subscriber {
-        // Drain all available messages, return the last one (most recent)
-        let mut latest = None;
-        while let Some(sample) = subscriber.receive().ok().flatten() {
-            latest = Some(*sample);
+    pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
+        if let Some(ref mut subscriber) = self.window_list_subscriber {
+            // Drain all available messages, return the last one (most recent)
+            let mut latest = None;
+            while let Some(sample) = subscriber.receive().ok().flatten() {
+                latest = Some(*sample);
+            }
+            latest
+        } else {
+            None
         }
-        latest
-    } else {
-        None
     }
-}
 
     pub fn publish_event(&mut self, event: GridEvent) -> Result<(), Box<dyn std::error::Error>> {
         // Convert high-level event to zero-copy format
@@ -370,7 +372,7 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
             let response = self.handle_command(command)?;
 
             // Send response via iceoryx2
-            // self.send_response(response)?;
+            self.send_response(response)?;
         }
 
         Ok(())
@@ -383,11 +385,11 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
         Ok(())
     }
 
-    fn handle_command(&mut self, command: IpcCommand) -> Result<(), Box<dyn std::error::Error>> {
+    fn handle_command(&mut self, command: IpcCommand) -> Result<IpcResponse, Box<dyn std::error::Error>> {
         // Just print out the command for debugging
         println!("Received IpcCommand: {:?}", command);
         // Optionally, return a default response
-        Ok(())
+        Ok(IpcResponse::default())
     }
 
     pub fn handle_grid_command(
@@ -410,10 +412,10 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
                         // Limit to first 10 for brevity
                         let (hwnd, window) = entry.pair();
                         let title = if window.title.len() > 30 {
-                                                    format!("{}...", String::from_utf16_lossy(&window.title[..30]))
-                                                } else {
-                                                    String::from_utf16_lossy(&window.title)
-                                                };
+                            format!("{}...", String::from_utf16_lossy(&window.title[..30]))
+                        } else {
+                            String::from_utf16_lossy(&window.title)
+                        };
                         grid_summary.push_str(&format!("  HWND {:?}: {}\n", hwnd, title));
                     }
 
@@ -679,11 +681,11 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
             };
             // Now we can safely modify the window
             if let Some(mut window) = tracker.windows.get_mut(&hwnd) {
-                // Clear existing grid assignments for this window
-                window.grid_cells = [(0, 0); MAX_WINDOW_GRID_CELLS];
+                // // Clear existing grid assignments for this window
+                // window.grid_cells = [(0, 0); MAX_WINDOW_GRID_CELLS];
 
-                // Assign to the new cell (first slot)
-                window.grid_cells[0] = (target_row, target_col);
+                // // Assign to the new cell (first slot)
+                // window.grid_cells[0] = (target_row, target_col);
                 info!(
                     "✅ Assigned window {} '{}' to virtual grid cell ({}, {})",
                     hwnd,
@@ -750,7 +752,12 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
             // Publish an event about the assignment
             let event = GridEvent::WindowMoved {
                 hwnd,
-                title: String::from_utf16_lossy(&window_title[..window_title.iter().position(|&c| c == 0).unwrap_or(window_title.len())]),
+                title: String::from_utf16_lossy(
+                    &window_title[..window_title
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(window_title.len())],
+                ),
                 old_row: 0, // We don't track previous assignment currently
                 old_col: 0,
                 new_row: target_row,
@@ -806,19 +813,22 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
             }
             // Now we can safely modify the window
             if let Some(mut window) = tracker.windows.get_mut(&hwnd) {
-                // Clear existing monitor assignments for this window
-                for row in window.monitor_cells.iter_mut() {
-                    for cell in row.iter_mut() {
-                        *cell = (0, 0);
-                    }
-                }
+                // // Clear existing monitor assignments for this window
+                // for row in window.monitor_cells.iter_mut() {
+                //     for cell in row.iter_mut() {
+                //         *cell = (0, 0);
+                //     }
+                // }
 
-                // Assign to the new monitor cell
-                if monitor_id < window.monitor_cells.len() {
-                    window.monitor_cells[monitor_id][0] = (target_row, target_col);
-                } else {
-                    warn!("⚠️ Monitor ID {} out of bounds for monitor_cells array", monitor_id);
-                }
+                // // Assign to the new monitor cell
+                // if monitor_id < window.monitor_cells.len() {
+                //     window.monitor_cells[monitor_id][0] = (target_row, target_col);
+                // } else {
+                //     warn!(
+                //         "⚠️ Monitor ID {} out of bounds for monitor_cells array",
+                //         monitor_id
+                //     );
+                // }
                 debug!(
                     "✅ Assigned window {} '{}' to monitor {} grid cell ({}, {})",
                     hwnd,
@@ -921,14 +931,15 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
         }
     }
     fn count_occupied_cells(&self, tracker: &WindowTracker) -> usize {
-        let mut occupied = std::collections::HashSet::new();
-        for entry in &tracker.windows {
-            let (_, window) = entry.pair();
-            for &(row, col) in &window.grid_cells {
-                occupied.insert((row, col));
-            }
-        }
-        occupied.len()
+        // let mut occupied = std::collections::HashSet::new();
+        // for entry in &tracker.windows {
+        //     let (_, window) = entry.pair();
+        //     for &(row, col) in &window.grid_cells {
+        //         occupied.insert((row, col));
+        //     }
+        // }
+        // occupied.len()
+        0
     } // Conversion functions between high-level and zero-copy types
     fn grid_event_to_window_event(&self, event: &GridEvent) -> WindowEvent {
         let timestamp = std::time::SystemTime::now()
@@ -1144,9 +1155,20 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
                 occupied_cells: *occupied_cells as u32,
                 ..Default::default()
             },
+            GridEvent::WindowFocused { hwnd, .. } => WindowEvent {
+                event_type: 4, // Focus event type
+                hwnd: *hwnd,
+                timestamp,
+                ..Default::default()
+            },
+            GridEvent::WindowDefocused { hwnd, .. } => WindowEvent {
+                event_type: 5, // Defocus event type
+                hwnd: *hwnd,
+                timestamp,
+                ..Default::default()
+            },
         }
     }
-
 
     fn window_command_to_grid_command(command: &WindowCommand) -> GridCommand {
         match command.command_type {
@@ -1467,7 +1489,10 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
             }
 
             let monitor = &tracker.monitor_grids[monitor_id];
-            let (left, top, right, bottom) = monitor.monitor_rect;
+            let left = monitor.monitor_rect.left;
+            let top = monitor.monitor_rect.top;
+            let right = monitor.monitor_rect.right;
+            let bottom = monitor.monitor_rect.bottom;
             let cell_width = (right - left) / monitor.config.cols as i32;
             let cell_height = (bottom - top) / monitor.config.rows as i32;
 
@@ -1534,7 +1559,7 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
                     // Update the window's rectangle in our tracking
                     if let Some(new_rect) = crate::WindowTracker::get_window_rect(hwnd) {
                         if let Some(mut window) = tracker.windows.get_mut(&hwnd) {
-                            window.rect = crate::window::info::RectWrapper::from_rect(new_rect);
+                            window.window_rect = crate::window::info::RectWrapper::from_rect(new_rect);
                             debug!(
                                 "   📍 Updated window {} rect to ({}, {}) - ({}, {})",
                                 hwnd, new_rect.left, new_rect.top, new_rect.right, new_rect.bottom
@@ -1547,11 +1572,13 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
                         // Update the window with the new grid assignments
                         if let Some(mut window) = tracker.windows.get_mut(&(hwnd_handle as u64)) {
                             // Convert Vec<(usize, usize)> to [(usize, usize); 16]
-                            let mut arr = [(0usize, 0usize); crate::MAX_WINDOW_GRID_CELLS];
-                            for (i, val) in grid_cells.iter().take(MAX_WINDOW_GRID_CELLS).enumerate() {
-                                arr[i] = *val;
-                            }
-                            window.grid_cells = arr;
+                            // let mut arr = [(0usize, 0usize); crate::MAX_WINDOW_GRID_CELLS];
+                            // for (i, val) in
+                            //     grid_cells.iter().take(MAX_WINDOW_GRID_CELLS).enumerate()
+                            // {
+                            //     arr[i] = *val;
+                            // }
+                            // window.grid_cells = arr;
 
                             // Convert HashMap<usize, Vec<(usize, usize)>> to [[(usize, usize); 8]; 8]
                             let mut monitor_cells_arr = [[(0usize, 0usize); 8]; 8];
@@ -1562,10 +1589,10 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
                                     }
                                 }
                             }
-                            window.monitor_cells = monitor_cells_arr;
+                            // window.monitor_cells = monitor_cells_arr;
 
-                            debug!("   🔄 Recalculated grid assignments: {} virtual cells, {} monitor assignments", 
-                                window.grid_cells.len(), window.monitor_cells.len());
+                            // debug!("   🔄 Recalculated grid assignments: {} virtual cells, {} monitor assignments", 
+                            //     window.grid_cells.len(), window.monitor_cells.len());
                         }
                     }
                     // Update both virtual and monitor grids
@@ -1587,10 +1614,10 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
         // Calculate grid positions for the window
         // Construct a RECT from the WindowInfo fields
         let rect = winapi::shared::windef::RECT {
-            left: window_info.rect.left,
-            top: window_info.rect.top,
-            right: window_info.rect.right,
-            bottom: window_info.rect.bottom,
+            left: window_info.window_rect.left,
+            top: window_info.window_rect.top,
+            right: window_info.window_rect.right,
+            bottom: window_info.window_rect.bottom,
         };
 
         // Get virtual grid positions
@@ -1619,7 +1646,10 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
                 let mut found_monitor = None;
 
                 for (i, monitor) in tracker.monitor_grids.iter().enumerate() {
-                    let (left, top, right, bottom) = monitor.monitor_rect;
+                    let left = monitor.monitor_rect.left;
+                    let top = monitor.monitor_rect.top;
+                    let right = monitor.monitor_rect.right;
+                    let bottom = monitor.monitor_rect.bottom;
                     if center_x >= left && center_x < right && center_y >= top && center_y < bottom
                     {
                         // Get grid positions within this monitor
@@ -1657,18 +1687,18 @@ pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
             monitor_col_start: monitor_start_col,
             monitor_row_end: monitor_end_row,
             monitor_col_end: monitor_end_col,
-            title_len: window_info.title.len().min(255) as u32, // Cap at 255 chars
-            title: {
-                let s = String::from_utf16_lossy(&window_info.title)
-                    .chars()
-                    .take(255)
-                    .collect::<String>();
-                let mut arr = [0u8; 256];
-                let bytes = s.as_bytes();
-                let len = bytes.len().min(256);
-                arr[..len].copy_from_slice(&bytes[..len]);
-                arr
-            },
+            // title_len: window_info.title.len().min(255) as u32, // Cap at 255 chars
+            // title: {
+            //     let s = String::from_utf16_lossy(&window_info.title)
+            //         .chars()
+            //         .take(255)
+            //         .collect::<String>();
+            //     let mut arr = [0u8; 256];
+            //     let bytes = s.as_bytes();
+            //     let len = bytes.len().min(256);
+            //     arr[..len].copy_from_slice(&bytes[..len]);
+            //     arr
+            // },
         }
     }
 

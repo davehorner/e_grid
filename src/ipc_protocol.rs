@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 // Add ZeroCopySend and repr(C) for iceoryx2 compatibility
-use iceoryx2::prelude::ZeroCopySend;
 use heapless::Vec as HeaplessVec;
+use iceoryx2::prelude::ZeroCopySend;
 
 use crate::WindowInfo;
 pub const MAX_WINDOWS: usize = 20;
@@ -13,6 +13,7 @@ pub const MAX_WINDOWS: usize = 20;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(C)]
 pub enum IpcCommandType {
+    Stop,
     GetGridState,
     GetMonitorList,
     GetWindowList,
@@ -55,7 +56,7 @@ impl Default for IpcCommand {
 }
 unsafe impl ZeroCopySend for IpcCommand {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ZeroCopySend)]
 #[repr(C)]
 pub enum IpcResponseType {
     GridState,
@@ -64,43 +65,106 @@ pub enum IpcResponseType {
     Ack,
     Error,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ZeroCopySend)]
+#[repr(C)]
+pub enum StreamMsgType {
+    Begin,
+    Window,
+    Monitor,
+    End,
+}
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ZeroCopySend)]
+#[repr(C)]
+pub struct WindowDetailsMessage {
+    pub msg_type: StreamMsgType, // StreamMsgType::Window
+    pub details: WindowDetails,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ZeroCopySend)]
+#[repr(C)]
+pub struct MonitorDetailsMessage {
+    pub msg_type: StreamMsgType, // StreamMsgType::Monitor
+    pub details: Monitor,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, ZeroCopySend)]
+#[repr(C)]
+pub struct Monitor {
+    pub id: u32,
+    pub grid_type: GridType,
+    pub width: i32,
+    pub height: i32,
+    pub x: i32,
+    pub y: i32,
+    pub rows: u32,
+    pub cols: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ZeroCopySend)]
+#[repr(C)]
+pub struct StreamControlMessage {
+    pub msg_type: StreamMsgType, // Begin or End
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct IpcResponse {
     pub response_type: IpcResponseType,
 
-    pub has_grid_state: u8,
-    pub grid_state: GridState, // Must be C-compatible
+    // pub has_grid_state: u8,
+    // pub grid_state: GridState, // Must be C-compatible
 
-    pub has_monitor_list: u8,
-    pub monitor_list: MonitorList, // Must be C-compatible
+    // pub has_monitor_list: u8,
+    // pub monitor_list: MonitorList, // Must be C-compatible
 
-    pub window_count: u32,
-    pub window_list: Box<[WindowInfo; MAX_WINDOWS]>, // C-compatible, MAX_WINDOWS = const
-
+    // pub window_count: u32,
+    // pub window_list: Box<[WindowInfo; MAX_WINDOWS]>, // C-compatible, MAX_WINDOWS = const
     pub has_error_message: u8,
     pub error_message_len: u32,
     pub error_message: [u8; 256], // C-compatible string
 
     pub protocol_version: u32,
 }
+
+impl Default for IpcResponse {
+    fn default() -> Self {
+        Self {
+            response_type: IpcResponseType::Ack,
+            has_error_message: 0,
+            error_message_len: 0,
+            error_message: [0; 256],
+            protocol_version: 1,
+        }
+    }
+}
 unsafe impl ZeroCopySend for IpcResponse {}
 
 impl core::fmt::Debug for IpcResponse {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "IpcResponse {{ response_type: {:?}, ... }}", self.response_type)
+        write!(
+            f,
+            "IpcResponse {{ response_type: {:?}, ... }}",
+            self.response_type
+        )
     }
 }
 impl core::fmt::Debug for GridState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "GridState {{ rows: {}, cols: {}, ... }}", self.rows, self.cols)
+        write!(
+            f,
+            "GridState {{ rows: {}, cols: {}, ... }}",
+            self.rows, self.cols
+        )
     }
 }
 impl core::fmt::Debug for MonitorList {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            write!(f, "MonitorList {{ monitor_count: {}, ... }}", self.monitor_count)
-        }
+        write!(
+            f,
+            "MonitorList {{ monitor_count: {}, ... }}",
+            self.monitor_count
+        )
+    }
 }
 
 // // Dummy types for illustration; replace with real ones from your codebase
@@ -129,7 +193,7 @@ impl Default for GridState {
 // #[derive(Debug, Clone, Serialize, Deserialize)]
 // pub struct WindowInfo;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ZeroCopySend, Serialize, Deserialize)]
 #[repr(C)]
 pub enum GridType {
     Physical,
@@ -140,10 +204,10 @@ pub enum GridType {
 const MAX_ROWS: usize = 32;
 const MAX_COLS: usize = 32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ZeroCopySend)]
 #[repr(C)]
-pub struct MonitorGridInfo {
-    pub id: u32,
+pub struct MonitorGridIPC {
+    pub monitor_id: u32,
     pub grid_type: GridType,
     pub width: i32,
     pub height: i32,
@@ -152,14 +216,14 @@ pub struct MonitorGridInfo {
     pub rows: u32,
     pub cols: u32,
     pub name_len: u32,
-    pub name: [u8; 64], // Fixed-size array for name
+    pub name: [u8; 64],                    // Fixed-size array for name
     pub grid: [[u64; MAX_COLS]; MAX_ROWS], // 0 means empty cell
 }
 
-impl Default for MonitorGridInfo {
+impl Default for MonitorGridIPC {
     fn default() -> Self {
         Self {
-            id: 0,
+            monitor_id: 0,
             grid_type: GridType::Physical,
             width: 0,
             height: 0,
@@ -176,19 +240,19 @@ impl Default for MonitorGridInfo {
 
 const MAX_MONITORS: usize = 16;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, ZeroCopySend)]
 #[repr(C)]
 pub struct MonitorList {
     pub monitor_count: u32,
-    pub monitors: [MonitorGridInfo; MAX_MONITORS], // 0..N = physical, N+1 = virtual, N+2+ = dynamic
+    pub monitors: [MonitorGridIPC; MAX_MONITORS], // 0..N = physical, N+1 = virtual, N+2+ = dynamic
 }
 
 impl Default for MonitorList {
     fn default() -> Self {
         Self {
             monitor_count: 0,
-            monitors: [MonitorGridInfo {
-                id: 0,
+            monitors: [MonitorGridIPC {
+                monitor_id: 0,
                 grid_type: GridType::Physical,
                 width: 0,
                 height: 0,
@@ -220,13 +284,13 @@ pub const GRID_RESPONSE_SERVICE: &str = "e_grid_responses";
 pub const GRID_WINDOW_COMMANDS_SERVICE: &str = "e_grid_window_commands";
 pub const GRID_WINDOW_LIST_SERVICE: &str = "e_grid_window_list"; // Deprecated - chunked approach
 pub const GRID_WINDOW_DETAILS_SERVICE: &str = "e_grid_window_details"; // Individual window details
+pub const GRID_MONITOR_LIST_SERVICE: &str = "e_grid_monitor_list"; // Monitor list updates
 pub const GRID_LAYOUT_SERVICE: &str = "e_grid_layouts"; // Grid layout transfer
 pub const GRID_CELL_ASSIGNMENTS_SERVICE: &str = "e_grid_cell_assignments"; // Cell assignments for layouts
 pub const ANIMATION_COMMANDS_SERVICE: &str = "e_grid_animations"; // Animation control
 pub const ANIMATION_STATUS_SERVICE: &str = "e_grid_animation_status"; // Animation status updates
 pub const GRID_FOCUS_EVENTS_SERVICE: &str = "e_grid_focus_events"; // Window focus/defocus events
 pub const GRID_HEARTBEAT_SERVICE: &str = "e_grid_heartbeat"; // Server heartbeat messages
- 
 
 // Zero-copy compatible data types for iceoryx2
 // Using only basic types that work with iceoryx2's zero-copy requirements
@@ -398,7 +462,7 @@ impl Default for WindowPositionInfo {
 
 // Zero-copy compatible individual window information for IPC
 // Based on the WindowInfo from lib.rs but optimized for IPC
-#[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
+#[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend, Eq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct WindowDetails {
     pub hwnd: u64,
@@ -415,8 +479,8 @@ pub struct WindowDetails {
     pub monitor_col_start: u32,
     pub monitor_row_end: u32, // Bottom-right grid position in monitor grid
     pub monitor_col_end: u32,
-    pub title: [u8; 256],
-    pub title_len: u32, // Length of title
+    // pub title: [u8; 256],
+    // pub title_len: u32, // Length of title
 }
 
 impl Default for WindowDetails {
@@ -436,8 +500,8 @@ impl Default for WindowDetails {
             monitor_col_start: 0,
             monitor_row_end: 0,
             monitor_col_end: 0,
-            title: [0; 256],
-            title_len: 0,
+            // title: [0; 256],
+            // title_len: 0,
         }
     }
 }
@@ -549,6 +613,17 @@ pub enum GridEvent {
         timestamp: u64,
         total_windows: usize,
         occupied_cells: usize,
+    },
+    // NEW: Focus events for main.rs
+    WindowFocused {
+        hwnd: u64,
+        title: String,
+        process_id: u32,
+    },
+    WindowDefocused {
+        hwnd: u64,
+        title: String,
+        process_id: u32,
     },
 }
 

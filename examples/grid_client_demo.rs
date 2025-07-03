@@ -95,11 +95,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Give some time for initial data to arrive
     thread::sleep(Duration::from_millis(800));
 
-    println!("\n📋 Initial Window List:");
-    client.display_window_list();
+    // println!("\n📋 Initial Window List:");
+    // client.display_window_list();
 
     println!("\n📊 Initial Grid State:");
-    client.display_current_grid();
+    client.print_all_grids();
 
     // Non-interactive demo loop with automatic actions
     let mut demo_cycle = 0;
@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("📤 Requesting fresh window list from server...");
                 client.request_window_list()?;
                 thread::sleep(Duration::from_millis(300));
-                client.display_window_list();
+                // client.display_window_list();
             }
             2 => {
                 println!("📊 Displaying current grid state...");
@@ -147,8 +147,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 thread::sleep(Duration::from_millis(500));
             }
             5 => {
-                println!("� Current window summary:");
-                client.display_window_list();
+                // println!("� Current window summary:");
+                // client.display_window_list();
             }
             _ => {
                 println!("🔍 Monitoring for real-time window changes...");

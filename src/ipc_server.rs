@@ -1,10 +1,13 @@
 use crate::ipc_protocol::{
-    AnimationCommand, AnimationStatus, GridCellAssignment, GridEvent, GridLayoutMessage, GridState, HeartbeatMessage, IpcCommand, IpcCommandType, IpcResponse, IpcResponseType, MonitorList, WindowDetails, WindowEvent, WindowFocusEvent, WindowListMessage, ANIMATION_COMMANDS_SERVICE, ANIMATION_STATUS_SERVICE, GRID_CELL_ASSIGNMENTS_SERVICE, GRID_COMMANDS_SERVICE, GRID_EVENTS_SERVICE, GRID_FOCUS_EVENTS_SERVICE, GRID_HEARTBEAT_SERVICE, GRID_LAYOUT_SERVICE, GRID_RESPONSE_SERVICE, GRID_WINDOW_DETAILS_SERVICE, GRID_WINDOW_LIST_SERVICE, MAX_WINDOWS
+    AnimationCommand, AnimationStatus, GridCellAssignment, GridEvent, GridLayoutMessage,
+    HeartbeatMessage, IpcCommand, IpcCommandType, IpcResponse, IpcResponseType,
+    WindowDetails, WindowEvent, WindowFocusEvent, WindowListMessage, ANIMATION_COMMANDS_SERVICE,
+    ANIMATION_STATUS_SERVICE, GRID_CELL_ASSIGNMENTS_SERVICE, GRID_COMMANDS_SERVICE,
+    GRID_EVENTS_SERVICE, GRID_FOCUS_EVENTS_SERVICE, GRID_HEARTBEAT_SERVICE, GRID_LAYOUT_SERVICE,
+    GRID_RESPONSE_SERVICE, GRID_WINDOW_DETAILS_SERVICE, GRID_WINDOW_LIST_SERVICE,
 };
-use crate::WindowInfo;
 // use crate::GridConfig;
 use crate::config::grid_config::GridConfig;
-use crate::ipc_protocol::GridCommand;
 use crate::{
     heartbeat::HeartbeatService,
     window_events::{self, WindowEventConfig},
@@ -45,7 +48,8 @@ pub struct GridIpcServer {
     animation_status_publisher: Option<Publisher<Service, AnimationStatus, ()>>,
     heartbeat_publisher: Option<Publisher<Service, HeartbeatMessage, ()>>,
     window_list_publisher: Option<Publisher<Service, WindowListMessage, ()>>,
-    
+    monitor_list_publisher: Option<Publisher<Service, crate::ipc_protocol::MonitorList, ()>>,
+
     // IPC Subscribers
     command_subscriber: Option<Subscriber<Service, IpcCommand, ()>>,
     layout_subscriber: Option<Subscriber<Service, GridLayoutMessage, ()>>,
@@ -58,7 +62,8 @@ pub struct GridIpcServer {
     // New library-based event handling
     heartbeat_service: Option<HeartbeatService>,
     focus_event_receiver: Option<mpsc::Receiver<(u64, bool)>>,
-    event_receiver: Option<mpsc::Receiver<crate::ipc_protocol::GridEvent>>, // NEW: for window events
+    pub event_receiver: Option<mpsc::Receiver<crate::ipc_protocol::GridEvent>>, // NEW: for window events
+    event_sender: Option<mpsc::Sender<crate::ipc_protocol::GridEvent>>, // NEW: for sending events to main.rs
     // Add WindowEventSystem for move/resize event polling
     window_event_system: Option<crate::WindowEventSystem>,
 }
@@ -88,6 +93,7 @@ impl GridIpcServer {
             animation_status_publisher: None,
             heartbeat_publisher: None,
             window_list_publisher: None,
+            monitor_list_publisher: None,
             command_subscriber: None,
             layout_subscriber: None,
             cell_assignment_subscriber: None,
@@ -97,33 +103,47 @@ impl GridIpcServer {
             heartbeat_service: None,
             focus_event_receiver: None,
             event_receiver: None,
+            event_sender: None,
             window_event_system: None,
         })
     }
-pub fn publish_window_list_message(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::ipc_protocol::{WindowListMessage, WindowDetails, MAX_WINDOWS};
-    let windows_snapshot = if let Ok(tracker) = self.tracker.lock() {
-        tracker.windows.clone()
-    } else {
-        return Err("Failed to lock window tracker".into());
-    };
+    pub fn publish_window_list_message(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::ipc_protocol::{WindowDetails, WindowListMessage};
+        const MAX_WINDOWS: usize = 20; // Define locally since we removed it from imports
+        
+        let windows_snapshot = if let Ok(tracker) = self.tracker.lock() {
+            tracker.windows.clone()
+        } else {
+            return Err("Failed to lock window tracker".into());
+        };
 
-    let mut msg = WindowListMessage {
-        window_count: 0,
-        windows: [WindowDetails::default(); MAX_WINDOWS],
-    };
-    for (i, entry) in windows_snapshot.iter().enumerate().take(MAX_WINDOWS) {
-        let (hwnd, window_info) = entry.pair();
-        msg.windows[i] = self.create_window_details_safe(*hwnd, &*window_info);
-        msg.window_count += 1;
+        println!("📤 Publishing window list with {} windows", windows_snapshot.len());
+
+        let mut msg = WindowListMessage {
+            window_count: 0,
+            windows: [WindowDetails::default(); MAX_WINDOWS],
+        };
+        for (i, entry) in windows_snapshot.iter().enumerate().take(MAX_WINDOWS) {
+            let (hwnd, window_info) = entry.pair();
+            msg.windows[i] = self.create_window_details_safe(*hwnd, &*window_info);
+            msg.window_count += 1;
+            
+            // Debug: Print each window being published
+            println!("   📋 Window {}: HWND {} - {}", 
+                i + 1, 
+                *hwnd,
+                String::from_utf16_lossy(&window_info.title).chars().take(30).collect::<String>()
+            );
+        }
+        
+        if let Some(ref mut publisher) = self.window_list_publisher {
+            publisher.send_copy(msg)?;
+            println!("✅ Published window list message with {} windows", msg.window_count);
+        } else {
+            return Err("Window list publisher not available".into());
+        }
+        Ok(())
     }
-    if let Some(ref mut publisher) = self.window_list_publisher {
-        publisher.send_copy(msg)?;
-    } else {
-        return Err("Window list publisher not available".into());
-    }
-    Ok(())
-}
     /// Initialize all IPC services
     pub fn setup_services(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("🔧 Setting up E-Grid IPC server services...");
@@ -270,12 +290,20 @@ pub fn publish_window_list_message(&mut self) -> Result<(), Box<dyn std::error::
         self.heartbeat_publisher = Some(heartbeat_service.publisher_builder().create()?);
 
         let window_list_service = node
-        .service_builder(&ServiceName::new(GRID_WINDOW_LIST_SERVICE)?)
-        .publish_subscribe::<WindowListMessage>()
-        .max_publishers(8)
-        .max_subscribers(8)
-        .open_or_create()?;
+            .service_builder(&ServiceName::new(GRID_WINDOW_LIST_SERVICE)?)
+            .publish_subscribe::<WindowListMessage>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create()?;
         self.window_list_publisher = Some(window_list_service.publisher_builder().create()?);
+
+        let monitor_list_service = node
+            .service_builder(&ServiceName::new(crate::ipc_protocol::GRID_MONITOR_LIST_SERVICE)?)
+            .publish_subscribe::<crate::ipc_protocol::MonitorList>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create()?;
+        self.monitor_list_publisher = Some(monitor_list_service.publisher_builder().create()?);
 
         self.is_running = true;
         Ok(())
@@ -323,13 +351,15 @@ pub fn publish_window_list_message(&mut self) -> Result<(), Box<dyn std::error::
         // Collect all incoming commands
         if let Some(ref mut subscriber) = self.command_subscriber {
             while let Some(sample) = subscriber.receive()? {
-                let command = sample.clone(); // FIX: clone instead of move
+                println!("🔄 Received command sample (extracting actual command)");
+                let command = (*sample).clone(); // Extract the actual IpcCommand from the sample
+                println!("📨 Extracted command: {:?}", command);
                 commands_to_process.push(command);
             }
         }
         // Process each command
         for command in commands_to_process {
-            trace!("📨 Received command: {:?}", command);
+            trace!("📨 Processing command: {:?}", command);
             let response = self.handle_ipc_command(command)?;
             self.send_ipc_response(response)?;
         }
@@ -341,18 +371,18 @@ pub fn publish_window_list_message(&mut self) -> Result<(), Box<dyn std::error::
         &mut self,
         command: IpcCommand,
     ) -> Result<Box<IpcResponse>, Box<dyn std::error::Error>> {
-          match command.command_type {
+        match command.command_type {
             IpcCommandType::GetWindowList => {
                 self.publish_window_list_message()?;
                 // Optionally, return an ACK or minimal response
                 Ok(Box::new(IpcResponse {
                     response_type: IpcResponseType::Ack,
-                    has_grid_state: 0,
-                    grid_state: GridState::default(),
-                    has_monitor_list: 0,
-                    monitor_list: MonitorList::default(),
-                    window_count: 0,
-                    window_list: Box::new(core::array::from_fn(|_| WindowInfo::default())),
+                    // has_grid_state: 0,
+                    // grid_state: GridState::default(),
+                    // has_monitor_list: 0,
+                    // monitor_list: MonitorList::default(),
+                    // window_count: 0,
+                    // window_list: Box::new(core::array::from_fn(|_| WindowInfo::default())),
                     has_error_message: 0,
                     error_message_len: 0,
                     error_message: [0; 256],
@@ -360,35 +390,13 @@ pub fn publish_window_list_message(&mut self) -> Result<(), Box<dyn std::error::
                 }))
             }
             IpcCommandType::GetGridState => {
-                // TODO: Fill with actual grid state if available
-                let has_grid_state = 1;
-                let grid_state = GridState::default();
+                // Instead of sending a pre-built grid, stream the window list 
+                // and let the client construct the grid dynamically
+                self.publish_window_list_message()?;
+                
+                // Return an ACK to confirm the request was processed
                 Ok(Box::new(IpcResponse {
-                    response_type: IpcResponseType::GridState,
-                    has_grid_state,
-                    grid_state,
-                    has_monitor_list: 0,
-                    monitor_list: MonitorList::default(),
-                    window_count: 0,
-                    window_list: Box::new(core::array::from_fn(|_| WindowInfo::default())),
-                    has_error_message: 0,
-                    error_message_len: 0,
-                    error_message: [0; 256],
-                    protocol_version: command.protocol_version,
-                }))
-            }
-            IpcCommandType::GetWindowList => {
-                // TODO: Fill window_list and window_count with real data
-                let mut window_list: Box<[WindowInfo; MAX_WINDOWS]> = Box::new(core::array::from_fn(|_| WindowInfo::default()));
-                let window_count = 0; // Set to actual count when implemented
-                Ok(Box::new(IpcResponse {
-                    response_type: IpcResponseType::WindowList,
-                    has_grid_state: 0,
-                    grid_state: GridState::default(),
-                    has_monitor_list: 0,
-                    monitor_list: MonitorList::default(),
-                    window_count,
-                    window_list,
+                    response_type: IpcResponseType::Ack,
                     has_error_message: 0,
                     error_message_len: 0,
                     error_message: [0; 256],
@@ -401,12 +409,12 @@ pub fn publish_window_list_message(&mut self) -> Result<(), Box<dyn std::error::
             | IpcCommandType::AssignToMonitorCell => {
                 Ok(Box::new(IpcResponse {
                     response_type: IpcResponseType::Ack,
-                    has_grid_state: 0,
-                    grid_state: GridState::default(),
-                    has_monitor_list: 0,
-                    monitor_list: MonitorList::default(),
-                    window_count: 0,
-                    window_list: Box::new(core::array::from_fn(|_| WindowInfo::default())),
+                    // has_grid_state: 0,
+                    // grid_state: GridState::default(),
+                    // has_monitor_list: 0,
+                    // monitor_list: MonitorList::default(),
+                    // window_count: 0,
+                    // window_list: Box::new(core::array::from_fn(|_| WindowInfo::default())),
                     has_error_message: 0,
                     error_message_len: 0,
                     error_message: [0; 256],
@@ -414,17 +422,45 @@ pub fn publish_window_list_message(&mut self) -> Result<(), Box<dyn std::error::
                 }))
             }
             IpcCommandType::FocusWindow | IpcCommandType::GetMonitorList => {
-                // TODO: Fill monitor_list with real data if available
-                let has_monitor_list = 1;
-                let monitor_list = MonitorList::default();
+                if let IpcCommandType::FocusWindow = command.command_type {
+                    // Optionally handle focus logic here (e.g., focus a window)
+                    Ok(Box::new(IpcResponse {
+                        response_type: IpcResponseType::Ack,
+                        has_error_message: 0,
+                        error_message_len: 0,
+                        error_message: [0; 256],
+                        protocol_version: command.protocol_version,
+                    }))
+                } else {
+                    // GetMonitorList: enumerate real monitors and publish them
+                    let monitor_list = self.enumerate_monitors();
+                    
+                    // Publish the monitor list data
+                    if let Some(ref mut publisher) = self.monitor_list_publisher {
+                        match publisher.send_copy(monitor_list) {
+                            Ok(_) => {
+                                debug!("📡 [MONITOR LIST] Published monitor list with {} monitors", monitor_list.monitor_count);
+                            }
+                            Err(e) => {
+                                warn!("❌ Failed to publish monitor list: {}", e);
+                            }
+                        }
+                    }
+                    
+                    Ok(Box::new(IpcResponse {
+                        response_type: IpcResponseType::MonitorList,
+                        has_error_message: 0,
+                        error_message_len: 0,
+                        error_message: [0; 256],
+                        protocol_version: command.protocol_version,
+                    }))
+                }
+            }
+            IpcCommandType::Stop => {
+                // Optionally handle server stop logic here
+                self.stop();
                 Ok(Box::new(IpcResponse {
-                    response_type: IpcResponseType::MonitorList,
-                    has_grid_state: 0,
-                    grid_state: GridState::default(),
-                    has_monitor_list,
-                    monitor_list,
-                    window_count: 0,
-                    window_list: Box::new(core::array::from_fn(|_| WindowInfo::default())),
+                    response_type: IpcResponseType::Ack,
                     has_error_message: 0,
                     error_message_len: 0,
                     error_message: [0; 256],
@@ -435,16 +471,16 @@ pub fn publish_window_list_message(&mut self) -> Result<(), Box<dyn std::error::
     }
 
     /// Send an IpcResponse to clients
-fn send_ipc_response(
-    &mut self,
-    response: Box<IpcResponse>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(ref mut publisher) = self.response_publisher {
-        publisher.send_copy(*response)?; // move out of the box
-        trace!("📤 Sent IpcResponse");
+    fn send_ipc_response(
+        &mut self,
+        response: Box<IpcResponse>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(ref mut publisher) = self.response_publisher {
+            publisher.send_copy(*response)?; // move out of the box
+            trace!("📤 Sent IpcResponse");
+        }
+        Ok(())
     }
-    Ok(())
-}
 
     /// Process incoming focus events from the channel and publish them via IPC
     pub fn process_focus_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -461,10 +497,39 @@ fn send_ipc_response(
         // Process all collected focus events
         for (hwnd, is_focused) in events {
             // Convert u64 back to HWND and publish via IPC
-            let event_type = if is_focused { "FOCUSED" } else { "DEFOCUSED" };
+            let _event_type = if is_focused { "FOCUSED" } else { "DEFOCUSED" };
 
             if let Err(e) = self.publish_focus_event_from_library(hwnd, is_focused) {
                 error!("❌ Failed to publish focus event via IPC: {:?}", e);
+            }
+
+            // NEW: Send focus event through main event channel for main.rs
+            if let Some(ref event_sender) = self.event_sender {
+                // Get window title and process ID for the focus event
+                let title = crate::window_tracker::WindowTracker::get_window_title(hwnd);
+                let process_id = unsafe {
+                    let mut process_id: u32 = 0;
+                    winapi::um::winuser::GetWindowThreadProcessId(hwnd as HWND, &mut process_id);
+                    process_id
+                };
+
+                let focus_event = if is_focused {
+                    crate::ipc_protocol::GridEvent::WindowFocused {
+                        hwnd,
+                        title,
+                        process_id,
+                    }
+                } else {
+                    crate::ipc_protocol::GridEvent::WindowDefocused {
+                        hwnd,
+                        title,
+                        process_id,
+                    }
+                };
+
+                if let Err(e) = event_sender.send(focus_event) {
+                    error!("❌ Failed to send focus event to main.rs: {:?}", e);
+                }
             }
 
             // Reset heartbeat when focus events occur
@@ -771,10 +836,10 @@ fn send_ipc_response(
         window_info: &crate::WindowInfo,
     ) -> WindowDetails {
         // Use WindowInfo rect fields directly
-        let left = window_info.rect.left;
-        let top = window_info.rect.top;
-        let right = window_info.rect.right;
-        let bottom = window_info.rect.bottom;
+        let left = window_info.window_rect.left;
+        let top = window_info.window_rect.top;
+        let right = window_info.window_rect.right;
+        let bottom = window_info.window_rect.bottom;
 
         // Get screen dimensions for proper grid calculation
         let screen_width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
@@ -812,6 +877,47 @@ fn send_ipc_response(
             virtual_col + 1
         };
 
+        // Determine which monitor this window is primarily on
+        let monitor_id = self.determine_window_monitor(left, top, right, bottom);
+        
+        // Calculate monitor-relative grid positions
+        let (monitor_row_start, monitor_col_start, monitor_row_end, monitor_col_end) = 
+            if let Some((monitor_left, monitor_top, monitor_right, monitor_bottom)) = 
+                self.get_monitor_bounds(monitor_id) {
+                
+                let monitor_width = monitor_right - monitor_left;
+                let monitor_height = monitor_bottom - monitor_top;
+                let monitor_cell_width = monitor_width / self.config.cols as i32;
+                let monitor_cell_height = monitor_height / self.config.rows as i32;
+                
+                // Window position relative to monitor
+                let relative_left = left - monitor_left;
+                let relative_top = top - monitor_top;
+                let relative_right = right - monitor_left;
+                let relative_bottom = bottom - monitor_top;
+                
+                let m_row_start = if monitor_cell_height > 0 && relative_top >= 0 {
+                    ((relative_top / monitor_cell_height).max(0).min(self.config.rows as i32 - 1)) as u32
+                } else { 0 };
+                
+                let m_col_start = if monitor_cell_width > 0 && relative_left >= 0 {
+                    ((relative_left / monitor_cell_width).max(0).min(self.config.cols as i32 - 1)) as u32
+                } else { 0 };
+                
+                let m_row_end = if monitor_cell_height > 0 && relative_bottom > relative_top {
+                    ((relative_bottom / monitor_cell_height).max(m_row_start as i32).min(self.config.rows as i32)) as u32
+                } else { m_row_start + 1 };
+                
+                let m_col_end = if monitor_cell_width > 0 && relative_right > relative_left {
+                    ((relative_right / monitor_cell_width).max(m_col_start as i32).min(self.config.cols as i32)) as u32
+                } else { m_col_start + 1 };
+                
+                (m_row_start, m_col_start, m_row_end, m_col_end)
+            } else {
+                // Fallback to virtual grid positions if monitor bounds unavailable
+                (virtual_row, virtual_col, virtual_row_end, virtual_col_end)
+            };
+
         WindowDetails {
             hwnd,
             x: left,
@@ -825,27 +931,26 @@ fn send_ipc_response(
             virtual_row_end: virtual_row_end,
             virtual_col_end: virtual_col_end,
 
-            // Monitor positions - use same as virtual for now (could be improved later)
-            monitor_id: 0,
-            monitor_row_start: virtual_row,
-            monitor_col_start: virtual_col,
-            monitor_row_end: virtual_row_end,
-            monitor_col_end: virtual_col_end,
-
-            // Title field (convert UTF-16 to UTF-8 and fit into [u8; 256])
-            title: {
-                let utf8 = String::from_utf16_lossy(&window_info.title);
-                let bytes = utf8.as_bytes();
-                let mut arr = [0u8; 256];
-                let len = bytes.len().min(256);
-                arr[..len].copy_from_slice(&bytes[..len]);
-                arr
-            },
-            // Title length for validation
-            title_len: {
-                let utf8 = String::from_utf16_lossy(&window_info.title);
-                utf8.len().min(255) as u32
-            },
+            // Monitor positions - properly calculated for the specific monitor
+            monitor_id,
+            monitor_row_start,
+            monitor_col_start,
+            monitor_row_end,
+            monitor_col_end,
+            // // Title field (convert UTF-16 to UTF-8 and fit into [u8; 256])
+            // title: {
+            //     let utf8 = String::from_utf16_lossy(&window_info.title);
+            //     let bytes = utf8.as_bytes();
+            //     let mut arr = [0u8; 256];
+            //     let len = bytes.len().min(256);
+            //     arr[..len].copy_from_slice(&bytes[..len]);
+            //     arr
+            // },
+            // // Title length for validation
+            // title_len: {
+            //     let utf8 = String::from_utf16_lossy(&window_info.title);
+            //     utf8.len().min(255) as u32
+            // },
         }
     }
 
@@ -947,16 +1052,16 @@ fn send_ipc_response(
         };
         self.publish_event(event)
     } // Private helper methods
-    fn count_occupied_cells(&self, tracker: &WindowTracker) -> usize {
-        let mut occupied = std::collections::HashSet::new();
-        for entry in &tracker.windows {
-            let (_, window) = entry.pair();
-            for &(row, col) in &window.grid_cells {
-                occupied.insert((row, col));
-            }
-        }
-        occupied.len()
-    }
+    // fn count_occupied_cells(&self, tracker: &WindowTracker) -> usize {
+    //     let mut occupied = std::collections::HashSet::new();
+    //     for entry in &tracker.windows {
+    //         let (_, window) = entry.pair();
+    //         for &(row, col) in &window.grid_cells {
+    //             occupied.insert((row, col));
+    //         }
+    //     }
+    //     occupied.len()
+    // }
     /// Move a window to a specific grid cell
     pub fn move_window_to_cell(
         &mut self,
@@ -964,8 +1069,6 @@ fn send_ipc_response(
         target_row: usize,
         target_col: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let hwnd_ptr = hwnd as winapi::shared::windef::HWND;
-
         if let Ok(mut tracker) = self.tracker.lock() {
             tracker
                 .move_window_to_cell(hwnd, target_row, target_col)
@@ -1315,6 +1418,18 @@ fn send_ipc_response(
                 occupied_cells: *occupied_cells as u32,
                 ..Default::default()
             },
+            GridEvent::WindowFocused { hwnd, .. } => WindowEvent {
+                event_type: 4, // Focus event type
+                hwnd: *hwnd,
+                timestamp,
+                ..Default::default()
+            },
+            GridEvent::WindowDefocused { hwnd, .. } => WindowEvent {
+                event_type: 5, // Defocus event type
+                hwnd: *hwnd,
+                timestamp,
+                ..Default::default()
+            },
         }
     }
 
@@ -1326,6 +1441,7 @@ fn send_ipc_response(
         // Create a channel for window move/resize events
         let (event_sender, event_receiver) = mpsc::channel::<crate::ipc_protocol::GridEvent>();
         self.event_receiver = Some(event_receiver);
+        self.event_sender = Some(event_sender.clone());
         // --- NEW: Setup WindowEventSystem for move/resize ---
         // Convert Arc<DashMap<u64, WindowInfo>> to Arc<DashMap<*mut winapi::shared::windef::HWND__, WindowInfo>>
         let hwnd_map: Arc<DashMap<*mut winapi::shared::windef::HWND__, crate::WindowInfo>> =
@@ -1519,7 +1635,7 @@ fn send_ipc_response(
 
     /// Enumerate monitors and build a MonitorList (stub: single monitor for now)
     fn enumerate_monitors(&self) -> crate::ipc_protocol::MonitorList {
-        use crate::ipc_protocol::{GridType, MonitorGridInfo, MonitorList};
+        use crate::ipc_protocol::{GridType, MonitorGridIPC, MonitorList};
         use std::ffi::OsString;
         use std::os::windows::ffi::OsStringExt;
         use std::ptr;
@@ -1527,7 +1643,7 @@ fn send_ipc_response(
         use winapi::um::winuser::{EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW};
 
         struct MonitorEnumContext {
-            monitors: Vec<MonitorGridInfo>,
+            monitors: Vec<MonitorGridIPC>,
             next_id: u32,
         }
         let mut context = MonitorEnumContext {
@@ -1538,7 +1654,7 @@ fn send_ipc_response(
         unsafe extern "system" fn monitor_enum_proc(
             hmonitor: winapi::shared::windef::HMONITOR,
             _hdc: HDC,
-            lprc: LPRECT,
+            _lprc: LPRECT,
             lparam: isize,
         ) -> i32 {
             let context = &mut *(lparam as *mut MonitorEnumContext);
@@ -1553,8 +1669,8 @@ fn send_ipc_response(
                     .trim_end_matches('\0')
                     .to_string();
                 let name_len = name.len().min(255) as u32;
-                context.monitors.push(MonitorGridInfo {
-                    id: context.next_id,
+                context.monitors.push(MonitorGridIPC {
+                    monitor_id: context.next_id,
                     grid_type: GridType::Physical,
                     width,
                     height,
@@ -1586,7 +1702,7 @@ fn send_ipc_response(
             );
         }
 
-        let mut monitors_array: [MonitorGridInfo; 16] = [MonitorGridInfo::default(); 16];
+        let mut monitors_array: [MonitorGridIPC; 16] = [MonitorGridIPC::default(); 16];
         let count = context.monitors.len().min(16);
         for (i, monitor) in context.monitors.into_iter().take(16).enumerate() {
             monitors_array[i] = monitor;
@@ -1595,6 +1711,38 @@ fn send_ipc_response(
             monitors: monitors_array,
             monitor_count: count as u32,
         }
+    }
+
+    /// Determine which monitor a window is primarily on based on its coordinates
+    fn determine_window_monitor(&self, left: i32, top: i32, right: i32, bottom: i32) -> u32 {
+        // Get the center point of the window
+        let center_x = (left + right) / 2;
+        let center_y = (top + bottom) / 2;
+        
+        // Check which monitor contains the center point
+        if let Ok(tracker) = self.tracker.lock() {
+            for (i, monitor_grid) in tracker.monitor_grids.iter().enumerate() {
+                let monitor_rect = monitor_grid.monitor_rect;
+                if center_x >= monitor_rect.left && center_x < monitor_rect.right &&
+                   center_y >= monitor_rect.top && center_y < monitor_rect.bottom {
+                    return i as u32;
+                }
+            }
+        }
+        
+        // Default to monitor 0 if no match found
+        0
+    }
+    
+    /// Get the bounds of a specific monitor
+    fn get_monitor_bounds(&self, monitor_id: u32) -> Option<(i32, i32, i32, i32)> {
+        if let Ok(tracker) = self.tracker.lock() {
+            if let Some(monitor_grid) = tracker.monitor_grids.get(monitor_id as usize) {
+                let rect = monitor_grid.monitor_rect;
+                return Some((rect.left, rect.top, rect.right, rect.bottom));
+            }
+        }
+        None
     }
 }
 

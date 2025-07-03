@@ -7,10 +7,29 @@ use crate::{
     CellState,
 };
 
+#[derive(Clone, Debug, Copy)]
+pub struct MonitorRect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl MonitorRect {
+    pub fn from_rect(rect: RECT) -> Self {
+        Self {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct MonitorGrid {
     pub monitor_id: usize,
-    pub monitor_rect: (i32, i32, i32, i32), // (left, top, right, bottom)
+    pub monitor_rect: MonitorRect,
     pub config: GridConfig,
     pub grid: Vec<Vec<CellState>>,
 }
@@ -19,17 +38,31 @@ impl MonitorGrid {
     pub fn new(monitor_id: usize, monitor_rect: RECT) -> Self {
         Self::new_with_config(monitor_id, monitor_rect, GridConfig::default())
     }
-
+   /// Updates the grid for this monitor based on the provided windows.
+    pub fn update_grid_for_monitor(&mut self, windows: &dashmap::DashMap<u64, crate::window::info::WindowInfo>) {
+        // Clear the grid
+        for row in 0..self.config.rows {
+            for col in 0..self.config.cols {
+                self.grid[row][col] = crate::CellState::Empty;
+            }
+        }
+        // Place windows on the grid
+        for entry in windows.iter() {
+            let window_info = entry.value();
+            let rect = window_info.window_rect.0;
+            let cells = self.window_to_grid_cells(&rect);
+            for (row, col) in cells {
+                if row < self.config.rows && col < self.config.cols {
+                    self.grid[row][col] = crate::CellState::Occupied(window_info.hwnd);
+                }
+            }
+        }
+    }
     pub fn new_with_config(monitor_id: usize, monitor_rect: RECT, config: GridConfig) -> Self {
         let grid = vec![vec![CellState::Empty; config.cols]; config.rows];
         Self {
             monitor_id,
-            monitor_rect: (
-                monitor_rect.left,
-                monitor_rect.top,
-                monitor_rect.right,
-                monitor_rect.bottom,
-            ),
+            monitor_rect: MonitorRect::from_rect(monitor_rect),
             config,
             grid,
         }
@@ -39,15 +72,15 @@ impl MonitorGrid {
         let mut cells = Vec::new();
 
         // Skip windows with invalid coordinates
-        if rect.left < -30000
-            || rect.top < -30000
-            || rect.right < rect.left
-            || rect.bottom < rect.top
+        if rect.right < rect.left || rect.bottom < rect.top
         {
             return cells;
         }
 
-        let (left, top, right, bottom) = self.monitor_rect;
+        let left = self.monitor_rect.left;
+        let top = self.monitor_rect.top;
+        let right = self.monitor_rect.right;
+        let bottom = self.monitor_rect.bottom;
 
         // Check if window intersects with this monitor
         if rect.right <= left || rect.left >= right || rect.bottom <= top || rect.top >= bottom {
@@ -103,7 +136,7 @@ impl MonitorGrid {
         // Place windows on the grid
         for entry in windows {
             let (hwnd, window_info) = entry.pair();
-            let grid_cells = self.window_to_grid_cells(&window_info.rect);
+            let grid_cells = self.window_to_grid_cells(&window_info.window_rect);
             for (row, col) in grid_cells {
                 if row < self.config.rows && col < self.config.cols {
                     self.grid[row][col] = CellState::Occupied(*hwnd);

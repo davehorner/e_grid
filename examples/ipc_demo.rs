@@ -285,9 +285,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tracker_arc = Arc::new(Mutex::new(tracker));
     // Set up IPC manager
     let mut ipc_manager = e_grid::ipc_manager::GridIpcManager::new(tracker_arc.clone())?;
-    ipc_manager.setup_services(
-        true, true, true, true,true, true, true, true, true,
-    )?;
+    ipc_manager.setup_services(true, true, true, true, true, true, true, true, true)?;
     // We can't move IPC manager to background thread due to iceoryx2 Send/Sync constraints
     // Instead, we'll process commands in the main loop with non-blocking input
 

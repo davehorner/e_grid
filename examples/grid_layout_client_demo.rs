@@ -18,7 +18,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create IPC connection
     let node = NodeBuilder::new().create::<iceoryx2::service::ipc::Service>()?;
 
-    
     // Setup command publisher
     let window_command_service = node
         .service_builder(&ServiceName::new(ipc::GRID_WINDOW_COMMANDS_SERVICE)?)
@@ -90,7 +89,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "3" => apply_layout_animated(&mut window_command_publisher)?,
             "4" => animate_specific_window(&mut animation_publisher)?,
             "5" => get_animation_status(&mut animation_publisher)?,
-            "6" => demo_layout_transitions(&mut window_command_publisher, &mut animation_publisher)?,
+            "6" => {
+                demo_layout_transitions(&mut window_command_publisher, &mut animation_publisher)?
+            }
             "7" => stop_all_animations(&mut animation_publisher)?,
             "q" | "Q" => break,
             _ => println!("❌ Invalid choice. Please try again."),
@@ -107,7 +108,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn get_window_list(
-    publisher: &mut Publisher<iceoryx2::service::ipc::Service, e_grid::ipc_protocol::WindowCommand, ()>,
+    publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::WindowCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("📋 Requesting window list from server...");
 
@@ -125,7 +130,11 @@ fn get_window_list(
 }
 
 fn save_current_layout(
-    publisher: &mut Publisher<iceoryx2::service::ipc::Service, e_grid::ipc_protocol::WindowCommand, ()>,
+    publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::WindowCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     print!("💾 Enter layout name to save: ");
     io::stdout().flush()?;
@@ -154,7 +163,11 @@ fn save_current_layout(
 }
 
 fn apply_layout_animated(
-    publisher: &mut Publisher<iceoryx2::service::ipc::Service, e_grid::ipc_protocol::WindowCommand, ()>,
+    publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::WindowCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     print!("🗂️ Enter layout name to apply: ");
     io::stdout().flush()?;
@@ -209,7 +222,11 @@ fn apply_layout_animated(
 }
 
 fn animate_specific_window(
-    publisher: &mut Publisher<iceoryx2::service::ipc::Service, e_grid::ipc_protocol::AnimationCommand, ()>,
+    publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::AnimationCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     print!("🎬 Enter window HWND (decimal): ");
     io::stdout().flush()?;
@@ -279,7 +296,11 @@ fn animate_specific_window(
 }
 
 fn get_animation_status(
-    publisher: &mut Publisher<iceoryx2::service::ipc::Service, e_grid::ipc_protocol::AnimationCommand, ()>,
+    publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::AnimationCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("📊 Requesting animation status for all windows...");
 
@@ -295,8 +316,16 @@ fn get_animation_status(
 }
 
 fn demo_layout_transitions(
-    command_publisher: &mut Publisher<iceoryx2::service::ipc::Service, e_grid::ipc_protocol::WindowCommand, ()>,
-    animation_publisher: &mut Publisher<iceoryx2::service::ipc::Service, e_grid::ipc_protocol::AnimationCommand, ()>,
+    command_publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::WindowCommand,
+        (),
+    >,
+    animation_publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::AnimationCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("🔄 Starting automatic layout transition demo...");
     println!("This will:");
@@ -347,7 +376,11 @@ fn demo_layout_transitions(
 }
 
 fn stop_all_animations(
-    publisher: &mut Publisher<iceoryx2::service::ipc::Service, e_grid::ipc_protocol::AnimationCommand, ()>,
+    publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::AnimationCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("🛑 Stopping all active animations...");
 
@@ -363,7 +396,11 @@ fn stop_all_animations(
 }
 
 fn check_responses(
-    subscriber: &mut Subscriber<iceoryx2::service::ipc::Service, e_grid::ipc_protocol::WindowResponse, ()>,
+    subscriber: &mut Subscriber<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::WindowResponse,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     while let Some(sample) = subscriber.receive()? {
         let response = *sample;

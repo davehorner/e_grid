@@ -2,4 +2,4 @@
 pub mod grid;
 
 // Re-export for convenience
-pub use grid::MonitorGrid;
+// pub use grid::MonitorGrid;
