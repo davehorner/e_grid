@@ -47,8 +47,8 @@ pub use window_events::{cleanup_hooks, setup_window_events, WindowEventConfig};
 
 // Coverage threshold: percentage of cell area that must be covered by window
 // to consider the window as occupying that cell (0.0 to 1.0)
-const COVERAGE_THRESHOLD: f32 = 0.3; // 30% coverage required
-
+pub const COVERAGE_THRESHOLD: f32 = 0.3; // 30% coverage required
+pub const MAX_WINDOW_GRID_CELLS: usize = 64;
 // Animation and Tweening System
 // #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 // pub enum EasingType {
@@ -548,7 +548,7 @@ impl WindowEventSystem {
                 if let Some(rect) = crate::WindowTracker::get_window_rect(hwnd as u64) {
                     let title = crate::WindowTracker::get_window_title(hwnd as u64);
                     let grid_cells = vec![]; // Optionally, call window_to_grid_cells if you have config
-                    let monitor_cells = std::collections::HashMap::new();
+                    let monitor_cells: std::collections::HashMap<usize, Vec<(usize, usize)>> = std::collections::HashMap::new();
                     let process_id =
                         crate::WindowTracker::get_window_process_id(hwnd as u64).unwrap_or(0);
                     let class_name = crate::WindowTracker::get_window_class_name(hwnd as u64);
@@ -556,14 +556,60 @@ impl WindowEventSystem {
                     let is_minimized = crate::WindowTracker::is_window_minimized(hwnd as u64);
                     let window_info = crate::WindowInfo {
                         hwnd: hwnd as u64,
-                        title,
-                        grid_cells,
-                        monitor_cells,
-                        rect,
+                        title: {
+                            let mut title_buf = [0u16; 256];
+                            let utf16: Vec<u16> = title.encode_utf16().collect();
+                            let len = utf16.len().min(256);
+                            title_buf[..len].copy_from_slice(&utf16[..len]);
+                            title_buf
+                        },
+                        title_len: title.len() as u32,
+                        grid_cells: {
+                            let mut arr = [(0usize, 0usize); MAX_WINDOW_GRID_CELLS];
+                            for (i, v) in grid_cells.iter().take(MAX_WINDOW_GRID_CELLS).enumerate() {
+                                arr[i] = *v;
+                            }
+                            arr
+                        },
+                        grid_cells_len: grid_cells.len() as u32,
+                        monitor_ids: {
+                            let mut arr = [0usize; 8];
+                            let ids: Vec<usize> = monitor_cells.keys().cloned().collect();
+                            for (i, id) in ids.iter().take(8).enumerate() {
+                                arr[i] = *id;
+                            }
+                            arr
+                        },
+                        monitor_cells: {
+                            let mut arr = [[(0usize, 0usize); 8]; 8];
+                            for (i, cells) in monitor_cells.iter().enumerate().take(8) {
+                                for (j, cell) in cells.1.iter().take(8).enumerate() {
+                                    arr[i][j] = *cell;
+                                }
+                            }
+                            arr
+                        },
+                        monitor_cells_lens: {
+                            let mut arr = [0u32; 8];
+                            for (i, v) in monitor_cells.values().enumerate().take(8) {
+                                arr[i] = v.len() as u32;
+                            }
+                            arr
+                        },
+                        monitor_cells_len: monitor_cells.len() as u32,
+                        rect: crate::window::info::RectWrapper::from_rect(rect),
                         is_visible,
                         is_minimized,
                         process_id,
-                        class_name,
+                        class_name: {
+                            let mut class_name_buf = [0u16; 256];
+                            let utf16: Vec<u16> = class_name.encode_utf16().collect();
+                            let len = utf16.len().min(256);
+                            class_name_buf[..len].copy_from_slice(&utf16[..len]);
+                            class_name_buf
+                        },
+                        class_name_len: class_name.len() as u32,
+                        z_order: 0, // Set to 0 or appropriate value if available
                     };
                     self.windows.insert(hwnd, window_info);
                 } else {
@@ -637,7 +683,10 @@ impl WindowEventSystem {
                 // Publish to IPC if callback is set
                 if let Some(ref cb) = self.event_callback {
                     use crate::ipc_protocol::GridEvent;
-                    let title = window_info.title.clone();
+                    // Convert [u16; 256] title buffer to String
+                    let title = String::from_utf16_lossy(
+                        &window_info.title[..window_info.title_len as usize]
+                    );
                     let (row, col) = window_info.grid_cells.get(0).cloned().unwrap_or((0, 0));
                     let grid_top_left_row = row;
                     let grid_top_left_col = col;

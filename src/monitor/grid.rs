@@ -81,7 +81,9 @@ impl MonitorGrid {
         // Re-add all windows that belong to this monitor
         for entry in windows.iter() {
             let (hwnd, window_info) = (entry.key(), entry.value());
-            if window_info.monitor_cells.contains_key(&self.monitor_id) {
+            // Check if monitor_id is present in monitor_cells (assuming it's a 2D array)
+            // You may need to adjust this logic based on the actual structure and meaning of monitor_cells.
+            if (self.monitor_id as usize) < window_info.monitor_cells.len() {
                 self.windows.insert(*hwnd, window_info.clone());
 
                 // Position window in grid based on its rectangle

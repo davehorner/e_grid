@@ -525,9 +525,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         thread::sleep(Duration::from_millis(3000));
 
         // Start detached client
-        if let Err(e) = start_detached_client() {
-            println!("⚠️ Failed to start detached client: {}", e);
-        }
+        // if let Err(e) = start_detached_client() {
+        //     println!("⚠️ Failed to start detached client: {}", e);
+        // }
 
         // Wait for server
         server_handle.join().unwrap();

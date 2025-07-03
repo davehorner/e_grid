@@ -1,7 +1,7 @@
 // IPC manager logic for e_grid
 // Contains only the GridIpcManager struct and its implementation.
 
-use crate::ipc_protocol::*;
+use crate::{ipc_protocol::*, MAX_WINDOW_GRID_CELLS};
 use crate::{GridConfig, WindowTracker};
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
@@ -18,6 +18,7 @@ pub struct GridIpcManager {
     node: Option<Node<ipc::Service>>,
     event_publisher: Option<Publisher<ipc::Service, WindowEvent, ()>>,
     command_subscriber: Option<Subscriber<ipc::Service, IpcCommand, ()>>,
+    command_publisher: Option<Publisher<ipc::Service, IpcCommand, ()>>,
     response_publisher: Option<Publisher<ipc::Service, IpcResponse, ()>>,
     window_details_publisher: Option<Publisher<ipc::Service, WindowDetails, ()>>,
     layout_publisher: Option<Publisher<ipc::Service, GridLayoutMessage, ()>>,
@@ -28,6 +29,8 @@ pub struct GridIpcManager {
     animation_subscriber: Option<Subscriber<ipc::Service, AnimationCommand, ()>>,
     animation_status_publisher: Option<Publisher<ipc::Service, AnimationStatus, ()>>,
     heartbeat_publisher: Option<Publisher<ipc::Service, HeartbeatMessage, ()>>,
+    window_list_subscriber: Option<Subscriber<ipc::Service, crate::ipc_protocol::WindowListMessage, ()>>,
+
     is_running: bool,
 }
 
@@ -75,9 +78,30 @@ impl GridIpcManager {
             animation_subscriber: None,
             animation_status_publisher: None,
             heartbeat_publisher: None,
+            command_publisher: None,
+            window_list_subscriber: None,
             is_running: false,
         })
     }
+
+    pub fn send_get_window_list_command(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::ipc_protocol::{IpcCommand, IpcCommandType};
+        let command = IpcCommand {
+            command_type: IpcCommandType::GetWindowList,
+            // ...fill other fields as needed, e.g., protocol_version...
+            ..Default::default()
+        };
+        // There is no command_publisher, but you have response_publisher and event_publisher.
+        // If you want to send a command, you need a command_publisher.
+        // Let's add a command_publisher field to GridIpcManager and initialize it in setup_services.
+
+        if let Some(ref mut publisher) = self.command_publisher {
+            publisher.send_copy(command)?;
+        }
+        Ok(())
+    }
+
+
     /// Setup only the requested IPC services. All booleans default to true for backward compatibility.
     pub fn setup_services(
         &mut self,
@@ -237,7 +261,20 @@ impl GridIpcManager {
                 .open_or_create()?;
             self.heartbeat_publisher = Some(heartbeat_service.publisher_builder().create()?);
         }
-
+if commands {
+    println!(
+        "[IPC DEBUG] Opening command service: {} (IpcCommand)",
+        GRID_COMMANDS_SERVICE
+    );
+    let command_service = node
+        .service_builder(&ServiceName::new(GRID_COMMANDS_SERVICE)?)
+        .publish_subscribe::<IpcCommand>()
+        .max_publishers(8)
+        .max_subscribers(8)
+        .open_or_create()?;
+    self.command_subscriber = Some(command_service.subscriber_builder().create()?);
+    self.command_publisher = Some(command_service.publisher_builder().create()?);
+}
         // Store the node
         self.node = Some(node);
         info!("✅ iceoryx2 IPC services initialized successfully");
@@ -281,6 +318,21 @@ impl GridIpcManager {
         self.is_running = true;
         Ok(())
     }
+
+
+pub fn get_latest_window_list(&mut self) -> Option<WindowListMessage> {
+    if let Some(ref mut subscriber) = self.window_list_subscriber {
+        // Drain all available messages, return the last one (most recent)
+        let mut latest = None;
+        while let Some(sample) = subscriber.receive().ok().flatten() {
+            latest = Some(*sample);
+        }
+        latest
+    } else {
+        None
+    }
+}
+
     pub fn publish_event(&mut self, event: GridEvent) -> Result<(), Box<dyn std::error::Error>> {
         // Convert high-level event to zero-copy format
         let window_event = self.grid_event_to_window_event(&event);
@@ -358,10 +410,10 @@ impl GridIpcManager {
                         // Limit to first 10 for brevity
                         let (hwnd, window) = entry.pair();
                         let title = if window.title.len() > 30 {
-                            format!("{}...", &window.title[..30])
-                        } else {
-                            window.title.clone()
-                        };
+                                                    format!("{}...", String::from_utf16_lossy(&window.title[..30]))
+                                                } else {
+                                                    String::from_utf16_lossy(&window.title)
+                                                };
                         grid_summary.push_str(&format!("  HWND {:?}: {}\n", hwnd, title));
                     }
 
@@ -628,17 +680,17 @@ impl GridIpcManager {
             // Now we can safely modify the window
             if let Some(mut window) = tracker.windows.get_mut(&hwnd) {
                 // Clear existing grid assignments for this window
-                window.grid_cells.clear();
+                window.grid_cells = [(0, 0); MAX_WINDOW_GRID_CELLS];
 
-                // Assign to the new cell
-                window.grid_cells.push((target_row, target_col));
+                // Assign to the new cell (first slot)
+                window.grid_cells[0] = (target_row, target_col);
                 info!(
                     "✅ Assigned window {} '{}' to virtual grid cell ({}, {})",
                     hwnd,
                     if window_title.len() > 30 {
-                        format!("{}...", &window_title[..30])
+                        format!("{}...", String::from_utf16_lossy(&window_title[..30]))
                     } else {
-                        window_title.clone()
+                        String::from_utf16_lossy(&window_title).to_string()
                     },
                     target_row,
                     target_col
@@ -698,7 +750,7 @@ impl GridIpcManager {
             // Publish an event about the assignment
             let event = GridEvent::WindowMoved {
                 hwnd,
-                title: window_title,
+                title: String::from_utf16_lossy(&window_title[..window_title.iter().position(|&c| c == 0).unwrap_or(window_title.len())]),
                 old_row: 0, // We don't track previous assignment currently
                 old_col: 0,
                 new_row: target_row,
@@ -755,19 +807,25 @@ impl GridIpcManager {
             // Now we can safely modify the window
             if let Some(mut window) = tracker.windows.get_mut(&hwnd) {
                 // Clear existing monitor assignments for this window
-                window.monitor_cells.clear();
+                for row in window.monitor_cells.iter_mut() {
+                    for cell in row.iter_mut() {
+                        *cell = (0, 0);
+                    }
+                }
 
                 // Assign to the new monitor cell
-                window
-                    .monitor_cells
-                    .insert(monitor_id, vec![(target_row, target_col)]);
+                if monitor_id < window.monitor_cells.len() {
+                    window.monitor_cells[monitor_id][0] = (target_row, target_col);
+                } else {
+                    warn!("⚠️ Monitor ID {} out of bounds for monitor_cells array", monitor_id);
+                }
                 debug!(
                     "✅ Assigned window {} '{}' to monitor {} grid cell ({}, {})",
                     hwnd,
                     if window_title.len() > 30 {
-                        format!("{}...", &window_title[..30])
+                        format!("{}...", String::from_utf16_lossy(&window_title[..30]))
                     } else {
-                        window_title.clone()
+                        String::from_utf16_lossy(&window_title)
                     },
                     monitor_id,
                     target_row,
@@ -834,7 +892,7 @@ impl GridIpcManager {
             // Publish an event about the assignment
             let event = GridEvent::WindowMoved {
                 hwnd,
-                title: window_title,
+                title: String::from_utf16_lossy(&window_title),
                 old_row: 0, // We don't track previous assignment currently
                 old_col: 0,
                 new_row: target_row,
@@ -1088,6 +1146,8 @@ impl GridIpcManager {
             },
         }
     }
+
+
     fn window_command_to_grid_command(command: &WindowCommand) -> GridCommand {
         match command.command_type {
             0 => GridCommand::MoveWindowToCell {
@@ -1474,7 +1534,7 @@ impl GridIpcManager {
                     // Update the window's rectangle in our tracking
                     if let Some(new_rect) = crate::WindowTracker::get_window_rect(hwnd) {
                         if let Some(mut window) = tracker.windows.get_mut(&hwnd) {
-                            window.rect = new_rect;
+                            window.rect = crate::window::info::RectWrapper::from_rect(new_rect);
                             debug!(
                                 "   📍 Updated window {} rect to ({}, {}) - ({}, {})",
                                 hwnd, new_rect.left, new_rect.top, new_rect.right, new_rect.bottom
@@ -1483,11 +1543,26 @@ impl GridIpcManager {
 
                         // Now recalculate grid cells after releasing the mutable reference
                         let grid_cells = tracker.window_to_grid_cells(&new_rect);
-                        let monitor_cells = tracker.calculate_monitor_cells(&new_rect);
+                        let monitor_cells_map = tracker.calculate_monitor_cells(&new_rect);
                         // Update the window with the new grid assignments
                         if let Some(mut window) = tracker.windows.get_mut(&(hwnd_handle as u64)) {
-                            window.grid_cells = grid_cells;
-                            window.monitor_cells = monitor_cells;
+                            // Convert Vec<(usize, usize)> to [(usize, usize); 16]
+                            let mut arr = [(0usize, 0usize); crate::MAX_WINDOW_GRID_CELLS];
+                            for (i, val) in grid_cells.iter().take(MAX_WINDOW_GRID_CELLS).enumerate() {
+                                arr[i] = *val;
+                            }
+                            window.grid_cells = arr;
+
+                            // Convert HashMap<usize, Vec<(usize, usize)>> to [[(usize, usize); 8]; 8]
+                            let mut monitor_cells_arr = [[(0usize, 0usize); 8]; 8];
+                            for (monitor_idx, cells_vec) in monitor_cells_map.iter() {
+                                if *monitor_idx < 8 {
+                                    for (cell_idx, cell) in cells_vec.iter().take(8).enumerate() {
+                                        monitor_cells_arr[*monitor_idx][cell_idx] = *cell;
+                                    }
+                                }
+                            }
+                            window.monitor_cells = monitor_cells_arr;
 
                             debug!("   🔄 Recalculated grid assignments: {} virtual cells, {} monitor assignments", 
                                 window.grid_cells.len(), window.monitor_cells.len());
@@ -1583,6 +1658,17 @@ impl GridIpcManager {
             monitor_row_end: monitor_end_row,
             monitor_col_end: monitor_end_col,
             title_len: window_info.title.len().min(255) as u32, // Cap at 255 chars
+            title: {
+                let s = String::from_utf16_lossy(&window_info.title)
+                    .chars()
+                    .take(255)
+                    .collect::<String>();
+                let mut arr = [0u8; 256];
+                let bytes = s.as_bytes();
+                let len = bytes.len().min(256);
+                arr[..len].copy_from_slice(&bytes[..len]);
+                arr
+            },
         }
     }
 

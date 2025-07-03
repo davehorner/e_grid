@@ -257,7 +257,7 @@ impl WindowTracker {
 
     /// Add a window to tracking
     pub fn add_window(&mut self, hwnd: HWND, title: String, rect: RECT) {
-        let window_info = WindowInfo::new(hwnd, title, rect);
+        let window_info = WindowInfo::new(hwnd, title.as_str(), rect);
         self.windows.insert(hwnd as u64, window_info);
         self.update_grid();
         self.update_monitor_grids();

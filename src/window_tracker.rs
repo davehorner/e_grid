@@ -15,8 +15,8 @@ use winapi::um::winuser::*;
 use crate::grid::layout::GridLayout;
 use crate::grid::GridConfig;
 use crate::monitor_grid::MonitorGrid;
-use crate::window::info::WindowInfo;
-use crate::window::WindowAnimation;
+use crate::window::info::{RectWrapper, WindowInfo};
+use crate::window::{self, WindowAnimation};
 use crate::{CellState, EasingType, WindowEventCallbackBox};
 
 // Window enumeration callback function
@@ -46,15 +46,40 @@ pub struct WindowTracker {
     pub saved_layouts: DashMap<String, GridLayout>, // Lock-free layouts
     pub event_callbacks: Vec<WindowEventCallbackBox>, // Event callbacks
     pub desktop_hwnds: Vec<u64>,           // Track all desktop (Progman/WorkerW) HWNDs
+    pub last_scan_time: std::sync::Mutex<std::time::Instant>
 }
 
 impl WindowTracker {
     pub fn new() -> Self {
         let mut ret = Self::new_with_config(GridConfig::default());
         ret.find_desktop_hwnds();
+        ret.last_scan_time=std::sync::Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(2));
         ret
     }
+    /// Returns the current grid state in IPC protocol format (GridState)
+    pub fn get_ipc_grid_state(&self) -> crate::ipc_protocol::GridState {
+        crate::ipc_protocol::GridState {
+            rows: self.config.rows as u32,
+            cols: self.config.cols as u32,
+            grid: {
+                let mut arr = [[0u64; 32]; 32];
+                for (i, row) in self.grid.iter().enumerate().take(self.config.rows) {
+                    for (j, cell) in row.iter().enumerate().take(self.config.cols) {
+                        arr[i][j] = match cell {
+                            CellState::Occupied(hwnd) => *hwnd,
+                            _ => 0,
+                        };
+                    }
+                }
+                arr
+            }
+        }
+    }
 
+    /// Returns the current window list in IPC protocol format (Vec<crate::grid::WindowInfo>)
+    pub fn get_ipc_window_list(&self) -> Vec<crate::grid::WindowInfo> {
+        self.windows.iter().map(|entry| entry.value().clone()).collect()
+    }
     pub fn new_with_config(config: GridConfig) -> Self {
         // Get the virtual screen dimensions (all monitors combined)
         let rect = unsafe {
@@ -78,6 +103,8 @@ impl WindowTracker {
             saved_layouts: DashMap::new(),
             event_callbacks: Vec::new(),
             desktop_hwnds: Vec::new(),
+            //nitialize it to "2 seconds ago" so the first call is not throttled.
+            last_scan_time: std::sync::Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(2)),
         };
 
         // Initialize individual monitor grids
@@ -212,21 +239,25 @@ impl WindowTracker {
     pub fn is_manageable_window(hwnd: u64) -> bool {
         unsafe {
             let title = Self::get_window_title(hwnd);
-
-            if IsWindow(hwnd as HWND) == 0 || IsWindowVisible(hwnd as HWND) == 0 {
+            if IsWindow(hwnd as HWND) == 0 {
+                println!("[DEBUG] Skipping hwnd=0x{:X}: not a valid window", hwnd);
                 return false;
             }
-
+            if IsWindowVisible(hwnd as HWND) == 0 {
+                println!("[DEBUG] Skipping hwnd=0x{:X}: not visible", hwnd);
+                return false;
+            }
             // Skip minimized windows
             if IsIconic(hwnd as HWND) != 0 {
+                println!("[DEBUG] Skipping hwnd=0x{:X}: minimized", hwnd);
                 return false;
             }
-
             let ex_style = GetWindowLongW(hwnd as HWND, GWL_EXSTYLE) as u32;
             if (ex_style & WS_EX_TOOLWINDOW) != 0 {
+                println!("[DEBUG] Skipping hwnd=0x{:X}: toolwindow", hwnd);
                 return false;
             }
-
+            println!("[DEBUG] Accepting hwnd=0x{:X}: '{}'", hwnd, title);
             true
         }
     }
@@ -234,12 +265,8 @@ impl WindowTracker {
     pub fn window_to_grid_cells(&self, rect: &RECT) -> Vec<(usize, usize)> {
         let mut cells = Vec::new();
 
-        // Skip windows with invalid coordinates (like minimized windows)
-        if rect.left < -30000
-            || rect.top < -30000
-            || rect.right < rect.left
-            || rect.bottom < rect.top
-        {
+        // Skip windows with invalid rectangle (right must be > left, bottom > top)
+        if rect.right < rect.left || rect.bottom < rect.top {
             return cells;
         }
 
@@ -266,6 +293,15 @@ impl WindowTracker {
         }
 
         // Check coverage for each potentially affected cell
+    let cell_width = (self.monitor_rect.right - self.monitor_rect.left) / self.config.cols as i32;
+    let cell_height = (self.monitor_rect.bottom - self.monitor_rect.top) / self.config.rows as i32;
+    // ...existing code...
+    let start_col = ((rect.left - self.monitor_rect.left) / cell_width).max(0) as usize;
+    let end_col = ((rect.right - self.monitor_rect.left) / cell_width)
+        .min(self.config.cols as i32 - 1) as usize;
+    let start_row = ((rect.top - self.monitor_rect.top) / cell_height).max(0) as usize;
+    let end_row = ((rect.bottom - self.monitor_rect.top) / cell_height)
+        .min(self.config.rows as i32 - 1) as usize;
         for row in start_row..=end_row {
             for col in start_col..=end_col {
                 if row < self.config.rows && col < self.config.cols {
@@ -276,9 +312,9 @@ impl WindowTracker {
                         right: self.monitor_rect.left + ((col + 1) as i32 * cell_width),
                         bottom: self.monitor_rect.top + ((row + 1) as i32 * cell_height),
                     };
-
                     // Only include cell if window meets coverage threshold
                     if crate::util::meets_coverage_threshold(rect, &cell_rect) {
+                        // Push all cells from start to end (full rectangle coverage)
                         cells.push((row, col));
                     }
                 }
@@ -289,39 +325,86 @@ impl WindowTracker {
     }
 
     pub fn update_grid(&mut self) {
-        // Reset grid to initial state (keeping off-screen cells marked)
-        for row in 0..self.config.rows {
-            for col in 0..self.config.cols {
-                match self.grid[row][col] {
-                    CellState::OffScreen => {
-                        // Keep off-screen cells as they are
-                    }
-                    _ => {
-                        // Reset other cells to empty
-                        self.grid[row][col] = CellState::Empty;
-                    }
-                }
-            }
+            // Throttle: only allow once every 2 seconds
+        {
+        let mut last = self.last_scan_time.lock().unwrap();
+        let now = std::time::Instant::now();
+        if now.duration_since(*last) < std::time::Duration::from_secs(2) {
+            // Too soon, skip update
+            return;
         }
+        *last = now;
+        }
+        // Reset grid to initial state (keeping off-screen cells marked)
+        // for row in 0..self.config.rows {
+        //     for col in 0..self.config.cols {
+        //         match self.grid[row][col] {
+        //             CellState::OffScreen => {
+        //                 // Keep off-screen cells as they are
+        //             }
+        //             _ => {
+        //                 // Reset other cells to empty
+        //                 self.grid[row][col] = CellState::Empty;
+        //             }
+        //         }
+        //     }
+        // }
         // Place windows on the grid (only once)
         for entry in &self.windows {
             let (hwnd, window_info) = entry.pair();
             if (*hwnd & 0xFF) == 0x2E {
+                let title = String::from_utf16_lossy(
+                    &window_info.title[..window_info.title_len as usize]
+                );
+                let class_name = String::from_utf16_lossy(
+                    &window_info.class_name[..window_info.class_name_len as usize]
+                );
                 println!(
                     "[DEBUG] HWND ending in 2E: hwnd=0x{:X}, title='{}', class='{}'",
-                    hwnd, window_info.title, window_info.class_name
+                    hwnd, title, class_name
                 );
             }
             // Skip desktop windows for occupancy
             if self.is_desktop_hwnd(*hwnd) {
                 continue;
             }
-            for (row, col) in &window_info.grid_cells {
-                if *row < self.config.rows && *col < self.config.cols {
-                    self.grid[*row][*col] = CellState::Occupied(*hwnd);
+// Instead of iterating all possible cells, use only the valid range based on grid_cells_len
+let grid_cells_len = window_info.grid_cells_len.min(window_info.grid_cells.len() as u32) as usize;
+if grid_cells_len > 0 {
+    // Find the bounding rectangle of the window's grid cells
+    let mut min_row = usize::MAX;
+    let mut max_row = 0;
+    let mut min_col = usize::MAX;
+    let mut max_col = 0;
+    for i in 0..grid_cells_len {
+        let (row, col) = window_info.grid_cells[i];
+        if row < self.config.rows && col < self.config.cols {
+            min_row = min_row.min(row);
+            max_row = max_row.max(row);
+            min_col = min_col.min(col);
+            max_col = max_col.max(col);
+        }
+    }
+    // Set all cells in the bounding rectangle as occupied by this hwnd
+    for row in min_row..=max_row {
+        for col in min_col..=max_col {
+            if row < self.config.rows && col < self.config.cols {
+                match self.grid[row][col] {
+                    CellState::Occupied(existing_hwnd) if existing_hwnd == *hwnd => {
+                        // Already occupied by this hwnd, skip debug print
+                    }
+                    _ => {
+                        println!("[DEBUG] Occupying cell: ({}, {}) with hwnd=0x{:X}", row, col, hwnd);
+                        self.grid[row][col] = CellState::Occupied(*hwnd);
+                    }
                 }
             }
         }
+    }
+}
+        }
+        // Print grid after update
+        self.print_grid();
     }
 
     /// Get the primary monitor rectangle for window positioning
@@ -418,10 +501,19 @@ impl WindowTracker {
 
     pub fn add_window(&mut self, hwnd: u64) -> bool {
         if self.is_desktop_hwnd(hwnd) {
+            println!("[DEBUG] Skipping hwnd=0x{:X}: is desktop window", hwnd);
             return false;
         }
         if let Some(rect) = Self::get_window_rect(hwnd) {
-            let title = Self::get_window_title(hwnd);
+            let mut title_buf = [0u16; 256];
+            let title_len = unsafe {
+                GetWindowTextW(hwnd as HWND, title_buf.as_mut_ptr(), title_buf.len() as i32)
+            };
+            let title = if title_len > 0 {
+                String::from_utf16_lossy(&title_buf[..title_len as usize])
+            } else {
+                String::new()
+            };
             let grid_cells = self.window_to_grid_cells(&rect);
             let monitor_cells = self.calculate_monitor_cells(&rect);
 
@@ -445,17 +537,55 @@ impl WindowTracker {
             } else {
                 String::new()
             };
+            println!("[DEBUG] Adding window: hwnd=0x{:X}, title='{}', class='{}', rect=({}, {}, {}, {})", hwnd, title, class_name, rect.left, rect.top, rect.right, rect.bottom);
 
             let window_info = WindowInfo {
                 hwnd,
-                title,
-                grid_cells,
-                monitor_cells,
-                rect,
+                title: title_buf,
+                title_len: title_len as u32,
+                grid_cells: {
+                    let mut arr = [(0, 0); crate::MAX_WINDOW_GRID_CELLS];
+                    for (i, cell) in grid_cells.iter().enumerate().take(crate::MAX_WINDOW_GRID_CELLS) {
+                        arr[i] = *cell;
+                    }
+                    arr
+                },
+                grid_cells_len: grid_cells.len() as u32,
+                monitor_ids: {
+                    let mut arr = [0usize; 8];
+                    for (i, id) in monitor_cells.keys().cloned().enumerate().take(8) {
+                        arr[i] = id;
+                    }
+                    arr
+                },
+                monitor_cells: {
+                    let mut arr = [[(0, 0); 8]; 8];
+                    for (monitor_id, cells) in monitor_cells.iter() {
+                        for (i, cell) in cells.iter().enumerate().take(8) {
+                            if *monitor_id < 8 {
+                                arr[*monitor_id][i] = *cell;
+                            }
+                        }
+                    }
+                    arr
+                },
+                monitor_cells_lens: {
+                    let mut arr = [0u32; 8];
+                    for (monitor_id, cells) in monitor_cells.iter() {
+                        if *monitor_id < 8 {
+                            arr[*monitor_id] = cells.len() as u32;
+                        }
+                    }
+                    arr
+                },
+                monitor_cells_len: monitor_cells.len() as u32,
+                z_order: crate::util::get_hwnd_z_order_map().get(&hwnd).copied().unwrap_or(0) as u32,
+                rect: RectWrapper::from_rect(rect),
                 is_visible,
                 is_minimized,
                 process_id,
-                class_name,
+                class_name: class_name_buf,
+                class_name_len: class_name.len() as u32,
             };
 
             self.windows.insert(hwnd, window_info.clone());
@@ -467,6 +597,7 @@ impl WindowTracker {
 
             return true;
         }
+        println!("[DEBUG] Skipping hwnd=0x{:X}: could not get rect", hwnd);
         false
     }
 
@@ -490,9 +621,22 @@ impl WindowTracker {
 
             // Update the window info
             let updated = if let Some(mut window_entry) = self.windows.get_mut(&hwnd) {
-                window_entry.rect = rect;
-                window_entry.grid_cells = grid_cells;
-                window_entry.monitor_cells = monitor_cells;
+                window_entry.rect = RectWrapper::from_rect(rect);
+                let mut arr = [(0, 0); crate::MAX_WINDOW_GRID_CELLS];
+                for (i, cell) in grid_cells.iter().enumerate().take(crate::MAX_WINDOW_GRID_CELLS) {
+                    arr[i] = *cell;
+                }
+                window_entry.grid_cells = arr;
+                // Convert HashMap<usize, Vec<(usize, usize)>> to [[(usize, usize); 8]; 8]
+                let mut arr = [[(0, 0); 8]; 8];
+                for (monitor_id, cells) in monitor_cells.iter() {
+                    for (i, cell) in cells.iter().enumerate().take(8) {
+                        if *monitor_id < 8 {
+                            arr[*monitor_id][i] = *cell;
+                        }
+                    }
+                }
+                window_entry.monitor_cells = arr;
                 true
             } else {
                 false
@@ -621,16 +765,35 @@ impl WindowTracker {
 
             // Count windows on this monitor
             let mut windows_on_monitor = 0;
+            let mut printed_windows = 0;
             for entry in &self.windows {
-                let (_, window_info) = entry.pair();
-                if window_info
-                    .monitor_cells
-                    .contains_key(&monitor_grid.monitor_id)
-                {
-                    windows_on_monitor += 1;
-                }
+    let (hwnd, window_info) = entry.pair();
+    // Print grid cell info for each window
+if window_info.grid_cells_len > 0 {
+    let (start_row, start_col) = window_info.grid_cells[0];
+    let grid_cells_len = window_info.grid_cells_len.min(window_info.grid_cells.len() as u32) as usize;
+if grid_cells_len > 0 {
+    let (start_row, start_col) = window_info.grid_cells[0];
+    let (end_row, end_col) = window_info.grid_cells[grid_cells_len - 1];
+    println!(
+        "Window HWND: 0x{:X}  start_row: {} start_col: {}  end_row: {} end_col: {} (cells: {})",
+        hwnd, start_row, start_col, end_row, end_col, window_info.grid_cells_len
+    );
+}
+} else {
+    println!(
+        "Window HWND: 0x{:X}  (no grid cells assigned)",
+        hwnd
+    );
+}
             }
-            println!("Windows on this monitor: {}", windows_on_monitor);
+            if windows_on_monitor > 100 {
+                println!("    ... and {} more windows", windows_on_monitor - 100);
+            }
+            println!(
+                "Windows on this monitor: {}",
+                windows_on_monitor
+            );
             println!(
                 "Grid size: {} rows x {} cols ({} cells)",
                 monitor_grid.config.rows,
@@ -650,9 +813,9 @@ impl WindowTracker {
             println!();
 
             // Print grid rows
-            for row in 0..monitor_grid.config.rows {
+            for row in 0..monitor_grid.config.rows.min(32) {
                 print!("{:2} ", row);
-                for col in 0..monitor_grid.config.cols {
+                for col in 0..monitor_grid.config.cols.min(32) {
                     match monitor_grid.grid[row][col] {
                         CellState::Occupied(_hwnd) => {
                             // Print the last two hex digits of the hwnd for visual distinction
@@ -661,9 +824,8 @@ impl WindowTracker {
                             let mut topmost_z: Option<usize> = None;
                             for entry in &self.windows {
                                 let (hwnd, window_info) = entry.pair();
-                                if let Some(cells) =
-                                    window_info.monitor_cells.get(&monitor_grid.monitor_id)
-                                {
+                                if monitor_grid.monitor_id < window_info.monitor_cells.len() {
+                                    let cells = &window_info.monitor_cells[monitor_grid.monitor_id];
                                     if cells.contains(&(row, col)) {
                                         if let Some(&z) = z_map.get(hwnd) {
                                             if topmost_z.map_or(true, |tz| z < tz) {
@@ -703,7 +865,16 @@ impl WindowTracker {
 
         // Initialize grid with off-screen areas marked
         self.initialize_grid();
-
+    // Throttle: only allow once every 2 seconds
+    {
+        let mut last = self.last_scan_time.lock().unwrap();
+        let now = std::time::Instant::now();
+        if now.duration_since(*last) < std::time::Duration::from_secs(2) {
+            // Too soon, skip scan
+            return;
+        }
+        *last = now;
+    }
         self.enum_counter.store(0, Ordering::SeqCst); // Reset counter
         unsafe {
             let result = EnumWindows(Some(enum_windows_proc), self as *mut _ as LPARAM);
@@ -821,7 +992,7 @@ impl WindowTracker {
         easing: EasingType,
     ) -> Result<(), String> {
         if let Some(current_rect) = Self::get_window_rect(hwnd) {
-            let animation = WindowAnimation::new(hwnd, current_rect, target_rect, duration, easing);
+            let animation = WindowAnimation::new(hwnd, window::info::RectWrapper(current_rect), window::info::RectWrapper(target_rect), duration, easing.clone());
             self.active_animations.insert(hwnd, animation);
             println!(
                 "🎬 Started animation for window {:?}: {} -> {} over {:?}",
@@ -1116,8 +1287,11 @@ impl WindowTracker {
 
         // Update the window info if it exists
         if let Some(mut window_entry) = self.windows.get_mut(&hwnd) {
-            window_entry.grid_cells.clear();
-            window_entry.grid_cells.push((target_row, target_col));
+            window_entry.grid_cells = {
+                let mut arr = [(0, 0); crate::MAX_WINDOW_GRID_CELLS];
+                arr[0] = (target_row, target_col);
+                arr
+            };
         }
 
         Ok(())
@@ -1160,8 +1334,11 @@ impl WindowTracker {
 
         // Update the window info if it exists
         if let Some(mut window_entry) = self.windows.get_mut(&hwnd) {
-            let cells = vec![(target_row, target_col)];
-            window_entry.monitor_cells.insert(monitor_id, cells);
+            let mut arr = [(0, 0); 8];
+            arr[0] = (target_row, target_col);
+            if monitor_id < window_entry.monitor_cells.len() {
+                window_entry.monitor_cells[monitor_id] = arr;
+            }
         }
 
         Ok(())

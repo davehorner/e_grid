@@ -124,35 +124,28 @@ pub fn display_monitor_grids(
             "  Monitor {} (ID: {}): {}x{} at ({}, {})",
             i, monitor.id, monitor.width, monitor.height, monitor.x, monitor.y
         );
-        // Convert monitor grid to CellState format for display
-        let server_monitor_grid: Vec<Vec<CellState>> = monitor
-            .grid
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|&cell| match cell {
-                        Some(hwnd) => CellState::Occupied(hwnd),
-                        None => CellState::Empty,
-                    })
-                    .collect()
-            })
-            .collect();
+ let monitor_title = format!("Monitor {} Grid", monitor.id);
+let monitor_bounds = (
+    (monitor.x, monitor.y),
+    (monitor.x + monitor.width, monitor.y + monitor.height),
+);
 
-        let monitor_title = format!("Monitor {} Grid", monitor.id);
-        let monitor_bounds = (
-            (monitor.x, monitor.y),
-            (monitor.x + monitor.width, monitor.y + monitor.height),
-        );
-
-        display_grid(
-            &server_monitor_grid,
-            config,
-            0, // Monitor grids don't track window count separately
-            display_config,
-            Some(&monitor_title),
-            Some((monitor.width, monitor.height)),
-            Some(monitor_bounds),
-        );
+display_grid(
+    &monitor.grid.iter().map(|row| {
+        row.iter().map(|&cell| {
+            match cell {
+                Some(hwnd) => CellState::Occupied(hwnd),
+                None => CellState::Empty,
+            }
+        }).collect::<Vec<_>>()
+    }).collect::<Vec<_>>(),
+    config,
+    0,
+    display_config,
+    Some(&monitor_title),
+    Some((monitor.width, monitor.height)),
+    Some(monitor_bounds),
+);
         println!();
     }
 }

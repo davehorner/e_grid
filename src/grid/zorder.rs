@@ -6,6 +6,7 @@ use crate::display::format_hwnd_display;
 use crate::grid::traits::{
     CellDisplay, GridError, GridResult, GridTrait, ZOrderGrid as ZOrderGridTrait,
 };
+use crate::window::info::RectWrapper;
 use crate::window::{WindowInfo, WindowTracker};
 use std::collections::{BTreeMap, HashMap};
 use winapi::shared::windef::{HWND, RECT};
@@ -287,10 +288,13 @@ impl ZOrderGrid {
 
                         for (i, window) in sorted_windows.iter().enumerate() {
                             let title = self
-                                .windows
-                                .get(&window.hwnd)
-                                .map(|w| w.title.as_str())
-                                .unwrap_or("Unknown");
+                                                            .windows
+                                                            .get(&window.hwnd)
+                                                            .map(|w| {
+                                                                let nul_pos = w.title.iter().position(|&c| c == 0).unwrap_or(w.title.len());
+                                                                String::from_utf16_lossy(&w.title[..nul_pos])
+                                                            })
+                                                            .unwrap_or_else(|| "Unknown".to_string());
 
                             println!(
                                 "  Layer {}: HWND {:?} - {} (Coverage: {:.1}%, Visible: {:.1}%) {}",
@@ -299,7 +303,7 @@ impl ZOrderGrid {
                                 if title.len() > 20 {
                                     &title[..20]
                                 } else {
-                                    title
+                                    &title
                                 },
                                 window.coverage * 100.0,
                                 window.visibility_percentage * 100.0,
@@ -350,9 +354,9 @@ impl GridTrait for ZOrderGrid {
             };
             if unsafe { GetWindowRect(hwnd as HWND, &mut current_rect) } != 0 {
                 let updated_info = WindowInfo {
-                    rect: current_rect,
-                    ..window_info
-                };
+                                    rect: RectWrapper(current_rect),
+                                    ..window_info
+                                };
 
                 // Use a default monitor bounds - this should be provided by the caller
                 let monitor_bounds = (0, 0, 1920, 1080); // TODO: Get actual monitor bounds

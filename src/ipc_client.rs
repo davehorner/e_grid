@@ -79,7 +79,7 @@ pub struct GridClient {
 
     // IPC components - only keep what we need for sending commands
     command_publisher: Publisher<Service, IpcCommand, ()>,
-
+    window_list_subscriber: Option<Subscriber<Service, crate::ipc_protocol::WindowListMessage, ()>>,
     // Local grid state
     windows: Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
     virtual_grid: Arc<Mutex<Vec<Vec<ClientCellState>>>>,
@@ -131,6 +131,14 @@ impl GridClient {
         )?;
         *cb_lock = Some(Box::new(callback));
         Ok(())
+    }
+
+    /// Returns a clone of the current virtual grid state for debugging and inspection
+    pub fn get_current_grid(&self) -> Result<Vec<Vec<ClientCellState>>, String> {
+        match self.virtual_grid.try_lock() {
+            Ok(grid) => Ok(grid.clone()),
+            Err(_) => Err("Failed to acquire lock on virtual_grid".to_string()),
+        }
     }
 
     pub fn set_move_resize_stop_callback<F>(&mut self, callback: F) -> GridClientResult<()>
@@ -188,6 +196,28 @@ impl GridClient {
             ))
         })?; // First, get the grid configuration from the server
         let config = Self::request_grid_config_from_server()?;
+        let window_list_service = node
+            .service_builder(&ServiceName::new(crate::ipc_protocol::GRID_WINDOW_LIST_SERVICE).map_err(|e| {
+                    GridClientError::IpcError(format!(
+                        "Failed to create window list service: {:?} Check/delete: C:\\Temp\\iceoryx2",
+                        e
+                    ))
+                })?)
+            .publish_subscribe::<crate::ipc_protocol::WindowListMessage>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create().map_err(|e| {
+                    GridClientError::IpcError(format!(
+                        "Failed to create window list service: {:?} Check/delete: C:\\Temp\\iceoryx2",
+                        e
+                    ))
+                })?;
+        let window_list_subscriber = Some(window_list_service.subscriber_builder().create().map_err(|e| {
+                    GridClientError::IpcError(format!(
+                        "Failed to create window list subscriber: {:?} Check/delete: C:\\Temp\\iceoryx2",
+                        e
+                    ))
+                })?);
 
         // Now initialize with the dynamic config
         let virtual_grid = vec![vec![ClientCellState::Empty; config.cols]; config.rows];
@@ -203,6 +233,7 @@ impl GridClient {
             window_event_callback: Arc::new(Mutex::new(None)),
             move_resize_start_callback: Arc::new(Mutex::new(None)),
             move_resize_stop_callback: Arc::new(Mutex::new(None)),
+            window_list_subscriber,
         };
 
         info!(
@@ -214,9 +245,151 @@ impl GridClient {
         client.initialize_client_grid().map_err(|e| {
             GridClientError::InitializationError(format!("Grid initialization failed: {}", e))
         })?;
-
         Ok(client)
     }
+
+    pub fn get_latest_window_list(&mut self) -> Option<crate::ipc_protocol::WindowListMessage> {
+        println!("[DEBUG] Checking for latest window list update...");
+    if let Some(ref mut subscriber) = self.window_list_subscriber {
+        while let Some(sample) = subscriber.receive().ok().flatten() {
+            println!(
+                "[DEBUG] Received WindowListMessage: {} windows",
+                sample.windows.len()
+            );
+            return Some(*sample);
+        }
+    }
+    None
+}
+
+
+    /// Rebuilds the virtual and physical (monitor) grids from a WindowListMessage
+    pub fn rebuild_grids_from_window_list(&mut self, window_list: &crate::ipc_protocol::WindowListMessage) {
+        // Clear current state
+        if let Ok(mut grid) = self.virtual_grid.lock() {
+            for row in 0..self.config.rows {
+                for col in 0..self.config.cols {
+                    grid[row][col] = ClientCellState::Empty;
+                }
+            }
+        }
+        if let Ok(mut windows) = self.windows.lock() {
+            windows.clear();
+        }
+        if let Ok(mut monitors) = self.monitors.lock() {
+            monitors.clear();
+                // Rebuild monitor list from WindowListMessage if present
+    for i in 0..window_list.monitor_count as usize {
+        let m = &window_list.monitors[i];
+        monitors.push(MonitorGridInfo { 
+            monitor_id: m.id,
+            width: m.width,
+            height: m.height,
+            x: m.x,
+            y: m.y,
+            grid: vec![vec![None; self.config.cols]; self.config.rows],
+        });
+    }
+        }
+        // Re-populate from window list
+        for i in 0..window_list.window_count as usize {
+            let w = &window_list.windows[i];
+            let info = ClientWindowInfo::from(*w);
+            if let Ok(mut windows) = self.windows.lock() {
+                windows.insert(w.hwnd, info);
+            }
+            // Update virtual grid
+            if let Ok(mut grid) = self.virtual_grid.lock() {
+                for row in w.virtual_row_start..=w.virtual_row_end {
+                    for col in w.virtual_col_start..=w.virtual_col_end {
+                        if row < self.config.rows as u32 && col < self.config.cols as u32 {
+                            grid[row as usize][col as usize] = ClientCellState::Occupied(w.hwnd);
+                        }
+                    }
+                }
+            }
+            // Update monitor grid
+            if let Ok(mut monitors) = self.monitors.lock() {
+                if (w.monitor_id as usize) < monitors.len() {
+                    let monitor = &mut monitors[w.monitor_id as usize];
+                    for row in w.monitor_row_start..=w.monitor_row_end {
+                        for col in w.monitor_col_start..=w.monitor_col_end {
+                            if row < self.config.rows as u32 && col < self.config.cols as u32 {
+                                monitor.grid[row as usize][col as usize] = Some(w.hwnd);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Print the current virtual grid (all windows, all monitors combined)
+    pub fn print_virtual_grid(&self) {
+        let window_count = match self.windows.try_lock() {
+            Ok(windows_lock) => windows_lock.len(),
+            Err(_) => 0,
+        };
+        if let Ok(grid) = self.virtual_grid.try_lock() {
+            let server_grid: Vec<Vec<crate::CellState>> = grid
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|cell| match cell {
+                            ClientCellState::Empty => crate::CellState::Empty,
+                            ClientCellState::Occupied(hwnd) => crate::CellState::Occupied(*hwnd as u64),
+                            ClientCellState::OffScreen => crate::CellState::OffScreen,
+                        })
+                        .collect()
+                })
+                .collect();
+            println!("\n🔥 VIRTUAL GRID:");
+            crate::grid_display::display_grid(
+                &server_grid,
+                &self.config,
+                window_count,
+                &crate::grid_display::GridDisplayConfig::default(),
+                Some("Virtual Grid"),
+                None,
+                None,
+            );
+        }
+    }
+
+    /// Print all physical (per-monitor) grids
+    pub fn print_physical_grids(&self) {
+        if let Ok(monitors_lock) = self.monitors.try_lock() {
+            if monitors_lock.is_empty() {
+                println!("(No monitor grids available)");
+                return;
+            }
+            for monitor in monitors_lock.iter() {
+                let mut server_monitor_grid = vec![vec![crate::CellState::Empty; self.config.cols]; self.config.rows];
+                for row in 0..self.config.rows {
+                    for col in 0..self.config.cols {
+                        server_monitor_grid[row][col] = match monitor.grid[row][col] {
+                            Some(hwnd) => crate::CellState::Occupied(hwnd),
+                            None => crate::CellState::Empty,
+                        };
+                    }
+                }
+                let monitor_title = format!("Monitor {} Grid", monitor.monitor_id);
+                crate::grid_display::display_grid(
+                    &server_monitor_grid,
+                    &self.config,
+                    0,
+                    &crate::grid_display::GridDisplayConfig::default(),
+                    Some(&monitor_title),
+                    Some((monitor.width, monitor.height)),
+                    None,
+                );
+            }
+        } else {
+            println!("(Monitor grids locked, cannot display)");
+        }
+    }
+
+
 
     pub fn request_grid_config(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let command = IpcCommand {
@@ -527,17 +700,27 @@ impl GridClient {
             while let Some(response_sample) = response_subscriber.receive().unwrap_or(None) {
                 let response = (*response_sample).clone();
                 had_activity = true;
-                if let Some(monitor_list) = response.monitor_list {
+                // Handle monitor_list as a fixed-size array, using monitor_count
+                if let monitor_list= &response.monitor_list {
                     if let Ok(mut monitors_lock) = monitors.lock() {
                         monitors_lock.clear();
-                        for m in monitor_list.monitors {
+                        for i in 0..monitor_list.monitor_count as usize {
+                            let m = &monitor_list.monitors[i];
                             monitors_lock.push(MonitorGridInfo {
                                 monitor_id: m.id,
                                 width: m.width,
                                 height: m.height,
                                 x: m.x,
                                 y: m.y,
-                                grid: m.grid,
+                                grid: m
+                                    .grid
+                                    .iter()
+                                    .map(|row| {
+                                        row.iter()
+                                            .map(|&cell| if cell == 0 { None } else { Some(cell) })
+                                            .collect::<Vec<Option<u64>>>()
+                                    })
+                                    .collect::<Vec<Vec<Option<u64>>>>(),
                             });
                         }
                         debug!(

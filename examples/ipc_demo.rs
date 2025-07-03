@@ -1,4 +1,4 @@
-use e_grid::{ipc, window_events, WindowTracker};
+use e_grid::{ipc, ipc_protocol, window_events, WindowTracker};
 use iceoryx2::prelude::*;
 use std::env;
 use std::io::{self, Write};
@@ -23,13 +23,13 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     // Subscribe to responses
     let response_service = node
         .service_builder(&ServiceName::new(ipc::GRID_RESPONSE_SERVICE)?)
-        .publish_subscribe::<ipc::WindowResponse>()
+        .publish_subscribe::<ipc_protocol::WindowResponse>()
         .open()?;
     let response_subscriber = response_service.subscriber_builder().create()?;
     // Subscribe to individual window details
     let window_details_service = node
         .service_builder(&ServiceName::new(ipc::GRID_WINDOW_DETAILS_SERVICE)?)
-        .publish_subscribe::<ipc::WindowDetails>()
+        .publish_subscribe::<ipc_protocol::WindowDetails>()
         .open()?;
 
     let window_details_subscriber = window_details_service.subscriber_builder().create()?;
@@ -37,7 +37,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     // Create command publisher
     let command_service = node
         .service_builder(&ServiceName::new(ipc::GRID_COMMANDS_SERVICE)?)
-        .publish_subscribe::<ipc::WindowCommand>()
+        .publish_subscribe::<ipc_protocol::WindowCommand>()
         .open()?;
 
     let command_publisher = command_service.publisher_builder().create()?;
@@ -87,7 +87,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                     io::stdin().read_line(&mut col_input)?;
                     let col: u32 = col_input.trim().parse().unwrap_or(0);
 
-                    let command = ipc::WindowCommand {
+                    let command = ipc_protocol::WindowCommand {
                         command_type: 5, // AssignToVirtualCell
                         hwnd,
                         target_row: row,
@@ -128,7 +128,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                     io::stdin().read_line(&mut col_input)?;
                     let col: u32 = col_input.trim().parse().unwrap_or(0);
 
-                    let command = ipc::WindowCommand {
+                    let command = ipc_protocol::WindowCommand {
                         command_type: 6, // AssignToMonitorCell
                         hwnd,
                         target_row: row,
@@ -149,7 +149,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "list" | "w" => {
-                let command = ipc::WindowCommand {
+                let command = ipc_protocol::WindowCommand {
                     command_type: 2, // GetWindowList
                     hwnd: 0,
                     target_row: 0,
@@ -194,7 +194,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "grid" => {
-                let command = ipc::WindowCommand {
+                let command = ipc_protocol::WindowCommand {
                     command_type: 1, // GetGridState
                     hwnd: 0,
                     target_row: 0,
@@ -284,8 +284,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tracker_arc = Arc::new(Mutex::new(tracker));
     // Set up IPC manager
-    let mut ipc_manager = ipc::GridIpcManager::new(tracker_arc.clone())?;
-    ipc_manager.setup_services()?;
+    let mut ipc_manager = e_grid::ipc_manager::GridIpcManager::new(tracker_arc.clone())?;
+    ipc_manager.setup_services(
+        true, true, true, true,true, true, true, true, true,
+    )?;
     // We can't move IPC manager to background thread due to iceoryx2 Send/Sync constraints
     // Instead, we'll process commands in the main loop with non-blocking input
 
@@ -351,7 +353,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "e" | "event" => {
                     // Demo IPC event publishing
-                    let event = ipc::GridEvent::GridStateChanged {
+                    let event = ipc_protocol::GridEvent::GridStateChanged {
                         timestamp: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap()

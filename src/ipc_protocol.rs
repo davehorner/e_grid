@@ -5,6 +5,10 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 // Add ZeroCopySend and repr(C) for iceoryx2 compatibility
 use iceoryx2::prelude::ZeroCopySend;
+use heapless::Vec as HeaplessVec;
+
+use crate::WindowInfo;
+pub const MAX_WINDOWS: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(C)]
@@ -33,6 +37,22 @@ pub struct IpcCommand {
     pub easing_type: Option<u8>,
     pub protocol_version: u32,
 }
+
+impl Default for IpcCommand {
+    fn default() -> Self {
+        Self {
+            command_type: IpcCommandType::GetGridState,
+            hwnd: None,
+            target_row: None,
+            target_col: None,
+            monitor_id: None,
+            layout_id: None,
+            animation_duration_ms: None,
+            easing_type: None,
+            protocol_version: 1,
+        }
+    }
+}
 unsafe impl ZeroCopySend for IpcCommand {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,27 +65,71 @@ pub enum IpcResponseType {
     Error,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[repr(C)]
 pub struct IpcResponse {
     pub response_type: IpcResponseType,
-    pub grid_state: Option<GridState>,
-    pub monitor_list: Option<MonitorList>,
-    pub window_list: Option<Vec<crate::grid::WindowInfo>>,
-    pub error_message: Option<String>,
+
+    pub has_grid_state: u8,
+    pub grid_state: GridState, // Must be C-compatible
+
+    pub has_monitor_list: u8,
+    pub monitor_list: MonitorList, // Must be C-compatible
+
+    pub window_count: u32,
+    pub window_list: Box<[WindowInfo; MAX_WINDOWS]>, // C-compatible, MAX_WINDOWS = const
+
+    pub has_error_message: u8,
+    pub error_message_len: u32,
+    pub error_message: [u8; 256], // C-compatible string
+
     pub protocol_version: u32,
 }
 unsafe impl ZeroCopySend for IpcResponse {}
 
+impl core::fmt::Debug for IpcResponse {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "IpcResponse {{ response_type: {:?}, ... }}", self.response_type)
+    }
+}
+impl core::fmt::Debug for GridState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "GridState {{ rows: {}, cols: {}, ... }}", self.rows, self.cols)
+    }
+}
+impl core::fmt::Debug for MonitorList {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(f, "MonitorList {{ monitor_count: {}, ... }}", self.monitor_count)
+        }
+}
+
 // // Dummy types for illustration; replace with real ones from your codebase
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GridState;
+pub const GRIDSTATE_MAX_ROWS: usize = 32;
+pub const GRIDSTATE_MAX_COLS: usize = 32;
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(C)]
+pub struct GridState {
+    pub rows: u32,
+    pub cols: u32,
+    pub grid: [[u64; GRIDSTATE_MAX_COLS]; GRIDSTATE_MAX_ROWS], // 0 means empty cell
+}
+
+impl Default for GridState {
+    fn default() -> Self {
+        Self {
+            rows: 0,
+            cols: 0,
+            grid: [[0; GRIDSTATE_MAX_COLS]; GRIDSTATE_MAX_ROWS],
+        }
+    }
+}
 // #[derive(Debug, Clone, Serialize, Deserialize)]
 // pub struct MonitorInfo;
 // #[derive(Debug, Clone, Serialize, Deserialize)]
 // pub struct WindowInfo;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub enum GridType {
     Physical,
@@ -73,7 +137,11 @@ pub enum GridType {
     Dynamic,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+const MAX_ROWS: usize = 32;
+const MAX_COLS: usize = 32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub struct MonitorGridInfo {
     pub id: u32,
     pub grid_type: GridType,
@@ -83,16 +151,60 @@ pub struct MonitorGridInfo {
     pub y: i32,
     pub rows: u32,
     pub cols: u32,
-    pub name: Option<String>,
-    pub grid: Vec<Vec<Option<u64>>>, // Grid of window handles
+    pub name_len: u32,
+    pub name: [u8; 64], // Fixed-size array for name
+    pub grid: [[u64; MAX_COLS]; MAX_ROWS], // 0 means empty cell
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl Default for MonitorGridInfo {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            grid_type: GridType::Physical,
+            width: 0,
+            height: 0,
+            x: 0,
+            y: 0,
+            rows: 0,
+            cols: 0,
+            name_len: 0,
+            name: [0; 64],
+            grid: [[0; MAX_COLS]; MAX_ROWS],
+        }
+    }
+}
+
+const MAX_MONITORS: usize = 16;
+
+#[derive(Clone, Copy)]
+#[repr(C)]
 pub struct MonitorList {
-    pub monitors: Vec<MonitorGridInfo>, // 0..N = physical, N+1 = virtual, N+2+ = dynamic
+    pub monitor_count: u32,
+    pub monitors: [MonitorGridInfo; MAX_MONITORS], // 0..N = physical, N+1 = virtual, N+2+ = dynamic
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl Default for MonitorList {
+    fn default() -> Self {
+        Self {
+            monitor_count: 0,
+            monitors: [MonitorGridInfo {
+                id: 0,
+                grid_type: GridType::Physical,
+                width: 0,
+                height: 0,
+                x: 0,
+                y: 0,
+                rows: 0,
+                cols: 0,
+                name_len: 0,
+                name: [0; 64],
+                grid: [[0; MAX_COLS]; MAX_ROWS],
+            }; MAX_MONITORS],
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ClientGridRequest {
     pub monitor_id: u32,
     pub rows: u32,
@@ -105,6 +217,7 @@ pub struct ClientGridRequest {
 pub const GRID_EVENTS_SERVICE: &str = "e_grid_events";
 pub const GRID_COMMANDS_SERVICE: &str = "e_grid_commands";
 pub const GRID_RESPONSE_SERVICE: &str = "e_grid_responses";
+pub const GRID_WINDOW_COMMANDS_SERVICE: &str = "e_grid_window_commands";
 pub const GRID_WINDOW_LIST_SERVICE: &str = "e_grid_window_list"; // Deprecated - chunked approach
 pub const GRID_WINDOW_DETAILS_SERVICE: &str = "e_grid_window_details"; // Individual window details
 pub const GRID_LAYOUT_SERVICE: &str = "e_grid_layouts"; // Grid layout transfer
@@ -113,81 +226,7 @@ pub const ANIMATION_COMMANDS_SERVICE: &str = "e_grid_animations"; // Animation c
 pub const ANIMATION_STATUS_SERVICE: &str = "e_grid_animation_status"; // Animation status updates
 pub const GRID_FOCUS_EVENTS_SERVICE: &str = "e_grid_focus_events"; // Window focus/defocus events
 pub const GRID_HEARTBEAT_SERVICE: &str = "e_grid_heartbeat"; // Server heartbeat messages
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json;
-
-    #[test]
-    fn test_monitor_grid_info_serialization() {
-        let info = MonitorGridInfo {
-            id: 1,
-            grid_type: GridType::Physical,
-            width: 1920,
-            height: 1080,
-            x: 0,
-            y: 0,
-            rows: 8,
-            cols: 12,
-            name: Some("Primary".to_string()),
-            grid: vec![vec![Some(123), None], vec![None, Some(456)]],
-        };
-        let json = serde_json::to_string(&info).unwrap();
-        let de: MonitorGridInfo = serde_json::from_str(&json).unwrap();
-        assert_eq!(info.id, de.id);
-        assert_eq!(info.grid_type, de.grid_type);
-        assert_eq!(info.width, de.width);
-        assert_eq!(info.height, de.height);
-        assert_eq!(info.x, de.x);
-        assert_eq!(info.y, de.y);
-        assert_eq!(info.rows, de.rows);
-        assert_eq!(info.cols, de.cols);
-        assert_eq!(info.name, de.name);
-        assert_eq!(info.grid, de.grid);
-    }
-
-    #[test]
-    fn test_monitor_list_roundtrip() {
-        let grid = MonitorGridInfo {
-            id: 2,
-            grid_type: GridType::Virtual,
-            width: 3840,
-            height: 1080,
-            x: 0,
-            y: 0,
-            rows: 8,
-            cols: 24,
-            name: Some("Virtual".to_string()),
-            grid: vec![vec![None; 24]; 8],
-        };
-        let list = MonitorList {
-            monitors: vec![grid],
-        };
-        let json = serde_json::to_string(&list).unwrap();
-        let de: MonitorList = serde_json::from_str(&json).unwrap();
-        assert_eq!(list.monitors.len(), de.monitors.len());
-        assert_eq!(list.monitors[0].grid_type, de.monitors[0].grid_type);
-    }
-
-    #[test]
-    fn test_client_grid_request_serialization() {
-        let req = ClientGridRequest {
-            monitor_id: 1,
-            rows: 10,
-            cols: 20,
-            grid_type: GridType::Dynamic,
-            name: Some("CustomGrid".to_string()),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        let de: ClientGridRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(req.monitor_id, de.monitor_id);
-        assert_eq!(req.rows, de.rows);
-        assert_eq!(req.cols, de.cols);
-        assert_eq!(req.grid_type, de.grid_type);
-        assert_eq!(req.name, de.name);
-    }
-}
+ 
 
 // Zero-copy compatible data types for iceoryx2
 // Using only basic types that work with iceoryx2's zero-copy requirements
@@ -376,7 +415,8 @@ pub struct WindowDetails {
     pub monitor_col_start: u32,
     pub monitor_row_end: u32, // Bottom-right grid position in monitor grid
     pub monitor_col_end: u32,
-    pub title_len: u32, // Length of title (for separate title transmission)
+    pub title: [u8; 256],
+    pub title_len: u32, // Length of title
 }
 
 impl Default for WindowDetails {
@@ -396,6 +436,7 @@ impl Default for WindowDetails {
             monitor_col_start: 0,
             monitor_row_end: 0,
             monitor_col_end: 0,
+            title: [0; 256],
             title_len: 0,
         }
     }
@@ -698,4 +739,11 @@ impl Default for AnimationStatus {
             reserved: [0; 8],
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, ZeroCopySend)]
+#[repr(C)]
+pub struct WindowListMessage {
+    pub window_count: u32,
+    pub windows: [WindowDetails; MAX_WINDOWS],
 }

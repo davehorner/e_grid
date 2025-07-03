@@ -1,0 +1,1452 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'e_grid'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=e_grid@0.1.2"
+                ],
+                "filter": {
+                    "name": "e_grid",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'e_grid'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=e_grid",
+                    "--package=e_grid@0.1.2"
+                ],
+                "filter": {
+                    "name": "e_grid",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'e_grid'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=e_grid",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "e_grid",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'basic_example'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=basic_example",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "basic_example",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'basic_example'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=basic_example",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "basic_example",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'basic_grid'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=basic_grid",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "basic_grid",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'basic_grid'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=basic_grid",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "basic_grid",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'comprehensive_focus_demo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=comprehensive_focus_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "comprehensive_focus_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'comprehensive_focus_demo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=comprehensive_focus_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "comprehensive_focus_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'debug_monitor_coords'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=debug_monitor_coords",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "debug_monitor_coords",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'debug_monitor_coords'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=debug_monitor_coords",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "debug_monitor_coords",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'debug_positions'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=debug_positions",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "debug_positions",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'debug_positions'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=debug_positions",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "debug_positions",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'e_midi_demo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=e_midi_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "e_midi_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'e_midi_demo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=e_midi_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "e_midi_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'enhanced_grid_client'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=enhanced_grid_client",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "enhanced_grid_client",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'enhanced_grid_client'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=enhanced_grid_client",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "enhanced_grid_client",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'focus_client_test'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=focus_client_test",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "focus_client_test",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'focus_client_test'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=focus_client_test",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "focus_client_test",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'focus_demo_server'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=focus_demo_server",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "focus_demo_server",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'focus_demo_server'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=focus_demo_server",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "focus_demo_server",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'focus_music_demo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=focus_music_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "focus_music_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'focus_music_demo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=focus_music_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "focus_music_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'focus_tracking_demo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=focus_tracking_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "focus_tracking_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'focus_tracking_demo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=focus_tracking_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "focus_tracking_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'grid_client_clean'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=grid_client_clean",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "grid_client_clean",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'grid_client_clean'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=grid_client_clean",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "grid_client_clean",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'grid_client_demo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=grid_client_demo",
+                    "--package=e_grid@0.1.2"
+                ],
+                "filter": {
+                    "name": "grid_client_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'grid_client_demo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=grid_client_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "grid_client_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'grid_layout_client_demo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=grid_layout_client_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "grid_layout_client_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'grid_layout_client_demo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=grid_layout_client_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "grid_layout_client_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'grid_tracker_legacy'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=grid_tracker_legacy",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "grid_tracker_legacy",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'grid_tracker_legacy'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=grid_tracker_legacy",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "grid_tracker_legacy",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'ipc_demo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=ipc_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "ipc_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'ipc_demo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=ipc_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "ipc_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'ipc_demo_new'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=ipc_demo_new",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "ipc_demo_new",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'ipc_demo_new'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=ipc_demo_new",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "ipc_demo_new",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'ipc_server_demo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=ipc_server_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "ipc_server_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'ipc_server_demo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=ipc_server_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "ipc_server_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'ipc_server_demo_new'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=ipc_server_demo_new",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "ipc_server_demo_new",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'ipc_server_demo_new'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=ipc_server_demo_new",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "ipc_server_demo_new",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'ipc_test'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=ipc_test",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "ipc_test",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'ipc_test'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=ipc_test",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "ipc_test",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'monitor_test'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=monitor_test",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "monitor_test",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'monitor_test'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=monitor_test",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "monitor_test",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'move_windows_then_back'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=move_windows_then_back",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "move_windows_then_back",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'move_windows_then_back'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=move_windows_then_back",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "move_windows_then_back",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'realtime_monitor_grid'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=realtime_monitor_grid",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "realtime_monitor_grid",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'realtime_monitor_grid'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=realtime_monitor_grid",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "realtime_monitor_grid",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'simple_focus_demo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=simple_focus_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "simple_focus_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'simple_focus_demo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=simple_focus_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "simple_focus_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'simple_grid'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=simple_grid",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "simple_grid",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'simple_grid'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=simple_grid",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "simple_grid",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'simple_grid_new'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=simple_grid_new",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "simple_grid_new",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'simple_grid_new'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=simple_grid_new",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "simple_grid_new",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'simple_monitor_test'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=simple_monitor_test",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "simple_monitor_test",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'simple_monitor_test'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=simple_monitor_test",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "simple_monitor_test",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'test_animated_transitions'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=test_animated_transitions",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_animated_transitions",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'test_animated_transitions'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=test_animated_transitions",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_animated_transitions",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'test_bounds_demo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=test_bounds_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_bounds_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'test_bounds_demo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=test_bounds_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_bounds_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'test_client_grid_display'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=test_client_grid_display",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_client_grid_display",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'test_client_grid_display'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=test_client_grid_display",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_client_grid_display",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'test_comprehensive_window_management'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=test_comprehensive_window_management",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_comprehensive_window_management",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'test_comprehensive_window_management'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=test_comprehensive_window_management",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_comprehensive_window_management",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'test_dynamic_grid'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=test_dynamic_grid",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_dynamic_grid",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'test_dynamic_grid'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=test_dynamic_grid",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_dynamic_grid",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'test_dynamic_transitions'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=test_dynamic_transitions",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_dynamic_transitions",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'test_dynamic_transitions'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=test_dynamic_transitions",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_dynamic_transitions",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'test_dynamic_transitions_fixed'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=test_dynamic_transitions_fixed",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_dynamic_transitions_fixed",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'test_dynamic_transitions_fixed'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=test_dynamic_transitions_fixed",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_dynamic_transitions_fixed",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'test_event_driven_demo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=test_event_driven_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_event_driven_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'test_event_driven_demo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=test_event_driven_demo",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_event_driven_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'test_monitor_display'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=test_monitor_display",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_monitor_display",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'test_monitor_display'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=test_monitor_display",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "test_monitor_display",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'visual_grid_demo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=visual_grid_demo",
+                    "--package=e_grid@0.1.2"
+                ],
+                "filter": {
+                    "name": "visual_grid_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'visual_grid_demo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=visual_grid_demo",
+                    "--package=e_grid@0.1.2"
+                ],
+                "filter": {
+                    "name": "visual_grid_demo",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug integration test 'ipc_monitor_list'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--test=ipc_monitor_list",
+                    "--package=e_grid"
+                ],
+                "filter": {
+                    "name": "ipc_monitor_list",
+                    "kind": "test"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

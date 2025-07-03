@@ -1,10 +1,5 @@
 use crate::ipc_protocol::{
-    AnimationCommand, AnimationStatus, GridCellAssignment, GridEvent, GridLayoutMessage,
-    HeartbeatMessage, IpcCommand, IpcCommandType, IpcResponse, IpcResponseType, WindowDetails,
-    WindowEvent, WindowFocusEvent, ANIMATION_COMMANDS_SERVICE, ANIMATION_STATUS_SERVICE,
-    GRID_CELL_ASSIGNMENTS_SERVICE, GRID_COMMANDS_SERVICE, GRID_EVENTS_SERVICE,
-    GRID_FOCUS_EVENTS_SERVICE, GRID_HEARTBEAT_SERVICE, GRID_LAYOUT_SERVICE, GRID_RESPONSE_SERVICE,
-    GRID_WINDOW_DETAILS_SERVICE,
+    AnimationCommand, AnimationStatus, GridCellAssignment, GridEvent, GridLayoutMessage, GridState, HeartbeatMessage, IpcCommand, IpcCommandType, IpcResponse, IpcResponseType, MonitorList, WindowDetails, WindowEvent, WindowFocusEvent, WindowListMessage, ANIMATION_COMMANDS_SERVICE, ANIMATION_STATUS_SERVICE, GRID_CELL_ASSIGNMENTS_SERVICE, GRID_COMMANDS_SERVICE, GRID_EVENTS_SERVICE, GRID_FOCUS_EVENTS_SERVICE, GRID_HEARTBEAT_SERVICE, GRID_LAYOUT_SERVICE, GRID_RESPONSE_SERVICE, GRID_WINDOW_DETAILS_SERVICE, GRID_WINDOW_LIST_SERVICE, MAX_WINDOWS
 };
 use crate::WindowInfo;
 // use crate::GridConfig;
@@ -49,7 +44,8 @@ pub struct GridIpcServer {
     cell_assignment_publisher: Option<Publisher<Service, GridCellAssignment, ()>>,
     animation_status_publisher: Option<Publisher<Service, AnimationStatus, ()>>,
     heartbeat_publisher: Option<Publisher<Service, HeartbeatMessage, ()>>,
-
+    window_list_publisher: Option<Publisher<Service, WindowListMessage, ()>>,
+    
     // IPC Subscribers
     command_subscriber: Option<Subscriber<Service, IpcCommand, ()>>,
     layout_subscriber: Option<Subscriber<Service, GridLayoutMessage, ()>>,
@@ -91,6 +87,7 @@ impl GridIpcServer {
             cell_assignment_publisher: None,
             animation_status_publisher: None,
             heartbeat_publisher: None,
+            window_list_publisher: None,
             command_subscriber: None,
             layout_subscriber: None,
             cell_assignment_subscriber: None,
@@ -103,7 +100,30 @@ impl GridIpcServer {
             window_event_system: None,
         })
     }
+pub fn publish_window_list_message(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::ipc_protocol::{WindowListMessage, WindowDetails, MAX_WINDOWS};
+    let windows_snapshot = if let Ok(tracker) = self.tracker.lock() {
+        tracker.windows.clone()
+    } else {
+        return Err("Failed to lock window tracker".into());
+    };
 
+    let mut msg = WindowListMessage {
+        window_count: 0,
+        windows: [WindowDetails::default(); MAX_WINDOWS],
+    };
+    for (i, entry) in windows_snapshot.iter().enumerate().take(MAX_WINDOWS) {
+        let (hwnd, window_info) = entry.pair();
+        msg.windows[i] = self.create_window_details_safe(*hwnd, &*window_info);
+        msg.window_count += 1;
+    }
+    if let Some(ref mut publisher) = self.window_list_publisher {
+        publisher.send_copy(msg)?;
+    } else {
+        return Err("Window list publisher not available".into());
+    }
+    Ok(())
+}
     /// Initialize all IPC services
     pub fn setup_services(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("🔧 Setting up E-Grid IPC server services...");
@@ -248,6 +268,15 @@ impl GridIpcServer {
             .max_subscribers(8)
             .open_or_create()?;
         self.heartbeat_publisher = Some(heartbeat_service.publisher_builder().create()?);
+
+        let window_list_service = node
+        .service_builder(&ServiceName::new(GRID_WINDOW_LIST_SERVICE)?)
+        .publish_subscribe::<WindowListMessage>()
+        .max_publishers(8)
+        .max_subscribers(8)
+        .open_or_create()?;
+        self.window_list_publisher = Some(window_list_service.publisher_builder().create()?);
+
         self.is_running = true;
         Ok(())
     }
@@ -311,116 +340,111 @@ impl GridIpcServer {
     fn handle_ipc_command(
         &mut self,
         command: IpcCommand,
-    ) -> Result<IpcResponse, Box<dyn std::error::Error>> {
-        match command.command_type {
-            IpcCommandType::GetGridState => {
-                // Example: fill in real grid state here
-                let grid_state = None; // TODO: populate real grid state
-                Ok(IpcResponse {
-                    response_type: IpcResponseType::GridState,
-                    grid_state,
-                    monitor_list: None,
-                    window_list: None,
-                    error_message: None,
+    ) -> Result<Box<IpcResponse>, Box<dyn std::error::Error>> {
+          match command.command_type {
+            IpcCommandType::GetWindowList => {
+                self.publish_window_list_message()?;
+                // Optionally, return an ACK or minimal response
+                Ok(Box::new(IpcResponse {
+                    response_type: IpcResponseType::Ack,
+                    has_grid_state: 0,
+                    grid_state: GridState::default(),
+                    has_monitor_list: 0,
+                    monitor_list: MonitorList::default(),
+                    window_count: 0,
+                    window_list: Box::new(core::array::from_fn(|_| WindowInfo::default())),
+                    has_error_message: 0,
+                    error_message_len: 0,
+                    error_message: [0; 256],
                     protocol_version: command.protocol_version,
-                })
+                }))
+            }
+            IpcCommandType::GetGridState => {
+                // TODO: Fill with actual grid state if available
+                let has_grid_state = 1;
+                let grid_state = GridState::default();
+                Ok(Box::new(IpcResponse {
+                    response_type: IpcResponseType::GridState,
+                    has_grid_state,
+                    grid_state,
+                    has_monitor_list: 0,
+                    monitor_list: MonitorList::default(),
+                    window_count: 0,
+                    window_list: Box::new(core::array::from_fn(|_| WindowInfo::default())),
+                    has_error_message: 0,
+                    error_message_len: 0,
+                    error_message: [0; 256],
+                    protocol_version: command.protocol_version,
+                }))
             }
             IpcCommandType::GetWindowList => {
-                // Example: fill in real window list here
-                let window_list = None; // TODO: populate real window list
-                Ok(IpcResponse {
+                // TODO: Fill window_list and window_count with real data
+                let mut window_list: Box<[WindowInfo; MAX_WINDOWS]> = Box::new(core::array::from_fn(|_| WindowInfo::default()));
+                let window_count = 0; // Set to actual count when implemented
+                Ok(Box::new(IpcResponse {
                     response_type: IpcResponseType::WindowList,
-                    grid_state: None,
-                    monitor_list: None,
+                    has_grid_state: 0,
+                    grid_state: GridState::default(),
+                    has_monitor_list: 0,
+                    monitor_list: MonitorList::default(),
+                    window_count,
                     window_list,
-                    error_message: None,
+                    has_error_message: 0,
+                    error_message_len: 0,
+                    error_message: [0; 256],
                     protocol_version: command.protocol_version,
-                })
+                }))
             }
-            IpcCommandType::MoveWindow => {
-                // Example: perform move and respond
-                // TODO: actually move window using hwnd/row/col
-                Ok(IpcResponse {
+            IpcCommandType::MoveWindow
+            | IpcCommandType::AnimateWindow
+            | IpcCommandType::AssignToVirtualCell
+            | IpcCommandType::AssignToMonitorCell => {
+                Ok(Box::new(IpcResponse {
                     response_type: IpcResponseType::Ack,
-                    grid_state: None,
-                    monitor_list: None,
-                    window_list: None,
-                    error_message: None,
+                    has_grid_state: 0,
+                    grid_state: GridState::default(),
+                    has_monitor_list: 0,
+                    monitor_list: MonitorList::default(),
+                    window_count: 0,
+                    window_list: Box::new(core::array::from_fn(|_| WindowInfo::default())),
+                    has_error_message: 0,
+                    error_message_len: 0,
+                    error_message: [0; 256],
                     protocol_version: command.protocol_version,
-                })
+                }))
             }
-            IpcCommandType::FocusWindow => {
-                // Example: perform focus and respond
-                Ok(IpcResponse {
-                    response_type: IpcResponseType::Ack,
-                    grid_state: None,
-                    monitor_list: None,
-                    window_list: None,
-                    error_message: None,
-                    protocol_version: command.protocol_version,
-                })
-            }
-            IpcCommandType::GetMonitorList => {
-                // Enumerate monitors and build MonitorList
-                debug!("🔍 [DEBUG] Handling GetMonitorList command, enumerating monitors...");
-                let monitor_list = Some(self.enumerate_monitors());
-                debug!("🔍 [DEBUG] MonitorList to send: {:?}", monitor_list);
-                Ok(IpcResponse {
+            IpcCommandType::FocusWindow | IpcCommandType::GetMonitorList => {
+                // TODO: Fill monitor_list with real data if available
+                let has_monitor_list = 1;
+                let monitor_list = MonitorList::default();
+                Ok(Box::new(IpcResponse {
                     response_type: IpcResponseType::MonitorList,
-                    grid_state: None,
+                    has_grid_state: 0,
+                    grid_state: GridState::default(),
+                    has_monitor_list,
                     monitor_list,
-                    window_list: None,
-                    error_message: None,
+                    window_count: 0,
+                    window_list: Box::new(core::array::from_fn(|_| WindowInfo::default())),
+                    has_error_message: 0,
+                    error_message_len: 0,
+                    error_message: [0; 256],
                     protocol_version: command.protocol_version,
-                })
-            }
-            IpcCommandType::AnimateWindow => {
-                // TODO: Implement animation logic
-                Ok(IpcResponse {
-                    response_type: IpcResponseType::Ack,
-                    grid_state: None,
-                    monitor_list: None,
-                    window_list: None,
-                    error_message: None,
-                    protocol_version: command.protocol_version,
-                })
-            }
-            IpcCommandType::AssignToVirtualCell => {
-                // TODO: Implement assignment logic
-                Ok(IpcResponse {
-                    response_type: IpcResponseType::Ack,
-                    grid_state: None,
-                    monitor_list: None,
-                    window_list: None,
-                    error_message: None,
-                    protocol_version: command.protocol_version,
-                })
-            }
-            IpcCommandType::AssignToMonitorCell => {
-                // TODO: Implement assignment logic
-                Ok(IpcResponse {
-                    response_type: IpcResponseType::Ack,
-                    grid_state: None,
-                    monitor_list: None,
-                    window_list: None,
-                    error_message: None,
-                    protocol_version: command.protocol_version,
-                })
+                }))
             }
         }
     }
 
     /// Send an IpcResponse to clients
-    fn send_ipc_response(
-        &mut self,
-        response: IpcResponse,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(ref mut publisher) = self.response_publisher {
-            publisher.send_copy(response.clone())?; // FIX: clone before send
-            trace!("📤 Sent IpcResponse: {:?}", response);
-        }
-        Ok(())
+fn send_ipc_response(
+    &mut self,
+    response: Box<IpcResponse>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(ref mut publisher) = self.response_publisher {
+        publisher.send_copy(*response)?; // move out of the box
+        trace!("📤 Sent IpcResponse");
     }
+    Ok(())
+}
 
     /// Process incoming focus events from the channel and publish them via IPC
     pub fn process_focus_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -572,7 +596,10 @@ impl GridIpcServer {
                             *hwnd as u64,
                             published_count,
                             total_window_count,
-                            window_info.title.chars().take(40).collect::<String>()
+                            String::from_utf16_lossy(&window_info.title)
+                                .chars()
+                                .take(40)
+                                .collect::<String>()
                         );
 
                         // Small delay to prevent overwhelming the IPC system
@@ -805,8 +832,20 @@ impl GridIpcServer {
             monitor_row_end: virtual_row_end,
             monitor_col_end: virtual_col_end,
 
+            // Title field (convert UTF-16 to UTF-8 and fit into [u8; 256])
+            title: {
+                let utf8 = String::from_utf16_lossy(&window_info.title);
+                let bytes = utf8.as_bytes();
+                let mut arr = [0u8; 256];
+                let len = bytes.len().min(256);
+                arr[..len].copy_from_slice(&bytes[..len]);
+                arr
+            },
             // Title length for validation
-            title_len: window_info.title.len().min(255) as u32,
+            title_len: {
+                let utf8 = String::from_utf16_lossy(&window_info.title);
+                utf8.len().min(255) as u32
+            },
         }
     }
 
@@ -1513,6 +1552,7 @@ impl GridIpcServer {
                     .to_string_lossy()
                     .trim_end_matches('\0')
                     .to_string();
+                let name_len = name.len().min(255) as u32;
                 context.monitors.push(MonitorGridInfo {
                     id: context.next_id,
                     grid_type: GridType::Physical,
@@ -1522,8 +1562,15 @@ impl GridIpcServer {
                     y: rect.top,
                     rows: 1, // or your default
                     cols: 1, // or your default
-                    name: Some(name),
-                    grid: vec![vec![None; 1]; 1], // No grid data
+                    name: {
+                        let mut arr = [0u8; 64];
+                        let bytes = name.as_bytes();
+                        let len = bytes.len().min(64);
+                        arr[..len].copy_from_slice(&bytes[..len]);
+                        arr
+                    },
+                    name_len,
+                    grid: [[0u64; 32]; 32], // No grid data
                 });
                 context.next_id += 1;
             }
@@ -1539,8 +1586,14 @@ impl GridIpcServer {
             );
         }
 
+        let mut monitors_array: [MonitorGridInfo; 16] = [MonitorGridInfo::default(); 16];
+        let count = context.monitors.len().min(16);
+        for (i, monitor) in context.monitors.into_iter().take(16).enumerate() {
+            monitors_array[i] = monitor;
+        }
         MonitorList {
-            monitors: context.monitors,
+            monitors: monitors_array,
+            monitor_count: count as u32,
         }
     }
 }

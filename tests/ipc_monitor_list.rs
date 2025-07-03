@@ -73,7 +73,7 @@ fn test_monitor_list_exchange() {
         if let Some(sample) = response_subscriber.receive().unwrap() {
             let resp = sample.clone();
             if resp.response_type == IpcResponseType::MonitorList {
-                let list = resp.monitor_list.expect("MonitorList should be present");
+                let list = &resp.monitor_list;
                 assert!(
                     !list.monitors.is_empty(),
                     "Monitor list should not be empty"
@@ -155,7 +155,7 @@ fn test_multiple_monitor_list_requests() {
             if let Some(sample) = response_subscriber.receive().unwrap() {
                 let resp = sample.clone();
                 if resp.response_type == IpcResponseType::MonitorList {
-                    let list = resp.monitor_list.expect("MonitorList should be present");
+                    let list = &resp.monitor_list;
                     assert!(
                         !list.monitors.is_empty(),
                         "Monitor list should not be empty"
@@ -196,7 +196,7 @@ fn test_monitor_grid_dimensions_consistency() {
         if let Some(sample) = response_subscriber.receive().unwrap() {
             let resp = sample.clone();
             if resp.response_type == IpcResponseType::MonitorList {
-                let list = resp.monitor_list.expect("MonitorList should be present");
+                let list = &resp.monitor_list;
                 for mon in &list.monitors {
                     assert_eq!(
                         mon.grid.len(),

@@ -73,12 +73,17 @@ impl WindowEventCallback for DebugEventCallback {
         // Only show manageable windows in debug output
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: CREATED (Manageable)");
+            let title_str = {
+                // Convert &[u16; 256] to String, trimming at null terminator
+                let nul_pos = window_info.title.iter().position(|&c| c == 0).unwrap_or(window_info.title.len());
+                String::from_utf16_lossy(&window_info.title[..nul_pos])
+            };
             println!(
                 "   Window: {}",
-                if window_info.title.is_empty() {
+                if title_str.is_empty() {
                     "<No Title>"
                 } else {
-                    &window_info.title
+                    &title_str
                 }
             );
             println!("   HWND: {:?}", hwnd);
@@ -95,12 +100,16 @@ impl WindowEventCallback for DebugEventCallback {
         // Only show manageable windows in debug output
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: MOVED/RESIZED (Manageable)");
+            let title_str = {
+                let nul_pos = window_info.title.iter().position(|&c| c == 0).unwrap_or(window_info.title.len());
+                String::from_utf16_lossy(&window_info.title[..nul_pos])
+            };
             println!(
                 "   Window: {}",
-                if window_info.title.is_empty() {
+                if title_str.is_empty() {
                     "<No Title>"
                 } else {
-                    &window_info.title
+                    &title_str
                 }
             );
             println!("   HWND: {:?}", hwnd);
@@ -112,12 +121,17 @@ impl WindowEventCallback for DebugEventCallback {
         // Only show manageable windows in debug output
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: ACTIVATED (Manageable)");
+            let title_str = {
+                // Convert &[u16; 256] to String, trimming at null terminator
+                let nul_pos = window_info.title.iter().position(|&c| c == 0).unwrap_or(window_info.title.len());
+                String::from_utf16_lossy(&window_info.title[..nul_pos])
+            };
             println!(
                 "   Window: {}",
-                if window_info.title.is_empty() {
+                if title_str.is_empty() {
                     "<No Title>"
                 } else {
-                    &window_info.title
+                    &title_str
                 }
             );
             println!("   HWND: {:?}", hwnd);
@@ -133,12 +147,17 @@ impl WindowEventCallback for DebugEventCallback {
 
     fn on_window_restored(&self, hwnd: u64, window_info: &WindowInfo) {
         println!("🔔 WINDOW EVENT: RESTORED");
+        let title_str = {
+            // Convert &[u16; 256] to String, trimming at null terminator
+            let nul_pos = window_info.title.iter().position(|&c| c == 0).unwrap_or(window_info.title.len());
+            String::from_utf16_lossy(&window_info.title[..nul_pos])
+        };
         println!(
             "   Window: {}",
-            if window_info.title.is_empty() {
+            if title_str.is_empty() {
                 "<No Title>"
             } else {
-                &window_info.title
+                &title_str
             }
         );
         println!("   HWND: {:?}", hwnd);
@@ -267,7 +286,7 @@ pub unsafe extern "system" fn win_event_proc(
                                 states.entry(hwnd_val).or_insert(crate::MoveResizeState {
                                     last_event: std::time::Instant::now(),
                                     in_progress: false,
-                                    last_rect: window_info.rect,
+                                    last_rect: window_info.rect.0,
                                     last_type: None, // Track last event type
                                 });
                             entry.last_event = std::time::Instant::now();
@@ -313,7 +332,7 @@ pub unsafe extern "system" fn win_event_proc(
                                     entry.last_type = Some(BothStart);
                                 }
                             }
-                            entry.last_rect = window_info.rect;
+                            entry.last_rect = window_info.rect.0;
                         }
                     }
                 } else {

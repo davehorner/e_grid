@@ -48,12 +48,16 @@ impl LayoutGrid {
         let mut window_positions = HashMap::new();
         // Capture current window positions
         for (hwnd, window_info) in self.basic_grid.windows() {
+            // Convert window title from [u16; 256] to String
+            let title_str = String::from_utf16_lossy(&window_info.title)
+                .trim_end_matches('\0')
+                .to_string();
             // Find where this window is positioned in the grid
             for row in 0..self.basic_grid.config().rows {
                 for col in 0..self.basic_grid.config().cols {
                     if let Ok(cell_windows) = self.basic_grid.get_cell_windows(row, col) {
                         if cell_windows.contains(hwnd) {
-                            window_positions.insert(window_info.title.clone(), (row, col));
+                            window_positions.insert(title_str.clone(), (row, col));
                             break;
                         }
                     }
@@ -89,7 +93,10 @@ impl LayoutGrid {
         let mut windows_to_move = HashMap::new();
 
         for (hwnd, window_info) in self.basic_grid.windows() {
-            if let Some(&(row, col)) = layout.window_positions.get(&window_info.title) {
+            let title_str = String::from_utf16_lossy(&window_info.title)
+                .trim_end_matches('\0')
+                .to_string();
+            if let Some(&(row, col)) = layout.window_positions.get(&title_str) {
                 windows_to_move.insert(*hwnd, (row, col));
             }
         }

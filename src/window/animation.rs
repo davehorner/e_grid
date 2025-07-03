@@ -52,15 +52,15 @@ impl fmt::Debug for WindowAnimation {
 impl WindowAnimation {
     pub fn new(
         hwnd: u64,
-        start_rect: RECT,
-        target_rect: RECT,
+        start_rect: crate::window::info::RectWrapper,
+        target_rect: crate::window::info::RectWrapper,
         duration: Duration,
         easing: EasingType,
     ) -> Self {
         Self {
             hwnd,
-            start_rect,
-            target_rect,
+            start_rect: start_rect.to_rect(),
+            target_rect: target_rect.to_rect(),
             start_time: Instant::now(),
             duration,
             easing,

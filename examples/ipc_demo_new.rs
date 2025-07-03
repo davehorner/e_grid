@@ -50,14 +50,14 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     // Subscribe to responses
     let response_service = node
         .service_builder(&ServiceName::new(ipc::GRID_RESPONSE_SERVICE)?)
-        .publish_subscribe::<ipc::WindowResponse>()
+        .publish_subscribe::<ipc_protocol::WindowResponse>()
         .open()?;
 
     let response_subscriber = response_service.subscriber_builder().create()?;
     // Create command publisher (optional for multiple clients)
     let command_service = node
         .service_builder(&ServiceName::new(ipc::GRID_COMMANDS_SERVICE)?)
-        .publish_subscribe::<ipc::WindowCommand>()
+        .publish_subscribe::<ipc_protocol::WindowCommand>()
         .open()?;
     let command_publisher = match command_service.publisher_builder().create() {
         Ok(publisher) => {

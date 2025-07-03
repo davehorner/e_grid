@@ -127,8 +127,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             3 => {
                 println!("🔄 Requesting grid state from server...");
-                client.request_grid_state()?;
+                // After requesting grid state
+                let req_result = client.request_grid_state();
+                println!("[DEBUG] request_grid_state() result: {:?}", req_result);
                 thread::sleep(Duration::from_millis(300));
+                let grid_state_result = client.get_current_grid();
+                match grid_state_result {
+                    Ok(grid) => {
+                        println!("[DEBUG] Grid state received: {:?}", grid);
+                    }
+                    Err(e) => println!("[DEBUG] Failed to get grid state: {}", e),
+                }
+                client.display_current_grid();
             }
             4 => {
                 println!("� Refreshing all data from server...");
@@ -148,7 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Wait between demo actions - this gives time for real-time updates to show
-        thread::sleep(Duration::from_secs(8));
+        thread::sleep(Duration::from_secs(2));
 
         // Occasional longer pause to let user observe
         if demo_cycle % 10 == 0 {

@@ -4,6 +4,7 @@
 use crate::config::GridConfig;
 use crate::display::format_hwnd_display;
 use crate::grid::traits::{AnimatableGrid, CellDisplay, GridError, GridResult, GridTrait};
+use crate::window::info::RectWrapper;
 use crate::window::{WindowAnimation, WindowInfo};
 use iceoryx2::prelude::ZeroCopySend;
 use std::collections::HashMap;
@@ -228,12 +229,12 @@ impl AnimationGrid {
         for (hwnd, (target_row, target_col, target_rect)) in targets {
             if let Some(window_info) = self.windows.get(&hwnd) {
                 let animation = WindowAnimation::new(
-                    hwnd,
-                    window_info.rect,
-                    target_rect,
-                    Duration::from_millis(duration_ms),
-                    easing.clone(),
-                );
+                                    hwnd,
+                                    window_info.rect,
+                                    RectWrapper::from_rect(target_rect),
+                                    Duration::from_millis(duration_ms),
+                                    easing.clone(),
+                                );
 
                 self.active_animations.insert(hwnd, animation);
 
