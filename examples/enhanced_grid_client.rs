@@ -118,6 +118,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => println!("⚠️  Grid state request failed: {}", e),
     }
 
+    match grid_client.request_monitor_list() {
+        Ok(_) => println!("✅ Monitor list requested"),
+        Err(e) => println!("⚠️  Monitor list request failed: {}", e),
+    }
+
     // 8. Main event loop
     println!("\n🔄 Main Event Loop Started");
     println!("💡 Focus different windows to see events");

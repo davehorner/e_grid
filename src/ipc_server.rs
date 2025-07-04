@@ -58,6 +58,7 @@ pub struct GridIpcServer {
     // Server state
     is_running: bool,
     event_listeners: Vec<Box<dyn Fn(&GridEvent) + Send + Sync>>,
+    last_monitor_list_publish: std::time::Instant,
 
     // New library-based event handling
     heartbeat_service: Option<HeartbeatService>,
@@ -100,6 +101,7 @@ impl GridIpcServer {
             animation_subscriber: None,
             is_running: false,
             event_listeners: Vec::new(),
+            last_monitor_list_publish: std::time::Instant::now(),
             heartbeat_service: None,
             focus_event_receiver: None,
             event_receiver: None,
@@ -117,7 +119,7 @@ impl GridIpcServer {
             return Err("Failed to lock window tracker".into());
         };
 
-        println!("📤 Publishing window list with {} windows", windows_snapshot.len());
+        // println!("📤 Publishing window list with {} windows", windows_snapshot.len());
 
         let mut msg = WindowListMessage {
             window_count: 0,
@@ -129,11 +131,11 @@ impl GridIpcServer {
             msg.window_count += 1;
             
             // Debug: Print each window being published
-            println!("   📋 Window {}: HWND {} - {}", 
-                i + 1, 
-                *hwnd,
-                String::from_utf16_lossy(&window_info.title).chars().take(30).collect::<String>()
-            );
+            // println!("   📋 Window {}: HWND {} - {}", 
+            //     i + 1, 
+            //     *hwnd,
+            //     String::from_utf16_lossy(&window_info.title).chars().take(30).collect::<String>()
+            // );
         }
         
         if let Some(ref mut publisher) = self.window_list_publisher {
@@ -305,6 +307,19 @@ impl GridIpcServer {
             .open_or_create()?;
         self.monitor_list_publisher = Some(monitor_list_service.publisher_builder().create()?);
 
+        // Publish initial monitor list for clients
+        let initial_monitor_list = self.enumerate_monitors();
+        if let Some(ref mut publisher) = self.monitor_list_publisher {
+            match publisher.send_copy(initial_monitor_list) {
+                Ok(_) => {
+                    info!("📡 [STARTUP] Published initial monitor list with {} monitors", initial_monitor_list.monitor_count);
+                }
+                Err(e) => {
+                    warn!("❌ Failed to publish initial monitor list: {}", e);
+                }
+            }
+        }
+
         self.is_running = true;
         Ok(())
     }
@@ -325,6 +340,22 @@ impl GridIpcServer {
 
             // Process window events from the channel and publish them via IPC
             self.process_window_events()?;
+
+            // Publish monitor list periodically for new clients (every 5 seconds)
+            if self.last_monitor_list_publish.elapsed().as_secs() >= 5 {
+                let monitor_list = self.enumerate_monitors();
+                if let Some(ref mut publisher) = self.monitor_list_publisher {
+                    match publisher.send_copy(monitor_list) {
+                        Ok(_) => {
+                            debug!("📡 [PERIODIC] Published monitor list with {} monitors", monitor_list.monitor_count);
+                        }
+                        Err(e) => {
+                            debug!("❌ Failed to publish periodic monitor list: {}", e);
+                        }
+                    }
+                }
+                self.last_monitor_list_publish = std::time::Instant::now();
+            }
 
             // Small delay to prevent busy waiting
             thread::sleep(Duration::from_millis(10));
