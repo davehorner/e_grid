@@ -1,4 +1,5 @@
-use e_grid::{ipc, window_events, WindowTracker};
+use e_grid::ipc_manager::GridIpcManager;
+use e_grid::{ipc, ipc_protocol, window_events, WindowTracker};
 use iceoryx2::prelude::*;
 use std::env;
 use std::io::{self, Write};
@@ -13,7 +14,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     println!("======================================");
 
     // Add a delay to ensure server is ready
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    std::thread::sleep(std::time::Duration::from_secs(1));
     // Create iceoryx2 node for client
     let node = match NodeBuilder::new().create::<iceoryx2::service::ipc::Service>() {
         Ok(node) => {
@@ -50,14 +51,14 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     // Subscribe to responses
     let response_service = node
         .service_builder(&ServiceName::new(ipc::GRID_RESPONSE_SERVICE)?)
-        .publish_subscribe::<ipc::WindowResponse>()
+        .publish_subscribe::<ipc_protocol::WindowResponse>()
         .open()?;
 
     let response_subscriber = response_service.subscriber_builder().create()?;
     // Create command publisher (optional for multiple clients)
     let command_service = node
         .service_builder(&ServiceName::new(ipc::GRID_COMMANDS_SERVICE)?)
-        .publish_subscribe::<ipc::WindowCommand>()
+        .publish_subscribe::<ipc_protocol::WindowCommand>()
         .open()?;
     let command_publisher = match command_service.publisher_builder().create() {
         Ok(publisher) => {
@@ -97,7 +98,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(std::time::Duration::from_secs(1));
 
     if let Some(ref publisher) = command_publisher {
-        let test_command = ipc::WindowCommand {
+        let test_command = ipc_protocol::WindowCommand {
             command_type: 1, // GetGridState
             hwnd: 0,
             target_row: 0,
@@ -207,7 +208,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                     match input.as_str() {
                         "g" | "grid" => {
                             if let Some(ref publisher) = command_publisher {
-                                let command = ipc::WindowCommand {
+                                let command = ipc_protocol::WindowCommand {
                                     command_type: 1, // GetGridState
                                     hwnd: 0,
                                     target_row: 0,
@@ -229,7 +230,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         "w" | "windows" => {
                             if let Some(ref publisher) = command_publisher {
-                                let command = ipc::WindowCommand {
+                                let command = ipc_protocol::WindowCommand {
                                     command_type: 2, // GetWindowList
                                     hwnd: 0,
                                     target_row: 0,
@@ -290,7 +291,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                                                                 "1" => {
                                                                     // Virtual grid assignment
                                                                     let command =
-                                                                        ipc::WindowCommand {
+                                                                        ipc_protocol::WindowCommand {
                                                                             command_type: 3, // AssignWindowToVirtualCell
                                                                             hwnd,
                                                                             target_row: row,
@@ -328,7 +329,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                                                                                 .trim()
                                                                                 .parse::<u32>()
                                                                         {
-                                                                            let command = ipc::WindowCommand {
+                                                                            let command = ipc_protocol::WindowCommand {
                                                                                 command_type: 4, // AssignWindowToMonitorCell
                                                                                 hwnd,
                                                                                 target_row: row,
@@ -491,8 +492,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tracker_arc = Arc::new(Mutex::new(tracker));
 
     // Set up IPC manager
-    let mut ipc_manager = ipc::GridIpcManager::new(tracker_arc.clone())?;
-    ipc_manager.setup_services()?;
+    let mut ipc_manager = GridIpcManager::new(tracker_arc.clone())?;
+    ipc_manager.setup_services(true, true, true, true, true, true, true, true, true)?;
 
     // Set up window event hooks
     let config = window_events::WindowEventConfig::new(tracker_arc.clone()).with_debug(true);
@@ -561,7 +562,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "e" | "event" => {
                 // Demo IPC event publishing
-                let event = ipc::GridEvent::GridStateChanged {
+                let event = ipc_protocol::GridEvent::GridStateChanged {
                     timestamp: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()

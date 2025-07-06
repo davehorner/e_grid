@@ -2,23 +2,29 @@ use crate::grid_client_errors::{
     retry_with_backoff, safe_arc_lock, validate_grid_coordinates, GridClientError,
     GridClientResult, RetryConfig,
 };
-use crate::ipc_protocol::{
+pub use crate::ipc_protocol::{
     HeartbeatMessage, IpcCommand, IpcCommandType, IpcResponse, WindowDetails, WindowEvent,
     WindowFocusEvent, GRID_COMMANDS_SERVICE, GRID_EVENTS_SERVICE, GRID_FOCUS_EVENTS_SERVICE,
     GRID_HEARTBEAT_SERVICE, GRID_RESPONSE_SERVICE, GRID_WINDOW_DETAILS_SERVICE,
 };
-use crate::GridConfig;
-use crossbeam_queue::ArrayQueue;
+use crate::{EasingType, GridConfig};
+use crossbeam_utils::atomic::AtomicCell;
+use dashmap::DashMap;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use iceoryx2::service::ipc::Service;
 use log::{debug, error, info, warn};
-use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-
+#[derive(Clone, Copy, Debug)]
+pub struct GridCell {
+    pub state: ClientCellState,
+    pub monitor_ids: [u32; 4], // fixed-size for lock-free, or use Option<u32>
+    pub monitor_count: usize,
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ClientCellState {
     Empty,         // No window (on-screen area)
@@ -48,7 +54,7 @@ pub struct ClientWindowInfo {
     pub monitor_col_start: u32,
     pub monitor_row_end: u32,
     pub monitor_col_end: u32,
-    pub title_len: u32,
+    // pub title_len: u32,
 }
 
 impl From<WindowDetails> for ClientWindowInfo {
@@ -68,44 +74,55 @@ impl From<WindowDetails> for ClientWindowInfo {
             monitor_col_start: details.monitor_col_start,
             monitor_row_end: details.monitor_row_end,
             monitor_col_end: details.monitor_col_end,
-            title_len: details.title_len,
+            // title_len: details.title_len,
         }
     }
 }
 
 pub struct GridClient {
     // Configuration
-    config: GridConfig,
-
+    pub config: GridConfig,
+    pub has_valid_grid_data: Arc<AtomicBool>,
     // IPC components - only keep what we need for sending commands
     command_publisher: Publisher<Service, IpcCommand, ()>,
-
+    window_list_subscriber: Option<Subscriber<Service, crate::ipc_protocol::WindowListMessage, ()>>,
+    monitor_list_subscriber: Option<Subscriber<Service, crate::ipc_protocol::MonitorList, ()>>,
     // Local grid state
-    windows: Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
-    virtual_grid: Arc<Mutex<Vec<Vec<ClientCellState>>>>,
+    // windows: Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
 
     // Monitor information - store complete monitor grids
-    monitors: Arc<Mutex<Vec<MonitorGridInfo>>>,
+    pub windows: Arc<DashMap<u64, ClientWindowInfo>>,
+
+    // Add the missing monitors field
+    pub monitors: Arc<DashMap<u32, MonitorGridInfo>>,
 
     // Control flags
-    auto_display: Arc<Mutex<bool>>,
-    running: Arc<Mutex<bool>>,
+    auto_display: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
 
     // NEW: Focus event handling for e_midi integration
+    // Lock-free callbacks are not directly possible with trait objects due to Rust's safety model.
+    // However, you can use an AtomicPtr or crossbeam's lock-free structures if you ensure the callback's lifetime is 'static.
+    // For most use cases, Arc<Mutex<...>> is the idiomatic and safe approach in Rust.
     focus_callback: Arc<Mutex<Option<Box<dyn Fn(WindowFocusEvent) + Send + Sync>>>>,
-    // NEW: Window event callback for demo logging
     window_event_callback: Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
     move_resize_start_callback: Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
     move_resize_stop_callback: Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
+    pub virtual_grid: Arc<Vec<AtomicCell<GridCell>>>,
+    pub physical_grids: Arc<Vec<AtomicCell<GridCell>>>,
+    highlight_topmost: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Debug)]
 pub struct MonitorGridInfo {
+    pub grid_type: crate::ipc_protocol::GridType,
     pub monitor_id: u32,
     pub width: i32,
     pub height: i32,
     pub x: i32,
     pub y: i32,
+    pub rows: usize, // Add rows and cols fields
+    pub cols: usize,
     pub grid: Vec<Vec<Option<u64>>>,
 }
 
@@ -131,6 +148,29 @@ impl GridClient {
         )?;
         *cb_lock = Some(Box::new(callback));
         Ok(())
+    }
+
+    pub fn set_highlight_topmost(&mut self, highlight: bool) -> GridClientResult<()> {
+        self.highlight_topmost
+            .store(highlight, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+    /// Returns a clone of the current virtual grid state for debugging and inspection
+    pub fn get_current_grid(&self) -> Result<Vec<Vec<ClientCellState>>, String> {
+        // No locking needed, just clone the atomic values into a grid of ClientCellState
+        let grid = self
+            .virtual_grid
+            .iter()
+            .map(|cell| cell.load().state)
+            .collect::<Vec<ClientCellState>>();
+        // Convert flat Vec to 2D Vec<Vec<ClientCellState>>
+        let mut result = Vec::with_capacity(self.config.rows);
+        for row in 0..self.config.rows {
+            let start = row * self.config.cols;
+            let end = start + self.config.cols;
+            result.push(grid[start..end].to_vec());
+        }
+        Ok(result)
     }
 
     pub fn set_move_resize_stop_callback<F>(&mut self, callback: F) -> GridClientResult<()>
@@ -188,21 +228,89 @@ impl GridClient {
             ))
         })?; // First, get the grid configuration from the server
         let config = Self::request_grid_config_from_server()?;
+        let window_list_service = node
+            .service_builder(&ServiceName::new(crate::ipc_protocol::GRID_WINDOW_LIST_SERVICE).map_err(|e| {
+                    GridClientError::IpcError(format!(
+                        "Failed to create window list service: {:?} Check/delete: C:\\Temp\\iceoryx2",
+                        e
+                    ))
+                })?)
+            .publish_subscribe::<crate::ipc_protocol::WindowListMessage>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create().map_err(|e| {
+                    GridClientError::IpcError(format!(
+                        "Failed to create window list service: {:?} Check/delete: C:\\Temp\\iceoryx2",
+                        e
+                    ))
+                })?;
+        let window_list_subscriber = Some(window_list_service.subscriber_builder().create().map_err(|e| {
+                    GridClientError::IpcError(format!(
+                        "Failed to create window list subscriber: {:?} Check/delete: C:\\Temp\\iceoryx2",
+                        e
+                    ))
+                })?);
+
+        let monitor_list_service = node
+            .service_builder(
+                &ServiceName::new(crate::ipc_protocol::GRID_MONITOR_LIST_SERVICE).map_err(|e| {
+                    GridClientError::IpcError(format!(
+                        "Failed to create monitor list service name: {}",
+                        e
+                    ))
+                })?,
+            )
+            .publish_subscribe::<crate::ipc_protocol::MonitorList>()
+            .max_publishers(8)
+            .max_subscribers(8)
+            .open_or_create()
+            .map_err(|e| {
+                GridClientError::IpcError(format!("Failed to create monitor list service: {}", e))
+            })?;
+        let monitor_list_subscriber = Some(monitor_list_service.subscriber_builder().create().map_err(|e| {
+                    GridClientError::IpcError(format!(
+                        "Failed to create monitor list subscriber: {:?} Check/delete: C:\\Temp\\iceoryx2",
+                        e
+                    ))
+                })?);
 
         // Now initialize with the dynamic config
-        let virtual_grid = vec![vec![ClientCellState::Empty; config.cols]; config.rows];
+        let grid_size = (config.rows * config.cols) as usize;
+        let virtual_grid = (0..grid_size)
+            .map(|_| {
+                AtomicCell::new(GridCell {
+                    state: ClientCellState::Empty,
+                    monitor_ids: [0; 4],
+                    monitor_count: 0,
+                })
+            })
+            .collect::<Vec<_>>();
+        let physical_grids = (0..grid_size)
+            .map(|_| {
+                AtomicCell::new(GridCell {
+                    state: ClientCellState::Empty,
+                    monitor_ids: [0; 4],
+                    monitor_count: 0,
+                })
+            })
+            .collect::<Vec<_>>();
         let client = Self {
             config,
             command_publisher,
-            windows: Arc::new(Mutex::new(HashMap::new())),
-            virtual_grid: Arc::new(Mutex::new(virtual_grid)),
-            monitors: Arc::new(Mutex::new(Vec::new())),
-            auto_display: Arc::new(Mutex::new(true)),
-            running: Arc::new(Mutex::new(true)),
+            has_valid_grid_data: Arc::new(AtomicBool::new(false)),
+            windows: Arc::new(DashMap::new()),
+            virtual_grid: Arc::new(virtual_grid),
+            monitors: Arc::new(DashMap::new()),
+            auto_display: Arc::new(AtomicBool::new(true)),
+            running: Arc::new(AtomicBool::new(true)),
             focus_callback: Arc::new(Mutex::new(None)),
             window_event_callback: Arc::new(Mutex::new(None)),
             move_resize_start_callback: Arc::new(Mutex::new(None)),
             move_resize_stop_callback: Arc::new(Mutex::new(None)),
+            physical_grids: Arc::new(physical_grids),
+            window_list_subscriber,
+            monitor_list_subscriber,
+            highlight_topmost: Arc::new(AtomicBool::new(false)),
         };
 
         info!(
@@ -217,57 +325,213 @@ impl GridClient {
 
         Ok(client)
     }
-
-    pub fn request_grid_config(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let command = IpcCommand {
-            command_type: IpcCommandType::GetGridState, // Use GetGridState instead of GetGridConfig
-            hwnd: None,
-            target_row: None,
-            target_col: None,
-            monitor_id: None,
-            layout_id: None,
-            animation_duration_ms: None,
-            easing_type: None,
-            protocol_version: 1,
-        };
-        self.command_publisher.send_copy(command)?;
-        debug!("🔧 Requested grid configuration from server...");
-        Ok(())
-    }
-
-    pub fn wait_for_config(
-        &mut self,
-        _timeout_ms: u64,
-    ) -> Result<GridConfig, Box<dyn std::error::Error>> {
-        // For now, just return the current config
-        // TODO: Implement actual waiting for server response
-        Ok(self.config.clone())
-    }
     fn initialize_client_grid(&self) -> GridClientResult<()> {
-        // Initialize basic client grid structure - monitor details will come from server
+        // Initialize basic client grid structure - set all as empty initially
         debug!(
             "🔧 Initializing client grid structure {}x{}",
             self.config.rows, self.config.cols
         );
 
         {
-            let mut grid = safe_arc_lock(&self.virtual_grid, "virtual grid initialization")?;
-            // Initialize all cells as empty - server will provide actual on-screen/off-screen status
+            // Initialize all cells as empty - will be updated to offscreen when monitor data arrives
             for row in 0..self.config.rows {
                 for col in 0..self.config.cols {
-                    grid[row][col] = ClientCellState::Empty;
+                    let idx = row * self.config.cols + col;
+                    self.virtual_grid[idx].store(GridCell {
+                        state: ClientCellState::Empty,
+                        monitor_ids: [0; 4],
+                        monitor_count: 0,
+                    });
                 }
             }
         }
 
-        // Initialize empty monitor list - will be populated from server data
-        {
-            let mut monitors_lock = safe_arc_lock(&self.monitors, "monitors initialization")?;
-            monitors_lock.clear();
-            debug!("🔧 Client grid initialized - awaiting server data for monitor layouts");
+        debug!("🔧 Client grid initialized - awaiting server data for monitor layouts");
+        Ok(())
+    }
+    /// Initialize offscreen cells based on monitor bounds (similar to server logic)
+    fn initialize_offscreen_cells(&self, monitor_list: &crate::ipc_protocol::MonitorList) {
+        // Get virtual screen bounds (like server does)
+        let virtual_rect = unsafe {
+            winapi::shared::windef::RECT {
+                left: winapi::um::winuser::GetSystemMetrics(winapi::um::winuser::SM_XVIRTUALSCREEN),
+                top: winapi::um::winuser::GetSystemMetrics(winapi::um::winuser::SM_YVIRTUALSCREEN),
+                right: winapi::um::winuser::GetSystemMetrics(
+                    winapi::um::winuser::SM_XVIRTUALSCREEN,
+                ) + winapi::um::winuser::GetSystemMetrics(
+                    winapi::um::winuser::SM_CXVIRTUALSCREEN,
+                ),
+                bottom: winapi::um::winuser::GetSystemMetrics(
+                    winapi::um::winuser::SM_YVIRTUALSCREEN,
+                ) + winapi::um::winuser::GetSystemMetrics(
+                    winapi::um::winuser::SM_CYVIRTUALSCREEN,
+                ),
+            }
+        };
+
+        let cell_width = (virtual_rect.right - virtual_rect.left) / self.config.cols as i32;
+        let cell_height = (virtual_rect.bottom - virtual_rect.top) / self.config.rows as i32;
+
+        // Collect actual monitor bounds from monitor list
+        let mut actual_monitors = Vec::new();
+        for i in 0..monitor_list.monitor_count as usize {
+            let m = &monitor_list.monitors[i];
+            actual_monitors.push(winapi::shared::windef::RECT {
+                left: m.x,
+                top: m.y,
+                right: m.x + m.width,
+                bottom: m.y + m.height,
+            });
         }
 
-        Ok(())
+        // Initialize all cells based on whether they're on an actual monitor
+        for row in 0..self.config.rows {
+            for col in 0..self.config.cols {
+                let idx = row * self.config.cols + col;
+                let current_cell = self.virtual_grid[idx].load();
+
+                // Skip if cell is already occupied by a window
+                if matches!(current_cell.state, ClientCellState::Occupied(_)) {
+                    continue;
+                }
+
+                let cell_left = virtual_rect.left + (col as i32 * cell_width);
+                let cell_top = virtual_rect.top + (row as i32 * cell_height);
+                let cell_right = cell_left + cell_width;
+                let cell_bottom = cell_top + cell_height;
+
+                // Check if this cell overlaps with any actual monitor
+                let mut is_on_screen = false;
+                for monitor_rect in &actual_monitors {
+                    if cell_right > monitor_rect.left
+                        && cell_left < monitor_rect.right
+                        && cell_bottom > monitor_rect.top
+                        && cell_top < monitor_rect.bottom
+                    {
+                        is_on_screen = true;
+                        break;
+                    }
+                }
+
+                let new_state = if is_on_screen {
+                    ClientCellState::Empty
+                } else {
+                    ClientCellState::OffScreen
+                };
+
+                self.virtual_grid[idx].store(GridCell {
+                    state: new_state,
+                    monitor_ids: current_cell.monitor_ids,
+                    monitor_count: current_cell.monitor_count,
+                });
+            }
+        }
+    }
+    /// Static version of initialize_offscreen_cells for use in monitoring loop
+    fn initialize_offscreen_cells_static(
+        monitor_list: &crate::ipc_protocol::MonitorList,
+        virtual_grid: &Arc<Vec<AtomicCell<GridCell>>>,
+        config: &GridConfig,
+    ) {
+        // Get virtual screen bounds (like server does)
+        let virtual_rect = unsafe {
+            winapi::shared::windef::RECT {
+                left: winapi::um::winuser::GetSystemMetrics(winapi::um::winuser::SM_XVIRTUALSCREEN),
+                top: winapi::um::winuser::GetSystemMetrics(winapi::um::winuser::SM_YVIRTUALSCREEN),
+                right: winapi::um::winuser::GetSystemMetrics(
+                    winapi::um::winuser::SM_XVIRTUALSCREEN,
+                ) + winapi::um::winuser::GetSystemMetrics(
+                    winapi::um::winuser::SM_CXVIRTUALSCREEN,
+                ),
+                bottom: winapi::um::winuser::GetSystemMetrics(
+                    winapi::um::winuser::SM_YVIRTUALSCREEN,
+                ) + winapi::um::winuser::GetSystemMetrics(
+                    winapi::um::winuser::SM_CYVIRTUALSCREEN,
+                ),
+            }
+        };
+
+        let cell_width = (virtual_rect.right - virtual_rect.left) / config.cols as i32;
+        let cell_height = (virtual_rect.bottom - virtual_rect.top) / config.rows as i32;
+
+        // Collect actual monitor bounds from monitor list
+        let mut actual_monitors = Vec::new();
+        for i in 0..monitor_list.monitor_count as usize {
+            let m = &monitor_list.monitors[i];
+            actual_monitors.push(winapi::shared::windef::RECT {
+                left: m.x,
+                top: m.y,
+                right: m.x + m.width,
+                bottom: m.y + m.height,
+            });
+            println!(
+                "[OFFSCREEN] Monitor {}: ({}, {}) to ({}, {})",
+                m.monitor_id,
+                m.x,
+                m.y,
+                m.x + m.width,
+                m.y + m.height
+            );
+        }
+
+        println!(
+            "[OFFSCREEN] Virtual screen: ({}, {}) to ({}, {})",
+            virtual_rect.left, virtual_rect.top, virtual_rect.right, virtual_rect.bottom
+        );
+        println!("[OFFSCREEN] Cell size: {}x{}", cell_width, cell_height);
+
+        // Initialize all cells based on whether they're on an actual monitor
+        for row in 0..config.rows {
+            for col in 0..config.cols {
+                let idx = row * config.cols + col;
+                let current_cell = virtual_grid[idx].load();
+
+                // Skip if cell is already occupied by a window
+                if matches!(current_cell.state, ClientCellState::Occupied(_)) {
+                    continue;
+                }
+
+                let cell_left = virtual_rect.left + (col as i32 * cell_width);
+                let cell_top = virtual_rect.top + (row as i32 * cell_height);
+                let cell_right = cell_left + cell_width;
+                let cell_bottom = cell_top + cell_height;
+
+                // Check if this cell overlaps with any actual monitor
+                let mut is_on_screen = false;
+                for monitor_rect in &actual_monitors {
+                    if cell_right > monitor_rect.left
+                        && cell_left < monitor_rect.right
+                        && cell_bottom > monitor_rect.top
+                        && cell_top < monitor_rect.bottom
+                    {
+                        is_on_screen = true;
+                        break;
+                    }
+                }
+
+                let new_state = if is_on_screen {
+                    ClientCellState::Empty
+                } else {
+                    ClientCellState::OffScreen
+                };
+
+                if matches!(current_cell.state, ClientCellState::Empty)
+                    || matches!(current_cell.state, ClientCellState::OffScreen)
+                {
+                    virtual_grid[idx].store(GridCell {
+                        state: new_state,
+                        monitor_ids: current_cell.monitor_ids,
+                        monitor_count: current_cell.monitor_count,
+                    });
+
+                    if new_state == ClientCellState::OffScreen {
+                        println!("[OFFSCREEN] Cell [{}, {}] marked as offscreen", row, col);
+                    }
+                }
+            }
+        }
+
+        println!("[OFFSCREEN] Virtual grid offscreen initialization complete");
     }
 
     pub fn start_background_monitoring(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -280,15 +544,15 @@ impl GridClient {
         let window_event_callback = self.window_event_callback.clone();
         let move_resize_start_callback = self.move_resize_start_callback.clone();
         let move_resize_stop_callback = self.move_resize_stop_callback.clone();
-        let config = self.config.clone(); // Clone the config for the background thread
+        let has_valid_grid_data = self.has_valid_grid_data.clone();
+        let config = self.config.clone();
 
         thread::spawn(move || {
             let mut connection_retry_count = 0;
-            let max_retries = 5; // Reduced from 10
-            let retry_delay = Duration::from_secs(3); // Increased from 2 seconds
+            let max_retries = 5;
+            let retry_delay = Duration::from_secs(3);
 
-            while *running.lock().unwrap() {
-                // Try to create/recreate connection to server
+            while running.load(std::sync::atomic::Ordering::Relaxed) {
                 match Self::create_background_subscribers() {
                     Ok((
                         event_subscriber,
@@ -296,6 +560,8 @@ impl GridClient {
                         focus_subscriber,
                         heartbeat_subscriber,
                         response_subscriber,
+                        window_list_subscriber,
+                        monitor_list_subscriber,
                     )) => {
                         if connection_retry_count > 0 {
                             info!(
@@ -305,19 +571,16 @@ impl GridClient {
                         } else {
                             info!("🔍 Background monitoring started - listening for real-time updates + focus events...");
                         }
-                        connection_retry_count = 0; // Reset retry count on successful connection
-                                                    // Main monitoring loop - process events while connected
-                        // Create lock-free queues for event passing
-                        let window_event_queue = Arc::new(ArrayQueue::new(1024));
-                        let window_details_queue = Arc::new(ArrayQueue::new(1024));
-                        let focus_event_queue = Arc::new(ArrayQueue::new(1024));
+                        connection_retry_count = 0;
 
-                        let monitoring_result = Self::run_monitoring_loop_with_queues(
+                        let monitoring_result = Self::run_monitoring_loop(
                             &event_subscriber,
                             &window_details_subscriber,
                             &focus_subscriber,
                             &heartbeat_subscriber,
                             &response_subscriber,
+                            &window_list_subscriber,
+                            &monitor_list_subscriber,
                             &windows,
                             &virtual_grid,
                             &monitors,
@@ -327,16 +590,13 @@ impl GridClient {
                             &window_event_callback,
                             &move_resize_start_callback,
                             &move_resize_stop_callback,
+                            &has_valid_grid_data,
                             &config,
-                            &window_event_queue,
-                            &window_details_queue,
-                            &focus_event_queue,
                         );
 
                         match monitoring_result {
                             MonitoringResult::ServerDisconnected => {
                                 warn!("⚠️ Lost connection to e_grid server - attempting to reconnect...");
-                                connection_retry_count = 0; // Start fresh retry sequence
                             }
                             MonitoringResult::Shutdown => {
                                 debug!("🛑 Monitoring shutdown requested");
@@ -363,337 +623,52 @@ impl GridClient {
                                 "💀 Max reconnection attempts ({}) exceeded. Monitoring suspended.",
                                 max_retries
                             );
-                            error!("   Please ensure the e_grid server is running and restart the client.");
                             break;
                         }
-
-                        // Wait before retrying
                         thread::sleep(retry_delay);
                     }
                 }
             }
-
             debug!("🛑 Background monitoring stopped");
         });
 
-        // Wait a moment for initial connection attempt before requesting data
+        // Wait for initial connection attempt
         thread::sleep(Duration::from_millis(500));
 
-        // Request initial data        debug!("📡 Requesting initial window data from server...");
+        // Request MONITOR DATA FIRST AND WAIT FOR IT
+        println!("📡 Requesting MONITOR DATA FIRST (required before window data)...");
+
+        for attempt in 1..=5 {
+            match self.request_monitor_list() {
+                Ok(_) => {
+                    println!("✅ Monitor list request #{} sent", attempt);
+                    break;
+                }
+                Err(e) => {
+                    println!("❌ Failed to send monitor list request #{}: {}", attempt, e);
+                    if attempt < 5 {
+                        thread::sleep(Duration::from_millis(500));
+                    }
+                }
+            }
+        }
+
+        // Give server time to process and respond
+        thread::sleep(Duration::from_millis(1000));
+
+        // Now request window data
+        println!("📡 Now requesting window data...");
         match self.request_window_list() {
-            Ok(_) => debug!("✅ Window list request sent"),
-            Err(e) => warn!("❌ Failed to send window list request: {}", e),
+            Ok(_) => println!("✅ Window list request sent"),
+            Err(e) => println!("❌ Failed to send window list request: {}", e),
         }
+
         match self.request_grid_state() {
-            Ok(_) => debug!("✅ Grid state request sent"),
-            Err(e) => warn!("❌ Failed to send grid state request: {}", e),
+            Ok(_) => println!("✅ Grid state request sent"),
+            Err(e) => println!("❌ Failed to send grid state request: {}", e),
         }
-        debug!("📡 Initial data requests completed");
+
         Ok(())
-    }
-
-    // If you want to avoid Arc<Mutex<...>> locking for sharing data between threads,
-    // you can use lock-free ring buffers (e.g., crossbeam::ArrayQueue, heapless::spsc::Queue, or similar).
-    // This requires changing your data structures to use these queues for communication.
-    // Example: Replace Arc<Mutex<HashMap<...>>> with a lock-free queue for events.
-
-    // For illustration, here's how you might change the function signature to use ring buffers:
-    fn run_monitoring_loop_with_queues(
-        event_subscriber: &Subscriber<Service, WindowEvent, ()>,
-        window_details_subscriber: &Subscriber<Service, WindowDetails, ()>,
-        focus_subscriber: &Subscriber<Service, WindowFocusEvent, ()>,
-        heartbeat_subscriber: &Subscriber<Service, HeartbeatMessage, ()>,
-        response_subscriber: &Subscriber<Service, IpcResponse, ()>,
-        windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
-        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
-        monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
-        auto_display: &Arc<Mutex<bool>>,
-        running: &Arc<Mutex<bool>>,
-        focus_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowFocusEvent) + Send + Sync>>>>,
-        window_event_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
-        move_resize_start_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
-        move_resize_stop_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
-        config: &GridConfig,
-        window_event_queue: &Arc<ArrayQueue<WindowEvent>>,
-        window_details_queue: &Arc<ArrayQueue<WindowDetails>>,
-        focus_event_queue: &Arc<ArrayQueue<WindowFocusEvent>>,
-    ) -> MonitoringResult {
-        let mut consecutive_empty_cycles = 0;
-        let max_empty_cycles = 200; // If no data for 200 cycles (10+ seconds), assume disconnection
-
-        loop {
-            if !*running.lock().unwrap() {
-                return MonitoringResult::Shutdown;
-            }
-
-            let mut _events_received = 0;
-            let mut _details_received = 0;
-            let mut _focus_events_received = 0;
-            let mut had_activity = false; // Process window events (real-time, process all available)
-            while let Some(event_sample) = event_subscriber.receive().unwrap_or(None) {
-                let event = *event_sample;
-                _events_received += 1;
-                had_activity = true;
-                println!("[DEBUG] Received WindowEvent: type={} hwnd={} row={} col={}", event.event_type, event.hwnd, event.row, event.col);
-                // Call user callback if set
-                if let Ok(cb_lock) = window_event_callback.lock() {
-                    if let Some(ref cb) = *cb_lock {
-                        cb(event.clone());
-                    }
-                }
-                if let Ok(cb_lock) = move_resize_start_callback.lock() {
-                    if let Some(ref cb) = *cb_lock {
-                        // Trigger for any start event: 4 (MoveStart), 6 (ResizeStart), 8 (BothStart)
-                        if matches!(event.event_type, 4 | 6 | 8) {
-                            debug!(
-                                "📦 Move/resize start callback triggered for HWND {} (type={})",
-                                event.hwnd, event.event_type
-                            );
-                            cb(event.clone());
-                        }
-                    }
-                }
-                if let Ok(cb_lock) = move_resize_stop_callback.lock() {
-                    if let Some(ref cb) = *cb_lock {
-                        // Trigger for any stop event: 5 (MoveStop), 7 (ResizeStop), 9 (BothStop)
-                        if matches!(event.event_type, 5 | 7 | 9) {
-                            cb(event.clone());
-                        }
-                    }
-                }
-
-                Self::handle_window_event(
-                    &event,
-                    windows,
-                    virtual_grid,
-                    monitors,
-                    auto_display,
-                    config,
-                );
-
-                // Add event to queue
-                let _ = window_event_queue.push(event.clone());
-            }
-
-            // Process focus events (real-time, process all available)
-            while let Some(focus_sample) = focus_subscriber.receive().unwrap_or(None) {
-                let focus_event = *focus_sample;
-                _focus_events_received += 1;
-                had_activity = true;
-                debug!(
-                    "🎯 [FOCUS EVENT] HWND {} (PID: {}) at timestamp: {}",
-                    focus_event.hwnd, focus_event.process_id, focus_event.timestamp
-                );
-                Self::handle_focus_event(&focus_event, focus_callback);
-
-                // Add focus event to queue
-                let _ = focus_event_queue.push(focus_event.clone());
-            }
-
-            // Process window details updates (real-time, process all available)
-            while let Some(details_sample) = window_details_subscriber.receive().unwrap_or(None) {
-                let details = *details_sample;
-                _details_received += 1;
-                had_activity = true;
-
-                Self::handle_window_details(
-                    &details,
-                    windows,
-                    virtual_grid,
-                    monitors,
-                    auto_display,
-                    config,
-                );
-
-                // Add details to queue
-                let _ = window_details_queue.push(details.clone());
-            } // Process heartbeat messages to keep connection alive
-            while let Some(heartbeat_sample) = heartbeat_subscriber.receive().unwrap_or(None) {
-                let heartbeat = *heartbeat_sample;
-                had_activity = true; // Reset disconnect counter on heartbeat
-
-                // Check for shutdown heartbeat (iteration = 0)
-                if heartbeat.server_iteration == 0 {
-                    info!("💓 Received shutdown heartbeat from server - server is gracefully shutting down");
-                    return MonitoringResult::ServerDisconnected;
-                }
-                // No need to log every normal heartbeat, just reset the timer
-            }
-
-            // Process IpcResponse messages (monitor list, etc)
-            while let Some(response_sample) = response_subscriber.receive().unwrap_or(None) {
-                let response = (*response_sample).clone();
-                had_activity = true;
-                if let Some(monitor_list) = response.monitor_list {
-                    if let Ok(mut monitors_lock) = monitors.lock() {
-                        monitors_lock.clear();
-                        for m in monitor_list.monitors {
-                            monitors_lock.push(MonitorGridInfo {
-                                monitor_id: m.id,
-                                width: m.width,
-                                height: m.height,
-                                x: m.x,
-                                y: m.y,
-                                grid: m.grid,
-                            });
-                        }
-                        debug!(
-                            "[MONITOR LIST] Updated client monitor list: {} monitors",
-                            monitors_lock.len()
-                        );
-                    }
-                }
-            }
-
-            // Connection health monitoring
-            if had_activity {
-                consecutive_empty_cycles = 0; // Reset counter on activity
-            } else {
-                consecutive_empty_cycles += 1;
-                if consecutive_empty_cycles >= max_empty_cycles {
-                    warn!(
-                        "⚠️ No data received for {} cycles - server may have disconnected",
-                        consecutive_empty_cycles
-                    );
-                    return MonitoringResult::ServerDisconnected;
-                }
-            }
-
-            // Reduced status frequency - only during low activity periods
-            static mut LAST_STATUS_TIME: std::time::Instant = unsafe { std::mem::zeroed() };
-            static mut STATUS_INITIALIZED: bool = false;
-
-            unsafe {
-                if !STATUS_INITIALIZED {
-                    LAST_STATUS_TIME = std::time::Instant::now();
-                    STATUS_INITIALIZED = true;
-                }
-
-                if LAST_STATUS_TIME.elapsed().as_secs() > 30 && !had_activity {
-                    // Only during idle periods
-                    let window_count = {
-                        let windows_lock = windows.lock().unwrap();
-                        windows_lock.len()
-                    }; // Release lock immediately
-                    debug!("\n🔥 ===== CLIENT STATUS (IDLE) =====");
-                    debug!("🔍 Monitoring: {} windows", window_count);
-                    debug!("🎯 Focus events: enabled");
-                    debug!("📡 Server connection: healthy");
-                    LAST_STATUS_TIME = std::time::Instant::now();
-                }
-            }
-
-            // Much shorter sleep for real-time responsiveness
-            if had_activity {
-                thread::sleep(Duration::from_millis(10)); // Very responsive during activity
-            } else {
-                thread::sleep(Duration::from_millis(50)); // Still responsive during idle
-            }
-        }
-    }
-
-    /// Get the current grid configuration
-    pub fn get_config(&self) -> &GridConfig {
-        &self.config
-    }
-
-    /// Start IPC services for client communication
-    pub fn start_services(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Services are already started in new(), this is for compatibility
-        info!("✅ IPC client services started");
-        Ok(())
-    }
-    /// Assign window to virtual grid (alias for existing method)
-    pub fn assign_window_to_virtual_grid(
-        &mut self,
-        hwnd: u64,
-        row: u32,
-        col: u32,
-    ) -> GridClientResult<()> {
-        self.assign_window_to_virtual_cell(hwnd, row, col)
-    }
-
-    /// Animate window with specified duration and easing
-    pub fn animate_window(
-        &mut self,
-        hwnd: u64,
-        duration_ms: u32,
-        easing: crate::EasingType,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let easing_type = match easing {
-            crate::EasingType::Linear => 0,
-            crate::EasingType::EaseIn => 1,
-            crate::EasingType::EaseOut => 2,
-            crate::EasingType::EaseInOut => 3,
-            crate::EasingType::Bounce => 4,
-            crate::EasingType::Elastic => 5,
-            crate::EasingType::Back => 6,
-        };
-        let command = IpcCommand {
-            command_type: IpcCommandType::AnimateWindow,
-            hwnd: Some(hwnd),
-            target_row: None,
-            target_col: None,
-            monitor_id: None,
-            layout_id: None,
-            animation_duration_ms: Some(duration_ms),
-            easing_type: Some(easing_type),
-            protocol_version: 1,
-        };
-        self.send_command(command)?;
-        debug!("🎬 Animation command sent for window {}", hwnd);
-        Ok(())
-    }
-    /// Move window to a specific grid cell (actually moves the window)
-    pub fn move_window_to_cell(
-        &mut self,
-        hwnd: u64,
-        row: u32,
-        col: u32,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let command = IpcCommand {
-            command_type: IpcCommandType::MoveWindow,
-            hwnd: Some(hwnd),
-            target_row: Some(row),
-            target_col: Some(col),
-            monitor_id: None,
-            layout_id: None,
-            animation_duration_ms: None,
-            easing_type: None,
-            protocol_version: 1,
-        };
-        self.send_command(command)?;
-        Ok(())
-    }
-    /// Register a callback to be called when window focus events occur
-    /// This enables e_midi integration by allowing it to listen for focus changes
-    pub fn set_focus_callback<F>(&mut self, callback: F) -> GridClientResult<()>
-    where
-        F: Fn(WindowFocusEvent) + Send + Sync + 'static,
-    {
-        let mut focus_callback_lock =
-            safe_arc_lock(&self.focus_callback, "focus callback registration")?;
-        *focus_callback_lock = Some(Box::new(callback));
-        info!("🎯 Focus callback registered for e_midi integration");
-        Ok(())
-    }
-
-    /// Remove the focus callback
-    pub fn clear_focus_callback(&mut self) -> GridClientResult<()> {
-        let mut focus_callback_lock =
-            safe_arc_lock(&self.focus_callback, "focus callback clearing")?;
-        *focus_callback_lock = None;
-        info!("🎯 Focus callback cleared");
-        Ok(())
-    }
-
-    /// Check if a focus callback is currently registered
-    pub fn has_focus_callback(&self) -> bool {
-        if let Ok(focus_callback_lock) = self.focus_callback.lock() {
-            focus_callback_lock.is_some()
-        } else {
-            false
-        }
     }
 
     fn create_background_subscribers() -> Result<
@@ -703,45 +678,58 @@ impl GridClient {
             Subscriber<Service, WindowFocusEvent, ()>,
             Subscriber<Service, HeartbeatMessage, ()>,
             Subscriber<Service, IpcResponse, ()>,
+            Subscriber<Service, crate::ipc_protocol::WindowListMessage, ()>,
+            Subscriber<Service, crate::ipc_protocol::MonitorList, ()>,
         ),
         Box<dyn std::error::Error>,
     > {
         let node = NodeBuilder::new().create::<Service>()?;
 
-        // Create event subscriber
         let event_service = node
             .service_builder(&ServiceName::new(GRID_EVENTS_SERVICE)?)
             .publish_subscribe::<WindowEvent>()
             .open()?;
         let event_subscriber = event_service.subscriber_builder().create()?;
 
-        // Create window details subscriber
         let window_details_service = node
             .service_builder(&ServiceName::new(GRID_WINDOW_DETAILS_SERVICE)?)
             .publish_subscribe::<WindowDetails>()
             .open()?;
         let window_details_subscriber = window_details_service.subscriber_builder().create()?;
 
-        // Create focus events subscriber for e_midi integration
         let focus_service = node
             .service_builder(&ServiceName::new(GRID_FOCUS_EVENTS_SERVICE)?)
             .publish_subscribe::<WindowFocusEvent>()
             .open()?;
         let focus_subscriber = focus_service.subscriber_builder().create()?;
 
-        // Create heartbeat subscriber for connection monitoring
         let heartbeat_service = node
             .service_builder(&ServiceName::new(GRID_HEARTBEAT_SERVICE)?)
             .publish_subscribe::<HeartbeatMessage>()
             .open()?;
         let heartbeat_subscriber = heartbeat_service.subscriber_builder().create()?;
 
-        // Create response subscriber for IpcResponse (monitor list, etc)
         let response_service = node
             .service_builder(&ServiceName::new(GRID_RESPONSE_SERVICE)?)
             .publish_subscribe::<IpcResponse>()
             .open()?;
         let response_subscriber = response_service.subscriber_builder().create()?;
+
+        let window_list_service = node
+            .service_builder(&ServiceName::new(
+                crate::ipc_protocol::GRID_WINDOW_LIST_SERVICE,
+            )?)
+            .publish_subscribe::<crate::ipc_protocol::WindowListMessage>()
+            .open()?;
+        let window_list_subscriber = window_list_service.subscriber_builder().create()?;
+
+        let monitor_list_service = node
+            .service_builder(&ServiceName::new(
+                crate::ipc_protocol::GRID_MONITOR_LIST_SERVICE,
+            )?)
+            .publish_subscribe::<crate::ipc_protocol::MonitorList>()
+            .open()?;
+        let monitor_list_subscriber = monitor_list_service.subscriber_builder().create()?;
 
         Ok((
             event_subscriber,
@@ -749,448 +737,497 @@ impl GridClient {
             focus_subscriber,
             heartbeat_subscriber,
             response_subscriber,
+            window_list_subscriber,
+            monitor_list_subscriber,
         ))
     }
 
-    fn handle_window_event(
-        event: &WindowEvent,
-        windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
-        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
-        monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
-        auto_display: &Arc<Mutex<bool>>,
-        config: &GridConfig,
-    ) {
-        let event_name = match event.event_type {
-            0 => "CREATED",
-            1 => "DESTROYED",
-            2 => "MOVED",
-            3 => "STATE_CHANGED",
-            4 => "MOVE_START",
-            5 => "MOVE_STOP",
-            6 => "RESIZE_START",
-            7 => "RESIZE_STOP",
-            _ => "UNKNOWN",
-        };
-        debug!(
-            "[REAL-TIME EVENT] {}: HWND {} at ({}, {})",
-            event_name, event.hwnd, event.row, event.col
-        );
-        match event.event_type {
-            0 => {
-                // Window created - we'll get window details shortly
-                debug!(
-                    "   New window {} created, waiting for details...",
-                    event.hwnd
-                );
-            }
-            1 => {
-                // Window destroyed
-                Self::remove_window_from_client(event.hwnd, windows, virtual_grid, monitors);
-                debug!("   Removed window {} from client state", event.hwnd);
-            }
-            2 => {
-                // Window moved - we'll get updated window details shortly
-                debug!(
-                    "   Window {} moved, waiting for updated details...",
-                    event.hwnd
-                );
-            }
-            4 => {
-                // Move start
-                debug!(
-                    "   Window {} move started at ({}, {})",
-                    event.hwnd, event.row, event.col
-                );
-            }
-            5 => {
-                // Move stop
-                debug!(
-                    "   Window {} move stopped at ({}, {})",
-                    event.hwnd, event.row, event.col
-                );
-            }
-            6 => {
-                // Resize start
-                debug!(
-                    "   Window {} resize started at ({}, {})",
-                    event.hwnd, event.row, event.col
-                );
-            }
-            7 => {
-                // Resize stop
-                debug!(
-                    "   Window {} resize stopped at ({}, {})",
-                    event.hwnd, event.row, event.col
-                );
-            }
-            _ => {}
-        }
-        // Only display grid for significant events and not too frequently
-        static mut LAST_EVENT_DISPLAY: std::time::Instant = unsafe { std::mem::zeroed() };
-        static mut EVENT_DISPLAY_INITIALIZED: bool = false;
-        unsafe {
-            if !EVENT_DISPLAY_INITIALIZED {
-                LAST_EVENT_DISPLAY = std::time::Instant::now();
-                EVENT_DISPLAY_INITIALIZED = true;
-            }
-            if *auto_display.lock().unwrap() &&               (event.event_type == 0 || event.event_type == 1) && // Only for create/destroy
-               LAST_EVENT_DISPLAY.elapsed().as_millis() > 500
-            {
-                // Max twice per second
-                debug!("   Displaying grid after {} event...", event_name);
-                Self::display_virtual_grid(&virtual_grid, &windows, &config);
-                LAST_EVENT_DISPLAY = std::time::Instant::now();
-            }
-        }
-    }
-    /// Remove a window from all client state
-    fn remove_window_from_client(
-        hwnd: u64,
-        windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
-        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
-        monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
-    ) {
-        // Remove from window cache
-        if let Ok(mut windows_lock) = windows.lock() {
-            windows_lock.remove(&hwnd);
-        }
-
-        // Remove from virtual grid
-        if let Ok(mut grid) = virtual_grid.lock() {
-            for row in 0..grid.len() {
-                for col in 0..grid[row].len() {
-                    if let ClientCellState::Occupied(existing_hwnd) = grid[row][col] {
-                        if existing_hwnd == hwnd {
-                            grid[row][col] = ClientCellState::Empty;
-                        }
-                    }
-                }
-            }
-        }
-        // Remove from monitor grids
-        if let Ok(mut monitors_lock) = monitors.lock() {
-            for monitor in monitors_lock.iter_mut() {
-                for row in 0..monitor.grid.len() {
-                    for col in 0..monitor.grid[row].len() {
-                        if monitor.grid[row][col] == Some(hwnd) {
-                            monitor.grid[row][col] = None;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    fn handle_window_details(
-        details: &WindowDetails,
-        windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
-        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
-        monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
-        auto_display: &Arc<Mutex<bool>>,
-        config: &GridConfig,
-    ) {
-        debug!(
-            "📊 [WINDOW UPDATE] HWND {} at ({}, {}) size {}x{}",
-            details.hwnd, details.x, details.y, details.width, details.height
-        );
-        debug!(
-            "   📍 Virtual Grid: ({}, {}) to ({}, {})",
-            details.virtual_row_start,
-            details.virtual_col_start,
-            details.virtual_row_end,
-            details.virtual_col_end
-        );
-        debug!(
-            "   🖥️  Monitor {}: ({}, {}) to ({}, {})",
-            details.monitor_id,
-            details.monitor_row_start,
-            details.monitor_col_start,
-            details.monitor_row_end,
-            details.monitor_col_end
-        );
-
-        // Update local window cache
-        if let Ok(mut windows_lock) = windows.lock() {
-            let window_info = ClientWindowInfo::from(*details);
-            windows_lock.insert(details.hwnd, window_info);
-        }
-
-        // Update virtual grid
-        Self::update_virtual_grid(&details, &virtual_grid);
-        // Update monitor grids
-        Self::update_monitor_grids(&details, &monitors, config); // Auto-display grid if enabled (but not too frequently)
-        if *auto_display.lock().unwrap() {
-            static mut LAST_AUTO_DISPLAY: std::time::Instant = unsafe { std::mem::zeroed() };
-            static mut AUTO_DISPLAY_INITIALIZED: bool = false;
-
-            unsafe {
-                if !AUTO_DISPLAY_INITIALIZED {
-                    LAST_AUTO_DISPLAY = std::time::Instant::now();
-                    AUTO_DISPLAY_INITIALIZED = true;
-                } // Only auto-display if it's been at least 1 second since last display
-                if LAST_AUTO_DISPLAY.elapsed().as_millis() > 1000 {
-                    debug!("   🔄 Auto-displaying updated grid...");
-                    Self::display_virtual_grid(&virtual_grid, &windows, config);
-                    debug!("   ─────────────────────────────────────");
-                    LAST_AUTO_DISPLAY = std::time::Instant::now();
-                } else {
-                    debug!(
-                        "   ⏳ Auto-display throttled (last update {} ms ago)",
-                        LAST_AUTO_DISPLAY.elapsed().as_millis()
-                    );
-                }
-            }
-        }
-    }
-    /// Handle focus events for e_midi integration
-    fn handle_focus_event(
-        focus_event: &WindowFocusEvent,
+    fn run_monitoring_loop(
+        event_subscriber: &Subscriber<Service, WindowEvent, ()>,
+        window_details_subscriber: &Subscriber<Service, WindowDetails, ()>,
+        focus_subscriber: &Subscriber<Service, WindowFocusEvent, ()>,
+        heartbeat_subscriber: &Subscriber<Service, HeartbeatMessage, ()>,
+        response_subscriber: &Subscriber<Service, IpcResponse, ()>,
+        window_list_subscriber: &Subscriber<Service, crate::ipc_protocol::WindowListMessage, ()>,
+        monitor_list_subscriber: &Subscriber<Service, crate::ipc_protocol::MonitorList, ()>,
+        windows: &Arc<DashMap<u64, ClientWindowInfo>>,
+        virtual_grid: &Arc<Vec<AtomicCell<GridCell>>>,
+        monitors: &Arc<DashMap<u32, MonitorGridInfo>>,
+        auto_display: &Arc<AtomicBool>,
+        running: &Arc<AtomicBool>,
         focus_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowFocusEvent) + Send + Sync>>>>,
+        window_event_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
+        move_resize_start_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
+        move_resize_stop_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
+        has_valid_grid_data: &Arc<AtomicBool>,
+        config: &GridConfig,
+    ) -> MonitoringResult {
+        let mut consecutive_empty_cycles = 0;
+        let max_empty_cycles = 200;
+        let mut pending_window_list: Option<crate::ipc_protocol::WindowListMessage> = None;
+        let mut monitor_request_timer = std::time::Instant::now();
+        let mut last_debug_time = std::time::Instant::now();
+
+        // Add event filtering to reduce stray events
+        let mut last_move_resize_event: Option<(u64, u32, std::time::Instant)> = None; // (hwnd, event_type, timestamp)
+        let event_debounce_ms = 100; // Ignore duplicate events within 100ms
+
+        println!("[MONITORING] 🔍 Starting monitoring loop - MONITORS MUST COME FIRST!");
+
+        loop {
+            if !running.load(std::sync::atomic::Ordering::Relaxed) {
+                return MonitoringResult::Shutdown;
+            }
+
+            let mut had_activity = false;
+
+            // Debug status every 5 seconds
+            if last_debug_time.elapsed().as_secs() >= 5 {
+                println!(
+                    "[MONITORING] 📊 Status: monitors={}, windows={}, pending_windows={}",
+                    monitors.len(),
+                    windows.len(),
+                    pending_window_list.as_ref().map_or(0, |w| w.window_count)
+                );
+                last_debug_time = std::time::Instant::now();
+            }
+
+            // CRITICAL: Process window events FIRST (this was missing!)
+            while let Some(event_sample) = event_subscriber.receive().unwrap_or(None) {
+                let window_event = *event_sample;
+                had_activity = true;
+
+                // Filter out rapid duplicate events to reduce stray events
+                let should_process = match window_event.event_type {
+                    4 | 5 | 6 | 7 => {
+                        // Move/resize events
+                        let now = std::time::Instant::now();
+                        let should_skip = if let Some((last_hwnd, last_type, last_time)) =
+                            last_move_resize_event
+                        {
+                            last_hwnd == window_event.hwnd
+                                && last_type == window_event.event_type as u32
+                                && now.duration_since(last_time).as_millis() < event_debounce_ms
+                        } else {
+                            false
+                        };
+
+                        if should_skip {
+                            println!("🚫 [CLIENT] Skipping duplicate event: type={} hwnd={} (within {}ms)", 
+                                     window_event.event_type, window_event.hwnd, event_debounce_ms);
+                            false
+                        } else {
+                            last_move_resize_event =
+                                Some((window_event.hwnd, window_event.event_type.into(), now));
+                            true
+                        }
+                    }
+                    _ => true, // Process all other events normally
+                };
+
+                if !should_process {
+                    continue;
+                }
+
+                println!(
+                    "🔥 [CLIENT] Received window event: type={} hwnd={}",
+                    window_event.event_type, window_event.hwnd
+                );
+
+                // Call window event callback
+                if let Ok(cb_lock) = window_event_callback.lock() {
+                    if let Some(ref cb) = *cb_lock {
+                        cb(window_event);
+                    }
+                }
+
+                // Call specific move/resize callbacks based on event type
+                match window_event.event_type {
+                    4 | 6 => {
+                        // Move start (4) or Resize start (6)
+                        println!(
+                            "🚀 [CLIENT] Triggering move/resize START callback for event type {}",
+                            window_event.event_type
+                        );
+                        if let Ok(cb_lock) = move_resize_start_callback.lock() {
+                            if let Some(ref cb) = *cb_lock {
+                                cb(window_event);
+                            } else {
+                                println!("⚠️ [CLIENT] Move/resize start callback is None!");
+                            }
+                        }
+                    }
+                    5 | 7 => {
+                        // Move stop (5) or Resize stop (7)
+                        println!(
+                            "🏁 [CLIENT] Triggering move/resize STOP callback for event type {}",
+                            window_event.event_type
+                        );
+                        if let Ok(cb_lock) = move_resize_stop_callback.lock() {
+                            if let Some(ref cb) = *cb_lock {
+                                cb(window_event);
+                            } else {
+                                println!("⚠️ [CLIENT] Move/resize stop callback is None!");
+                            }
+                        }
+                    }
+                    _ => {
+                        println!(
+                            "ℹ️ [CLIENT] Other window event type: {}",
+                            window_event.event_type
+                        );
+                    }
+                }
+            }
+
+            // If no monitors received yet, keep requesting them
+            if monitors.is_empty() && monitor_request_timer.elapsed().as_secs() >= 2 {
+                println!("[MONITORING] ⚠️ Still no monitors received - requesting again...");
+                // Note: Can't call self.request_monitor_list() from here since we don't have self
+                // The background thread needs to handle this differently
+                monitor_request_timer = std::time::Instant::now();
+            }
+
+            // Process monitor list messages FIRST - this is CRITICAL
+            while let Some(monitor_list_sample) = monitor_list_subscriber.receive().unwrap_or(None)
+            {
+                let monitor_list = (*monitor_list_sample).clone();
+                had_activity = true;
+
+                println!(
+                    "[MONITOR LIST] 🔥 FINALLY RECEIVED monitor list: {} monitors",
+                    monitor_list.monitor_count
+                );
+
+                // Debug the actual monitor data we received
+                for i in 0..monitor_list.monitor_count as usize {
+                    let m = &monitor_list.monitors[i];
+                    println!(
+                        "[MONITOR LIST] 🖥️ Monitor {}: ID={}, {}x{} at ({},{})",
+                        i, m.monitor_id, m.width, m.height, m.x, m.y
+                    );
+                }
+
+                monitors.clear();
+                for i in 0..monitor_list.monitor_count as usize {
+                    let m = &monitor_list.monitors[i];
+                    let rows = config.rows;
+                    let cols = config.cols;
+                    let grid = vec![vec![None; cols]; rows];
+
+                    monitors.insert(
+                        m.monitor_id,
+                        MonitorGridInfo {
+                            grid_type: m.grid_type,
+                            monitor_id: m.monitor_id,
+                            width: m.width,
+                            height: m.height,
+                            x: m.x,
+                            y: m.y,
+                            rows,
+                            cols,
+                            grid,
+                        },
+                    );
+                    println!("[MONITOR LIST] ✅ Added monitor {} to client", m.monitor_id);
+                }
+
+                Self::initialize_offscreen_cells_static(&monitor_list, virtual_grid, config);
+
+                // NOW process any pending window data since we have monitors
+                if let Some(window_list) = pending_window_list.take() {
+                    println!(
+                        "[MONITOR LIST] 🔄 NOW processing pending window list with {} windows",
+                        window_list.window_count
+                    );
+                    Self::process_window_list(
+                        &window_list,
+                        windows,
+                        virtual_grid,
+                        monitors,
+                        config,
+                        has_valid_grid_data,
+                    );
+                }
+
+                println!(
+                    "[MONITOR LIST] 🎉 Monitor processing complete - client now has {} monitors",
+                    monitors.len()
+                );
+            }
+
+            // Process window list messages - but ONLY if we have monitors
+            while let Some(window_list_sample) = window_list_subscriber.receive().unwrap_or(None) {
+                let window_list = (*window_list_sample).clone();
+                had_activity = true;
+
+                println!(
+                    "[WINDOW LIST] 🔥 RECEIVED window list: {} windows",
+                    window_list.window_count
+                );
+
+                if monitors.is_empty() {
+                    println!("[WINDOW LIST] ❌ BLOCKING: No monitor data available yet - storing window list for later");
+                    pending_window_list = Some(window_list);
+                    continue;
+                }
+
+                println!("[WINDOW LIST] ✅ We have monitors - processing window list immediately");
+                Self::process_window_list(
+                    &window_list,
+                    windows,
+                    virtual_grid,
+                    monitors,
+                    config,
+                    has_valid_grid_data,
+                );
+            }
+
+            // Process other events (focus, heartbeat, etc.)
+            while let Some(focus_sample) = focus_subscriber.receive().unwrap_or(None) {
+                let focus_event = *focus_sample;
+                had_activity = true;
+                if let Ok(cb_lock) = focus_callback.lock() {
+                    if let Some(ref cb) = *cb_lock {
+                        cb(focus_event);
+                    }
+                }
+            }
+
+            while let Some(heartbeat_sample) = heartbeat_subscriber.receive().unwrap_or(None) {
+                let heartbeat = *heartbeat_sample;
+                had_activity = true;
+                if heartbeat.server_iteration == 0 {
+                    return MonitoringResult::ServerDisconnected;
+                }
+            }
+
+            // Connection health monitoring
+            if had_activity {
+                consecutive_empty_cycles = 0;
+            } else {
+                consecutive_empty_cycles += 1;
+                if consecutive_empty_cycles >= max_empty_cycles {
+                    return MonitoringResult::ServerDisconnected;
+                }
+            }
+
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn process_window_list(
+        window_list: &crate::ipc_protocol::WindowListMessage,
+        windows: &Arc<DashMap<u64, ClientWindowInfo>>,
+        virtual_grid: &Arc<Vec<AtomicCell<GridCell>>>,
+        monitors: &Arc<DashMap<u32, MonitorGridInfo>>,
+        config: &GridConfig,
+        has_valid_grid_data: &Arc<AtomicBool>,
     ) {
-        // Debug: Always log that we're handling a focus event
-        let event_type = if focus_event.event_type == 0 {
-            "FOCUSED"
-        } else {
-            "DEFOCUSED"
-        };
-        debug!(
-            "🔍 [DEBUG] handle_focus_event called: {} window {}",
-            event_type, focus_event.hwnd
+        println!(
+            "[WINDOW LIST] 📋 Processing window list with {} windows",
+            window_list.window_count
         );
 
-        // Invoke the callback if one is registered
-        match safe_arc_lock(focus_callback, "focus event callback") {
-            Ok(callback_lock) => {
-                if let Some(ref callback) = *callback_lock {
-                    debug!("🔍 [DEBUG] Calling focus callback for {} event", event_type);
-                    callback(*focus_event);
-                    debug!(
-                        "🔍 [DEBUG] Focus callback completed for {} event",
-                        event_type
-                    );
-                } else {
-                    // Only log when no callback is registered (debugging)
-                    info!(
-                        "🎯 [FOCUS EVENT] {} window {} (no callback)",
-                        event_type, focus_event.hwnd
-                    );
-                }
-            }
-            Err(e) => {
-                warn!("⚠️ Failed to acquire focus callback lock: {}", e);
-            }
+        // Get desktop HWND for filtering (same as server)
+        let desktop_hwnd = unsafe { winapi::um::winuser::GetDesktopWindow() } as u64;
+        println!(
+            "[WINDOW LIST] 🖥️ Desktop HWND: 0x{:X} (will be filtered out)",
+            desktop_hwnd
+        );
+
+        // Clear current window data
+        windows.clear();
+
+        // Clear virtual grid but preserve OffScreen cells
+        for idx in 0..virtual_grid.len() {
+            let current_cell = virtual_grid[idx].load();
+            let new_state = match current_cell.state {
+                ClientCellState::OffScreen => ClientCellState::OffScreen,
+                _ => ClientCellState::Empty,
+            };
+            virtual_grid[idx].store(GridCell {
+                state: new_state,
+                monitor_ids: [0; 4],
+                monitor_count: 0,
+            });
         }
-    }
-    fn update_virtual_grid(
-        details: &WindowDetails,
-        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
-    ) {
-        if let Ok(mut grid) = virtual_grid.lock() {
-            let hwnd = details.hwnd;
 
-            // Clear previous positions for this window
-            for row in 0..grid.len() {
-                for col in 0..grid[row].len() {
-                    if let ClientCellState::Occupied(existing_hwnd) = grid[row][col] {
-                        if existing_hwnd == hwnd {
-                            grid[row][col] = ClientCellState::Empty;
-                        }
-                    }
-                }
-            }
-
-            // Set new positions
-            for row in details.virtual_row_start..=details.virtual_row_end {
-                for col in details.virtual_col_start..=details.virtual_col_end {
-                    if row < grid.len() as u32 && col < grid[0].len() as u32 {
-                        // Only update if it's not an off-screen cell
-                        if let ClientCellState::OffScreen = grid[row as usize][col as usize] {
-                            // Don't overwrite off-screen markers
-                        } else {
-                            grid[row as usize][col as usize] = ClientCellState::Occupied(hwnd);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    fn display_virtual_grid(
-        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
-        windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
-        config: &GridConfig,
-    ) {
-        let window_count = match windows.try_lock() {
-            Ok(windows_lock) => windows_lock.len(),
-            Err(_) => 0,
-        };
-
-        // Convert client grid to server grid format for display
-        if let Ok(grid) = virtual_grid.try_lock() {
-            let server_grid: Vec<Vec<crate::CellState>> = grid
-                .iter()
-                .map(|row| {
-                    row.iter()
-                        .map(|cell| match cell {
-                            ClientCellState::Empty => crate::CellState::Empty,
-                            ClientCellState::Occupied(hwnd) => {
-                                crate::CellState::Occupied(*hwnd as crate::HWND)
-                            }
-                            ClientCellState::OffScreen => crate::CellState::OffScreen,
-                        })
-                        .collect()
-                })
-                .collect();
-            debug!("\n🔥 REAL-TIME GRID UPDATE:");
-
-            // Use the centralized display function (server will provide bounds info)
-            crate::grid_display::display_grid(
-                &server_grid,
-                config,
-                window_count,
-                &crate::grid_display::GridDisplayConfig::default(),
-                Some("Client Grid Viewer"),
-                None,
-                None, // No bounds - let display function use defaults
-            );
-        }
-    }
-    fn update_monitor_grids(
-        details: &WindowDetails,
-        monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
-        config: &GridConfig,
-    ) {
-        if let Ok(mut monitors_lock) = monitors.lock() {
-            // Ensure we have enough monitor grid entries (should have been initialized already)
-            if details.monitor_id as usize >= monitors_lock.len() {
-                warn!(
-                    "⚠️ Monitor ID {} not found in initialized monitors (have {})",
-                    details.monitor_id,
-                    monitors_lock.len()
-                );
-                return;
-            }
-
-            let monitor = &mut monitors_lock[details.monitor_id as usize];
-
-            // Clear previous positions for this window in this monitor
+        // Clear all monitor grids
+        for mut monitor in monitors.iter_mut() {
             for row in 0..monitor.grid.len() {
                 for col in 0..monitor.grid[row].len() {
-                    if monitor.grid[row][col] == Some(details.hwnd) {
-                        monitor.grid[row][col] = None;
-                    }
+                    monitor.grid[row][col] = None;
                 }
             }
+        }
 
-            // Set new positions in monitor grid using the coordinates from the server
-            for row in details.monitor_row_start..=details.monitor_row_end {
-                for col in details.monitor_col_start..=details.monitor_col_end {
+        // Get z-order map to determine topmost windows like the server does
+        let z_order_map = crate::util::get_hwnd_z_order_map();
+        println!(
+            "[WINDOW LIST] 🔍 Z-order map has {} entries for topmost calculation",
+            z_order_map.len()
+        );
+
+        // First pass: Collect all valid windows (filtering desktop HWND like server)
+        let mut valid_windows = Vec::new();
+        let mut filtered_count = 0;
+
+        for i in 0..window_list.window_count as usize {
+            let w = &window_list.windows[i];
+
+            // Filter out desktop HWND like the server does
+            if w.hwnd == desktop_hwnd {
+                filtered_count += 1;
+                println!("[WINDOW LIST] 🚫 Filtered out desktop HWND 0x{:X}", w.hwnd);
+                continue;
+            }
+
+            valid_windows.push(w);
+            let info = ClientWindowInfo::from(*w);
+            windows.insert(w.hwnd, info);
+
+            println!("[WINDOW LIST] ✅ Valid window HWND 0x{:X} on monitor {} at virtual ({},{}) to ({},{}) | monitor ({},{}) to ({},{})", 
+                     w.hwnd, w.monitor_id, w.virtual_row_start, w.virtual_col_start, w.virtual_row_end, w.virtual_col_end,
+                     w.monitor_row_start, w.monitor_col_start, w.monitor_row_end, w.monitor_col_end);
+        }
+
+        println!(
+            "[WINDOW LIST] 📊 After filtering: {} valid windows, {} filtered out",
+            valid_windows.len(),
+            filtered_count
+        );
+
+        // Second pass: Build grids using z-order priority (same algorithm as server)
+        let mut virtual_grid_updates = 0;
+        let mut monitor_grid_updates = 0;
+
+        for w in &valid_windows {
+            // Update virtual grid with z-order consideration
+            let mut cells_updated_for_this_window = 0;
+            for row in w.virtual_row_start..=w.virtual_row_end {
+                for col in w.virtual_col_start..=w.virtual_col_end {
                     if row < config.rows as u32 && col < config.cols as u32 {
-                        monitor.grid[row as usize][col as usize] = Some(details.hwnd);
-                    }
-                }
-            }
+                        let idx = (row as usize) * config.cols + (col as usize);
+                        let current_cell = virtual_grid[idx].load();
 
-            debug!(
-                "🔧 Updated monitor {} grid: window {} assigned to cells ({},{}) to ({},{})",
-                details.monitor_id,
-                details.hwnd,
-                details.monitor_row_start,
-                details.monitor_col_start,
-                details.monitor_row_end,
-                details.monitor_col_end
-            );
-        }
-    }
-    fn display_complete_grid(
-        &self,
-        virtual_grid: &Arc<Mutex<Vec<Vec<ClientCellState>>>>,
-        windows: &Arc<Mutex<HashMap<u64, ClientWindowInfo>>>,
-        monitors: &Arc<Mutex<Vec<MonitorGridInfo>>>,
-    ) {
-        let window_count = match windows.try_lock() {
-            Ok(windows_lock) => windows_lock.len(),
-            Err(_) => {
-                warn!("⚠️ Windows cache locked, skipping grid display");
-                return;
-            }
-        };
-
-        // Convert client grid to server grid format for display
-        if let Ok(grid) = virtual_grid.try_lock() {
-            let server_grid: Vec<Vec<crate::CellState>> = grid
-                .iter()
-                .map(|row| {
-                    row.iter()
-                        .map(|cell| match cell {
-                            ClientCellState::Empty => crate::CellState::Empty,
-                            ClientCellState::Occupied(hwnd) => {
-                                crate::CellState::Occupied(*hwnd as crate::HWND)
-                            }
-                            ClientCellState::OffScreen => crate::CellState::OffScreen,
-                        })
-                        .collect()
-                })
-                .collect();
-            // Use the centralized display function for consistency with server
-            crate::grid_display::display_grid(
-                &server_grid,
-                &self.config,
-                window_count,
-                &crate::grid_display::GridDisplayConfig::default(),
-                None,
-                None, // Let display function determine dimensions
-                None, // No specific bounds - use defaults
-            );
-        }
-
-        // Display monitor grids using the centralized function like the server
-        match monitors.try_lock() {
-            Ok(monitors_lock) => {
-                if !monitors_lock.is_empty() {
-                    debug!("\n🖥️ Monitor Grids:");
-
-                    for monitor in monitors_lock.iter() {
-                        debug!(
-                            "  Monitor {}: {}x{}",
-                            monitor.monitor_id, monitor.width, monitor.height
-                        );
-
-                        // Convert monitor grid to server format
-                        let mut server_monitor_grid =
-                            vec![vec![crate::CellState::Empty; self.config.cols]; self.config.rows];
-                        for row in 0..self.config.rows {
-                            for col in 0..self.config.cols {
-                                if row < monitor.grid.len() && col < monitor.grid[row].len() {
-                                    server_monitor_grid[row][col] = match monitor.grid[row][col] {
-                                        Some(hwnd) => {
-                                            crate::CellState::Occupied(hwnd as crate::HWND)
-                                        }
-                                        None => crate::CellState::Empty,
-                                    };
+                        if !matches!(current_cell.state, ClientCellState::OffScreen) {
+                            // Check if this window should replace the current one based on z-order
+                            let should_update = match current_cell.state {
+                                ClientCellState::Empty => true,
+                                ClientCellState::Occupied(current_hwnd) => {
+                                    // Use z-order to determine topmost (lower z-order = more topmost)
+                                    let current_z = z_order_map
+                                        .get(&current_hwnd)
+                                        .copied()
+                                        .unwrap_or(usize::MAX);
+                                    let new_z =
+                                        z_order_map.get(&w.hwnd).copied().unwrap_or(usize::MAX);
+                                    let wins = new_z < current_z;
+                                    if wins {
+                                        println!("[WINDOW LIST] 🔄 Cell [{},{}]: 0x{:X} (z={}) replaces 0x{:X} (z={})", 
+                                                row, col, w.hwnd, new_z, current_hwnd, current_z);
+                                    }
+                                    wins
                                 }
+                                ClientCellState::OffScreen => false,
+                            };
+
+                            if should_update {
+                                virtual_grid[idx].store(GridCell {
+                                    state: ClientCellState::Occupied(w.hwnd),
+                                    monitor_ids: current_cell.monitor_ids,
+                                    monitor_count: current_cell.monitor_count,
+                                });
+                                cells_updated_for_this_window += 1;
+                                virtual_grid_updates += 1;
                             }
                         }
-                        // Use centralized display for monitor grids
-                        let monitor_title = format!("Monitor {} Grid", monitor.monitor_id);
-                        let monitor_bounds = (
-                            (monitor.x, monitor.y),
-                            (monitor.x + monitor.width, monitor.y + monitor.height),
-                        );
-                        crate::grid_display::display_grid(
-                            &server_monitor_grid,
-                            &self.config,
-                            0, // Monitor grids don't track window count separately
-                            &crate::grid_display::GridDisplayConfig::default(),
-                            Some(&monitor_title),
-                            Some((monitor.width, monitor.height)),
-                            Some(monitor_bounds),
-                        );
                     }
                 }
             }
-            Err(_) => {
-                warn!("⚠️ Monitor grids locked, skipping monitor grid display");
+
+            // Update monitor grid with z-order consideration
+            if let Some(mut monitor) = monitors.get_mut(&w.monitor_id) {
+                let mut monitor_cells_updated = 0;
+                for row in w.monitor_row_start..=w.monitor_row_end {
+                    for col in w.monitor_col_start..=w.monitor_col_end {
+                        if row < config.rows as u32 && col < config.cols as u32 {
+                            let current_hwnd = monitor.grid[row as usize][col as usize];
+
+                            // Check if this window should replace the current one based on z-order
+                            let should_update = match current_hwnd {
+                                None => true,
+                                Some(current) => {
+                                    // Use z-order to determine topmost (lower z-order = more topmost)
+                                    let current_z =
+                                        z_order_map.get(&current).copied().unwrap_or(usize::MAX);
+                                    let new_z =
+                                        z_order_map.get(&w.hwnd).copied().unwrap_or(usize::MAX);
+                                    let wins = new_z < current_z;
+                                    if wins {
+                                        println!("[WINDOW LIST] 🔄 Monitor {} Cell [{},{}]: 0x{:X} (z={}) replaces 0x{:X} (z={})", 
+                                                w.monitor_id, row, col, w.hwnd, new_z, current, current_z);
+                                    }
+                                    wins
+                                }
+                            };
+
+                            if should_update {
+                                monitor.grid[row as usize][col as usize] = Some(w.hwnd);
+                                monitor_cells_updated += 1;
+                                monitor_grid_updates += 1;
+                            }
+                        }
+                    }
+                }
+                println!(
+                    "[WINDOW LIST] 🖥️  Updated {} monitor {} grid cells for HWND 0x{:X}",
+                    monitor_cells_updated, w.monitor_id, w.hwnd
+                );
+            } else {
+                println!(
+                    "[WINDOW LIST] ⚠️ Monitor {} not found for window HWND 0x{:X}",
+                    w.monitor_id, w.hwnd
+                );
             }
         }
+
+        has_valid_grid_data.store(true, std::sync::atomic::Ordering::Relaxed);
+        println!("[WINDOW LIST] ✅ Grid data marked as valid - {} valid windows processed (after filtering), {} virtual cells updated, {} monitor cells updated", 
+                 valid_windows.len(), virtual_grid_updates, monitor_grid_updates);
+
+        // Debug: Check virtual grid state after processing
+        let mut final_occupied = 0;
+        let mut final_empty = 0;
+        let mut final_offscreen = 0;
+        for idx in 0..virtual_grid.len() {
+            match virtual_grid[idx].load().state {
+                ClientCellState::Occupied(_) => final_occupied += 1,
+                ClientCellState::Empty => final_empty += 1,
+                ClientCellState::OffScreen => final_offscreen += 1,
+            }
+        }
+        println!(
+            "[WINDOW LIST] 🔍 Final virtual grid state: {} occupied, {} empty, {} offscreen",
+            final_occupied, final_empty, final_offscreen
+        );
+    }
+
+    /// Request grid state from server
+    pub fn request_grid_state(&mut self) -> GridClientResult<()> {
+        let command = IpcCommand {
+            command_type: IpcCommandType::GetGridState,
+            hwnd: None,
+            target_row: None,
+            target_col: None,
+            monitor_id: None,
+            layout_id: None,
+            animation_duration_ms: None,
+            easing_type: None,
+            protocol_version: 1,
+        };
+        self.send_command(command)
     }
 
     pub fn send_command(&mut self, command: IpcCommand) -> GridClientResult<()> {
@@ -1198,6 +1235,21 @@ impl GridClient {
             .send_copy(command)
             .map(|_| ()) // Ignore the returned size, just return ()
             .map_err(|e| GridClientError::IpcError(format!("Failed to send command: {:?}", e)))
+    }
+
+    pub fn request_monitor_list(&mut self) -> GridClientResult<()> {
+        let command = IpcCommand {
+            command_type: IpcCommandType::GetMonitorList,
+            hwnd: None,
+            target_row: None,
+            target_col: None,
+            monitor_id: None,
+            layout_id: None,
+            animation_duration_ms: None,
+            easing_type: None,
+            protocol_version: 1,
+        };
+        self.send_command(command)
     }
 
     pub fn request_window_list(&mut self) -> GridClientResult<()> {
@@ -1215,19 +1267,87 @@ impl GridClient {
         self.send_command(command)
     }
 
-    pub fn request_grid_state(&mut self) -> GridClientResult<()> {
-        let command = IpcCommand {
-            command_type: IpcCommandType::GetGridState,
-            hwnd: None,
-            target_row: None,
-            target_col: None,
-            monitor_id: None,
-            layout_id: None,
-            animation_duration_ms: None,
-            easing_type: None,
-            protocol_version: 1,
-        };
-        self.send_command(command)
+    /// Register a callback to be called when window focus events occur
+    pub fn set_focus_callback<F>(&mut self, callback: F) -> GridClientResult<()>
+    where
+        F: Fn(WindowFocusEvent) + Send + Sync + 'static,
+    {
+        let mut focus_callback_lock =
+            safe_arc_lock(&self.focus_callback, "focus callback registration")?;
+        *focus_callback_lock = Some(Box::new(callback));
+        info!("🎯 Focus callback registered for e_midi integration");
+        Ok(())
+    }
+
+    /// Display the current window list
+    pub fn display_window_list(&self) {
+        println!("\n📋 CLIENT WINDOW LIST:");
+        println!("=====================");
+
+        if self.windows.is_empty() {
+            println!("(No windows tracked by client)");
+            return;
+        }
+
+        println!("Windows tracked: {}", self.windows.len());
+
+        let mut count = 0;
+        for entry in self.windows.iter() {
+            let (hwnd, window_info) = entry.pair();
+            count += 1;
+
+            println!(
+                "{}. HWND: {} (Monitor: {})",
+                count, hwnd, window_info.monitor_id
+            );
+            println!(
+                "   Position: ({}, {}) Size: {}x{}",
+                window_info.x, window_info.y, window_info.width, window_info.height
+            );
+            println!(
+                "   Virtual Grid: ({},{}) to ({},{})",
+                window_info.virtual_row_start,
+                window_info.virtual_col_start,
+                window_info.virtual_row_end,
+                window_info.virtual_col_end
+            );
+            println!(
+                "   Monitor Grid: ({},{}) to ({},{})",
+                window_info.monitor_row_start,
+                window_info.monitor_col_start,
+                window_info.monitor_row_end,
+                window_info.monitor_col_end
+            );
+
+            if count >= 10 {
+                let remaining = self.windows.len() - count;
+                if remaining > 0 {
+                    println!("   ... and {} more windows", remaining);
+                }
+                break;
+            }
+        }
+        println!();
+    }
+
+    /// Display current grid state (alias for print_all_grids)
+    pub fn display_current_grid(&self) {
+        self.print_all_grids();
+    }
+
+    /// Get the current grid configuration
+    pub fn get_config(&self) -> &GridConfig {
+        &self.config
+    }
+
+    /// Assign window to virtual grid (alias for existing method)
+    pub fn assign_window_to_virtual_grid(
+        &mut self,
+        hwnd: u64,
+        row: u32,
+        col: u32,
+    ) -> GridClientResult<()> {
+        self.assign_window_to_virtual_cell(hwnd, row, col)
     }
 
     pub fn assign_window_to_virtual_cell(
@@ -1279,149 +1399,375 @@ impl GridClient {
         })
     }
 
-    pub fn display_current_grid(&self) {
-        self.display_complete_grid(&self.virtual_grid, &self.windows, &self.monitors);
-    }
+    /// Print the current virtual grid (all windows, all monitors combined)
+    pub fn print_virtual_grid(&self) {
+        let has_valid_data = self
+            .has_valid_grid_data
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let monitor_count = self.monitors.len();
+        let window_count = self.windows.len();
 
-    pub fn display_window_list(&self) {
-        debug!("\n📋 Current Windows:");
-        debug!("{}", "-".repeat(80));
+        println!(
+            "🔍 [DEBUG] Virtual grid status: valid_data={}, monitors={}, windows={}",
+            has_valid_data, monitor_count, window_count
+        );
 
-        if let Ok(windows) = self.windows.lock() {
-            if windows.is_empty() {
-                debug!("   (No windows currently tracked)");
+        if !has_valid_data && monitor_count == 0 {
+            println!("(Grid not available yet: waiting for data from server)");
+            return;
+        }
+
+        // Find the topmost window using the same approach as the server
+        let mut topmost_hwnd: Option<u64> = None;
+        if self
+            .highlight_topmost
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let z_order_map = crate::util::get_hwnd_z_order_map();
+            let mut topmost_z: Option<usize> = None;
+
+            println!("🔍 [DEBUG] Z-order map has {} entries", z_order_map.len());
+
+            // Get all windows from the client's window list (same as server receives)
+            for window in self.windows.iter() {
+                let (hwnd, _) = window.pair();
+                if let Some(&z) = z_order_map.get(hwnd) {
+                    println!("🔍 [DEBUG] Window 0x{:X} has z-order {}", hwnd, z);
+                    if topmost_z.map_or(true, |tz| z < tz) {
+                        topmost_hwnd = Some(*hwnd);
+                        topmost_z = Some(z);
+                    }
+                } else {
+                    println!("🔍 [DEBUG] Window 0x{:X} not found in z-order map", hwnd);
+                }
+            }
+
+            if let Some(topmost) = topmost_hwnd {
+                println!(
+                    "🔍 [DEBUG] Client topmost window: 0x{:X} (z-order: {})",
+                    topmost,
+                    topmost_z.unwrap_or(0)
+                );
             } else {
-                for (i, (hwnd, info)) in windows.iter().enumerate() {
-                    debug!(
-                        "   [{}] HWND: {} | Position: ({}, {}) | Size: {}x{}",
-                        i + 1,
-                        hwnd,
-                        info.x,
-                        info.y,
-                        info.width,
-                        info.height
-                    );
-                    debug!(
-                        "       Virtual: ({},{}) to ({},{}) | Monitor {}: ({},{}) to ({},{})",
-                        info.virtual_row_start,
-                        info.virtual_col_start,
-                        info.virtual_row_end,
-                        info.virtual_col_end,
-                        info.monitor_id,
-                        info.monitor_row_start,
-                        info.monitor_col_start,
-                        info.monitor_row_end,
-                        info.monitor_col_end
-                    );
+                println!("🔍 [DEBUG] No topmost window found by client");
+            }
+        }
+
+        // Convert virtual grid to display format
+        let mut grid = vec![vec![ClientCellState::Empty; self.config.cols]; self.config.rows];
+        for row in 0..self.config.rows {
+            for col in 0..self.config.cols {
+                let idx = row * self.config.cols + col;
+                grid[row][col] = self.virtual_grid[idx].load().state;
+            }
+        }
+
+        // Debug what's actually in the virtual grid
+        let mut occupied_cells = 0;
+        let mut offscreen_cells = 0;
+        let mut empty_cells = 0;
+        let mut sample_hwnds = Vec::new();
+
+        for row in 0..self.config.rows {
+            for col in 0..self.config.cols {
+                match grid[row][col] {
+                    ClientCellState::Occupied(hwnd) => {
+                        occupied_cells += 1;
+                        if sample_hwnds.len() < 5 {
+                            sample_hwnds.push(hwnd);
+                        }
+                    }
+                    ClientCellState::OffScreen => offscreen_cells += 1,
+                    ClientCellState::Empty => empty_cells += 1,
                 }
             }
         }
-        debug!("{}", "-".repeat(80));
-    }
+        println!(
+            "🔍 [DEBUG] Virtual grid contents: {} occupied, {} offscreen, {} empty",
+            occupied_cells, offscreen_cells, empty_cells
+        );
 
-    pub fn set_auto_display(&self, enabled: bool) {
-        *self.auto_display.lock().unwrap() = enabled;
-        info!(
-            "🔄 Auto-display {}",
-            if enabled { "enabled" } else { "disabled" }
+        if !sample_hwnds.is_empty() {
+            print!("🔍 [DEBUG] Sample HWNDs in virtual grid: ");
+            for hwnd in &sample_hwnds {
+                print!("0x{:X} ", hwnd);
+            }
+            println!();
+        }
+
+        let server_grid: Vec<Vec<crate::CellState>> = grid
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| match cell {
+                        ClientCellState::Empty => crate::CellState::Empty,
+                        ClientCellState::Occupied(hwnd) => crate::CellState::Occupied(*hwnd as u64),
+                        ClientCellState::OffScreen => crate::CellState::OffScreen,
+                    })
+                    .collect()
+            })
+            .collect();
+
+        println!("\n🔥 VIRTUAL GRID:");
+        crate::grid_display::display_grid(
+            &server_grid,
+            &self.config,
+            window_count,
+            &crate::grid_display::GridDisplayConfig::default(),
+            Some("Virtual Grid"),
+            None,
+            None,
+            topmost_hwnd,
         );
     }
 
-    pub fn is_auto_display_enabled(&self) -> bool {
-        self.auto_display.lock().map(|auto| *auto).unwrap_or(false)
+    pub fn print_all_grids(&self) {
+        let has_valid_data = self
+            .has_valid_grid_data
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let monitor_count = self.monitors.len();
+        let window_count = self.windows.len();
+
+        println!(
+            "🔍 [DEBUG] All grids status: valid_data={}, monitors={}, windows={}",
+            has_valid_data, monitor_count, window_count
+        );
+
+        // If we have monitor data, we can display grids even if valid_data flag isn't set
+        if monitor_count == 0 {
+            println!("(Grids not available yet: waiting for monitor data from server)");
+            println!("💡 Make sure the e_grid server is running!");
+            return;
+        }
+
+        // Find the topmost window using the SAME approach as the server
+        let mut topmost_hwnd: Option<u64> = None;
+        if self
+            .highlight_topmost
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let z_order_map = crate::util::get_hwnd_z_order_map();
+            let mut topmost_z: Option<usize> = None;
+
+            // Use the same logic as the server: check all windows in our window list
+            for window in self.windows.iter() {
+                let (hwnd, _) = window.pair();
+                if let Some(&z) = z_order_map.get(hwnd) {
+                    if topmost_z.map_or(true, |tz| z < tz) {
+                        topmost_hwnd = Some(*hwnd);
+                        topmost_z = Some(z);
+                    }
+                }
+            }
+
+            if let Some(topmost) = topmost_hwnd {
+                println!(
+                    "🔍 [DEBUG] Client determined topmost window: 0x{:X} (z-order: {})",
+                    topmost,
+                    topmost_z.unwrap_or(0)
+                );
+            }
+        }
+
+        // Print virtual grid - call the actual method
+        println!();
+        println!("=== VIRTUAL GRID (All Monitors Combined) ===");
+        self.print_virtual_grid();
+
+        // Print individual monitor grids with the SAME topmost highlighting
+        for monitor in self.monitors.iter() {
+            println!();
+            println!("=== MONITOR {} GRID ===", monitor.monitor_id);
+            println!(
+                "Monitor bounds: ({}, {}) to ({}, {})",
+                monitor.x,
+                monitor.y,
+                monitor.x + monitor.width as i32,
+                monitor.y + monitor.height as i32
+            );
+
+            // Count windows on this monitor and debug their HWNDs
+            let mut windows_on_monitor = 0;
+            let mut monitor_hwnds = Vec::new();
+            for window in self.windows.iter() {
+                let (hwnd, window_info) = window.pair();
+                if window_info.monitor_id == monitor.monitor_id {
+                    windows_on_monitor += 1;
+                    monitor_hwnds.push(*hwnd);
+                }
+            }
+            println!("Windows on this monitor: {}", windows_on_monitor);
+            if !monitor_hwnds.is_empty() {
+                print!("HWNDs on this monitor: ");
+                for hwnd in &monitor_hwnds {
+                    print!("0x{:X} ", hwnd);
+                }
+                println!();
+            }
+
+            println!(
+                "Grid size: {} rows x {} cols ({} cells)",
+                self.config.rows,
+                self.config.cols,
+                self.config.rows * self.config.cols
+            );
+            println!(
+                "Monitor resolution: {}x{} px",
+                monitor.width, monitor.height
+            );
+
+            // Print column headers
+            print!("   ");
+            for col in 0..self.config.cols {
+                print!("{:2} ", col);
+            }
+            println!();
+
+            // Print grid rows
+            for row in 0..self.config.rows.min(32) {
+                print!("{:2} ", row);
+                for col in 0..self.config.cols.min(32) {
+                    // Check what window (if any) occupies this cell
+                    if let Some(hwnd) = monitor.grid[row][col] {
+                        if hwnd == 0 || hwnd == u64::MAX {
+                            print!("XX ");
+                        } else {
+                            // Check if this is the topmost window and should be highlighted
+                            if self
+                                .highlight_topmost
+                                .load(std::sync::atomic::Ordering::Relaxed)
+                                && topmost_hwnd == Some(hwnd)
+                            {
+                                print!("\x1b[31m{:02X}\x1b[0m ", hwnd & 0xFF); // Red foreground
+                            } else {
+                                print!("{:02X} ", hwnd & 0xFF);
+                            }
+                        }
+                    } else {
+                        print!(".. ");
+                    }
+                }
+                println!();
+            }
+        }
+
+        // Print legend if highlighting is enabled and we found a topmost window
+        if self
+            .highlight_topmost
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && topmost_hwnd.is_some()
+        {
+            println!();
+            println!("Legend: \x1b[31mRed\x1b[0m = Topmost window (lowest Z-order)");
+        }
+        println!();
     }
 
-    /// Get the current monitor data for real-time display (for TUI applications)
+    /// Shutdown the client and stop background monitoring
+    pub fn shutdown(&mut self) {
+        info!("🛑 GridClient shutdown requested");
+
+        // Signal the background thread to stop
+        self.running
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        // Clear all data
+        self.windows.clear();
+        self.monitors.clear();
+
+        // Reset grid state
+        let grid_size = self.config.rows * self.config.cols;
+        for idx in 0..grid_size {
+            self.virtual_grid[idx].store(GridCell {
+                state: ClientCellState::Empty,
+                monitor_ids: [0; 4],
+                monitor_count: 0,
+            });
+        }
+
+        // Clear callbacks
+        if let Ok(mut cb) = self.focus_callback.lock() {
+            *cb = None;
+        }
+        if let Ok(mut cb) = self.window_event_callback.lock() {
+            *cb = None;
+        }
+        if let Ok(mut cb) = self.move_resize_start_callback.lock() {
+            *cb = None;
+        }
+        if let Ok(mut cb) = self.move_resize_stop_callback.lock() {
+            *cb = None;
+        }
+
+        // Reset flags
+        self.has_valid_grid_data
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.auto_display
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.highlight_topmost
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        info!("✅ GridClient shutdown complete");
+    }
+
+    /// Check if the client is still running
+    pub fn is_running(&self) -> bool {
+        self.running.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// Get a copy of all monitor data
     pub fn get_monitor_data(&self) -> Vec<MonitorGridInfo> {
-        match self.monitors.try_lock() {
-            Ok(monitors) => monitors.clone(),
-            Err(_) => Vec::new(),
-        }
+        self.monitors
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect()
     }
 
-    /// Get the current window data for real-time display (for TUI applications)
-    pub fn get_window_data(&self) -> HashMap<u64, ClientWindowInfo> {
-        match self.windows.try_lock() {
-            Ok(windows) => windows.clone(),
-            Err(_) => HashMap::new(),
-        }
+    /// Get a copy of all window data
+    pub fn get_window_data(&self) -> Vec<ClientWindowInfo> {
+        self.windows
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect()
     }
 
-    /// Get the current virtual grid state for real-time display (for TUI applications)
+    /// Get monitor list (alias for get_monitor_data)
+    pub fn get_monitor_list(&self) -> Vec<MonitorGridInfo> {
+        self.get_monitor_data()
+    }
+    /// Get the current virtual grid state for inspection
     pub fn get_virtual_grid_state(&self) -> Vec<Vec<ClientCellState>> {
-        match self.virtual_grid.try_lock() {
-            Ok(grid) => grid.clone(),
-            Err(_) => Vec::new(),
+        let mut grid = vec![vec![ClientCellState::Empty; self.config.cols]; self.config.rows];
+        for row in 0..self.config.rows {
+            for col in 0..self.config.cols {
+                let idx = row * self.config.cols + col;
+                grid[row][col] = self.virtual_grid[idx].load().state;
+            }
         }
+        grid
     }
-
-    /// Check if the client is connected and has recent data
-    pub fn has_recent_data(&self) -> bool {
-        let has_windows = !self.get_window_data().is_empty();
-        let has_monitors = !self.get_monitor_data().is_empty();
-        has_windows || has_monitors
-    }
-
-    pub fn stop(&self) {
-        *self.running.lock().unwrap() = false;
-        info!("🛑 Stopping grid client...");
-    }
-
-    pub fn request_monitor_list(&mut self) -> GridClientResult<()> {
+    /// Move window to grid cell with animation
+    pub fn move_window_to_cell(
+        &mut self,
+        hwnd: u64,
+        row: u32,
+        col: u32,
+        duration_ms: u32,
+        easing: EasingType,
+    ) -> GridClientResult<()> {
+        // Validate coordinates
+        validate_grid_coordinates(row, col, self.config.rows as u32, self.config.cols as u32)?;
         let command = IpcCommand {
-            command_type: IpcCommandType::GetMonitorList,
-            hwnd: None,
-            target_row: None,
-            target_col: None,
+            command_type: IpcCommandType::MoveWindowToCell,
+            hwnd: Some(hwnd),
+            target_row: Some(row),
+            target_col: Some(col),
             monitor_id: None,
             layout_id: None,
-            animation_duration_ms: None,
-            easing_type: None,
+            animation_duration_ms: Some(duration_ms),
+            easing_type: Some(easing),
             protocol_version: 1,
         };
         self.send_command(command)
-    }
-}
-
-impl Drop for GridClient {
-    fn drop(&mut self) {
-        self.stop();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_coordinate_validation_integration() {
-        // Test that our validation function works with actual grid sizes
-        let config = GridConfig::new(4, 6);
-
-        // Valid coordinates
-        assert!(validate_grid_coordinates(0, 0, config.rows as u32, config.cols as u32).is_ok());
-        assert!(validate_grid_coordinates(3, 5, config.rows as u32, config.cols as u32).is_ok());
-
-        // Invalid coordinates
-        assert!(validate_grid_coordinates(4, 0, config.rows as u32, config.cols as u32).is_err());
-        assert!(validate_grid_coordinates(0, 6, config.rows as u32, config.cols as u32).is_err());
-    }
-
-    #[test]
-    fn test_monitor_grid_info_creation() {
-        let monitor_info = MonitorGridInfo {
-            monitor_id: 0,
-            width: 1920,
-            height: 1080,
-            x: 0,
-            y: 0,
-            grid: vec![vec![None; 6]; 4],
-        };
-
-        assert_eq!(monitor_info.monitor_id, 0);
-        assert_eq!(monitor_info.width, 1920);
-        assert_eq!(monitor_info.height, 1080);
-        assert_eq!(monitor_info.grid.len(), 4);
-        assert_eq!(monitor_info.grid[0].len(), 6);
+            .map_err(|e| GridClientError::IpcError(format!("Failed to move window to cell: {}", e)))
     }
 }

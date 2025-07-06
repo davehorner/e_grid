@@ -32,7 +32,7 @@ impl FocusActionManager {
         }
     }
 
-    fn handle_focus_event(&self, focus_event: e_grid::ipc::WindowFocusEvent) {
+    fn handle_focus_event(&self, focus_event: e_grid::ipc_protocol::WindowFocusEvent) {
         if focus_event.event_type == 0 {
             // FOCUSED
             self.handle_window_focused(focus_event);
@@ -42,7 +42,7 @@ impl FocusActionManager {
         }
     }
 
-    fn handle_window_focused(&self, focus_event: e_grid::ipc::WindowFocusEvent) {
+    fn handle_window_focused(&self, focus_event: e_grid::ipc_protocol::WindowFocusEvent) {
         let app_hash = focus_event.app_name_hash;
 
         println!("🔥 Window {} gained focus", focus_event.hwnd);
@@ -67,7 +67,7 @@ impl FocusActionManager {
         self.print_playback_status();
     }
 
-    fn handle_window_defocused(&self, focus_event: e_grid::ipc::WindowFocusEvent) {
+    fn handle_window_defocused(&self, focus_event: e_grid::ipc_protocol::WindowFocusEvent) {
         println!("💤 Window {} lost focus", focus_event.hwnd);
 
         // Pause current playback

@@ -38,7 +38,7 @@ impl FocusTracker {
         }
     }
 
-    fn handle_focus_event(&self, focus_event: e_grid::ipc::WindowFocusEvent) {
+    fn handle_focus_event(&self, focus_event: e_grid::ipc_protocol::WindowFocusEvent) {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

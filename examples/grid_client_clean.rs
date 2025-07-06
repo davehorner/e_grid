@@ -1,30 +1,36 @@
 // Grid Client - Demonstrates real IPC communication with the grid server
 // Shows same output as server and sends commands
 
-use e_grid::*;
+use e_grid::grid::GridConfig;
+use e_grid::ipc_manager::GridIpcManager;
+use e_grid::ipc_protocol::{GridCommand, GridResponse};
+use e_grid::window_tracker::WindowTracker;
+use e_grid::EasingType;
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 struct GridClient {
-    ipc_manager: Arc<Mutex<ipc::GridIpcManager>>,
+    ipc_manager: Arc<Mutex<GridIpcManager>>,
 }
 
 impl GridClient {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         // Create a minimal tracker for the client
         let config = GridConfig::new(4, 4);
-        let tracker = Arc::new(Mutex::new(WindowTracker::new()));
+        let mut tracker = WindowTracker::new_with_config(config);
 
-        // Set config on tracker
-        if let Ok(mut t) = tracker.lock() {
-            t.config = config;
-        }
+        // Scan existing windows
+        tracker.scan_existing_windows();
 
-        let mut ipc_manager = ipc::GridIpcManager::new(tracker)?;
-        ipc_manager.setup_services()?;
+        // Wrap tracker in Arc<Mutex<>>
+        let tracker = Arc::new(Mutex::new(tracker));
 
+        // Create IPC manager
+        let mut ipc_manager = GridIpcManager::new(tracker)?;
+        // TODO: Replace the following placeholders with actual arguments as required by setup_services
+        ipc_manager.setup_services(true, true, true, true, true, true, true, true, true)?;
         Ok(Self {
             ipc_manager: Arc::new(Mutex::new(ipc_manager)),
         })
@@ -54,11 +60,11 @@ impl GridClient {
         println!("========================");
 
         if let Ok(mut manager) = self.ipc_manager.lock() {
-            let response = manager.handle_command(ipc::GridCommand::GetGridState)?;
+            let response = manager.handle_grid_command(GridCommand::GetGridState)?;
             println!("📤 Server Response: {:?}", response);
 
             match response {
-                ipc::GridResponse::GridState {
+                GridResponse::GridState {
                     total_windows,
                     occupied_cells,
                     grid_summary,
@@ -80,7 +86,7 @@ impl GridClient {
         println!("=========================");
 
         if let Ok(mut manager) = self.ipc_manager.lock() {
-            let response = manager.handle_command(ipc::GridCommand::GetWindowList)?;
+            let response = manager.handle_grid_command(GridCommand::GetWindowList)?;
             println!("📤 Server Response: {:?}", response);
 
             // The server should also publish individual window details
@@ -118,7 +124,7 @@ impl GridClient {
             // Verify the change
             thread::sleep(Duration::from_millis(100));
             println!("\n📨 Client → Server: GetGridState (verification)");
-            let verify_response = manager.handle_command(ipc::GridCommand::GetGridState)?;
+            let verify_response = manager.handle_grid_command(GridCommand::GetGridState)?;
             println!("📤 Server Response: {:?}", verify_response);
         }
 
@@ -133,7 +139,7 @@ impl GridClient {
         if let Ok(mut manager) = self.ipc_manager.lock() {
             // Move a window to a specific cell
             println!("📨 Client → Server: AssignWindowToVirtualCell(1001, 2, 3)");
-            let response = manager.handle_command(ipc::GridCommand::AssignWindowToVirtualCell {
+            let response = manager.handle_grid_command(GridCommand::AssignWindowToVirtualCell {
                 hwnd: 1001,
                 target_row: 2,
                 target_col: 3,
@@ -142,7 +148,7 @@ impl GridClient {
 
             // Move another window to a monitor-specific cell
             println!("\n📨 Client → Server: AssignWindowToMonitorCell(1002, 1, 1, 0)");
-            let response = manager.handle_command(ipc::GridCommand::AssignWindowToMonitorCell {
+            let response = manager.handle_grid_command(GridCommand::AssignWindowToMonitorCell {
                 hwnd: 1002,
                 target_row: 1,
                 target_col: 1,
@@ -164,7 +170,7 @@ impl GridClient {
             println!(
                 "📨 Client → Server: StartAnimation(1003, 100, 100, 400, 300, 2000ms, EaseInOut)"
             );
-            let response = manager.handle_command(ipc::GridCommand::StartAnimation {
+            let response = manager.handle_grid_command(GridCommand::StartAnimation {
                 hwnd: 1003,
                 target_x: 100,
                 target_y: 100,
@@ -179,11 +185,11 @@ impl GridClient {
             thread::sleep(Duration::from_millis(100));
             println!("\n📨 Client → Server: GetAnimationStatus(1003)");
             let status_response =
-                manager.handle_command(ipc::GridCommand::GetAnimationStatus { hwnd: 1003 })?;
+                manager.handle_grid_command(GridCommand::GetAnimationStatus { hwnd: 1003 })?;
             println!("📤 Server Response: {:?}", status_response);
 
             match status_response {
-                ipc::GridResponse::AnimationStatus { statuses } => {
+                GridResponse::AnimationStatus { statuses } => {
                     for (hwnd, is_active, progress) in statuses {
                         println!(
                             "   🎭 Window {}: Active={}, Progress={:.1}%",

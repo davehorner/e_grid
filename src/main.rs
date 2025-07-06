@@ -3,22 +3,28 @@ use crossterm::{
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{self, Clear, ClearType},
 };
-use e_grid::{ipc_server, window_events, GridClient, WindowTracker};
+use e_grid::window_tracker::WindowTracker;
+use e_grid::{ipc_server, window_events, GridClient};
 use iceoryx2::prelude::*;
 use iceoryx2::service::ipc::Service;
-use std::io::{self, Write};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::{
+    io::{self, Write},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+};
 use winapi::shared::minwindef::{BOOL, DWORD, FALSE, TRUE};
 use winapi::um::consoleapi::SetConsoleCtrlHandler;
 use winapi::um::wincon::{
     CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_C_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
 };
+use winapi::um::winuser::GetClassNameW;
 
 // Global variables for graceful shutdown
-static mut SHUTDOWN_REQUESTED: bool = false;
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 static mut GLOBAL_IPC_SERVER: Option<*mut ipc_server::GridIpcServer> = None;
 
 const BANNER: &str = r#"
@@ -36,7 +42,7 @@ unsafe extern "system" fn console_ctrl_handler(ctrl_type: DWORD) -> BOOL {
         CTRL_C_EVENT | CTRL_BREAK_EVENT | CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT
         | CTRL_SHUTDOWN_EVENT => {
             println!("\n🛑 Shutdown signal received - initiating graceful shutdown...");
-            SHUTDOWN_REQUESTED = true;
+            SHUTDOWN_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
 
             // Send shutdown heartbeat if server is available
             if let Some(server_ptr) = GLOBAL_IPC_SERVER {
@@ -108,10 +114,59 @@ fn is_server_running() -> bool {
     }
 }
 
+// Simple tracking using a static array of atomic values (for up to 1000 windows)
+static MANAGEABLE_WINDOW_SLOTS: [AtomicU64; 1000] = {
+    const INIT: AtomicU64 = AtomicU64::new(0);
+    [INIT; 1000]
+};
+
+/// Add a window to the manageable windows tracking
+fn add_manageable_window(hwnd: u64) {
+    // Find an empty slot and store the HWND
+    for slot in &MANAGEABLE_WINDOW_SLOTS {
+        if slot
+            .compare_exchange(0, hwnd, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            return;
+        }
+    }
+    // If we get here, all slots are full - could expand array or use different approach
+    println!(
+        "⚠️ Warning: Manageable window tracking slots full for HWND 0x{:X}",
+        hwnd
+    );
+}
+
+/// Remove a window from tracking and return true if it was found (was manageable)
+fn remove_manageable_window(hwnd: u64) -> bool {
+    for slot in &MANAGEABLE_WINDOW_SLOTS {
+        if slot
+            .compare_exchange(hwnd, 0, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            return true; // Found and removed
+        }
+    }
+    false // Not found
+}
+
+/// Check if a window is tracked as manageable
+fn is_tracked_manageable_window(hwnd: u64) -> bool {
+    for slot in &MANAGEABLE_WINDOW_SLOTS {
+        if slot.load(Ordering::Acquire) == hwnd {
+            return true;
+        }
+    }
+    false
+}
+
 /// Start the IPC server with integrated window tracking and focus events
 fn start_server() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Starting E-Grid Server");
     println!("=========================");
+
+    // No initialization needed for atomic array
 
     // Setup console control handler for graceful shutdown
     unsafe {
@@ -126,14 +181,13 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
     let mut tracker = WindowTracker::new();
     println!("📊 Initializing window tracking...");
     tracker.scan_existing_windows();
-    tracker.print_grid();
+    tracker.update_grid();
+    tracker.print_virtual_grid();
 
-    let tracker = Arc::new(Mutex::new(tracker)); // Create and setup the IPC server
-    let windows = {
-        let tracker_guard = tracker.lock().unwrap();
-        tracker_guard.windows.clone()
-    };
-    let mut ipc_server = ipc_server::GridIpcServer::new(tracker.clone(), Arc::new(windows))?;
+    let tracker = Arc::new(Mutex::new(tracker));
+
+    // Create and setup the IPC server
+    let mut ipc_server = ipc_server::GridIpcServer::new(tracker.clone())?;
 
     // Set global server pointer for graceful shutdown
     unsafe {
@@ -203,15 +257,120 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main server event loop using the library's reusable message loop
     let mut _loop_count = 0u32;
-    let mut last_update = std::time::Instant::now(); // Use the reusable message loop from the library
-                                                     // This automatically handles Windows message processing for WinEvent callbacks
+    let mut last_update = std::time::Instant::now();
+    let print_grid = Arc::new(AtomicBool::new(false));
+    let print_grid_for_thread = Arc::clone(&print_grid);
+    let rec = ipc_server.event_receiver.take();
+
+    // If there's a receiver, print something on event
+    if let Some(receiver) = rec {
+        thread::spawn(move || {
+            println!("🎧 Event listener thread started - waiting for window events...");
+            while let Ok(event) = receiver.recv() {
+                // Check for shutdown in the event thread too
+                if SHUTDOWN_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+
+                match &event {
+                    e_grid::ipc_protocol::GridEvent::WindowCreated { hwnd, title, .. } => {
+                        // Get window class for created windows
+                        let class_name = get_window_class(*hwnd);
+                        println!(
+                            "🆕 CREATED: Window 0x{:X} [{}] '{}'",
+                            hwnd, class_name, title
+                        );
+
+                        // Track this as a manageable window since it passed the filters
+                        add_manageable_window(*hwnd);
+
+                        print_grid_for_thread.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    e_grid::ipc_protocol::GridEvent::WindowDestroyed { hwnd, title } => {
+                        // Check if this was a tracked manageable window
+                        if remove_manageable_window(*hwnd) {
+                            // This was a manageable window we were tracking
+                            let class_name = get_window_class(*hwnd); // May return "(unknown)" for destroyed windows
+                            println!(
+                                "💀 DESTROYED (Manageable): Window 0x{:X} [{}] '{}'",
+                                hwnd, class_name, title
+                            );
+                            print_grid_for_thread.store(true, std::sync::atomic::Ordering::SeqCst);
+                        } else {
+                            // This was not a manageable window we were tracking
+                            println!(
+                                "💀 DESTROYED (Non-manageable): Window 0x{:X} '{}'",
+                                hwnd, title
+                            );
+                        }
+                    }
+                    e_grid::ipc_protocol::GridEvent::WindowFocused {
+                        hwnd,
+                        title,
+                        process_id,
+                    } => {
+                        println!(
+                            "🎯 FOCUS: Window 0x{:X} '{}' (PID: {}) gained focus",
+                            hwnd, title, process_id
+                        );
+                        print_grid_for_thread.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    e_grid::ipc_protocol::GridEvent::WindowDefocused {
+                        hwnd,
+                        title,
+                        process_id,
+                    } => {
+                        println!(
+                            "🎯 DEFOCUS: Window 0x{:X} '{}' (PID: {}) lost focus",
+                            hwnd, title, process_id
+                        );
+                    }
+                    e_grid::ipc_protocol::GridEvent::WindowMoveStart { hwnd, title, .. } => {
+                        println!("🚀 MOVE START: Window 0x{:X} '{}'", hwnd, title);
+                    }
+                    e_grid::ipc_protocol::GridEvent::WindowMoveStop { hwnd, title, .. } => {
+                        println!("🏁 MOVE STOP: Window 0x{:X} '{}'", hwnd, title);
+                    }
+                    e_grid::ipc_protocol::GridEvent::WindowResizeStart { hwnd, title, .. } => {
+                        println!("📏 RESIZE START: Window 0x{:X} '{}'", hwnd, title);
+                    }
+                    e_grid::ipc_protocol::GridEvent::WindowResizeStop { hwnd, title, .. } => {
+                        println!("📐 RESIZE STOP: Window 0x{:X} '{}'", hwnd, title);
+                        // Print all grids when resize stops
+                        print_grid_for_thread.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    _ => {
+                        println!("📥 OTHER EVENT: {:?}", event);
+                    }
+                }
+            }
+            println!("🎧 Event listener thread ended");
+        });
+    } else {
+        println!("❌ No event receiver available - window events will not be displayed");
+    }
+
     window_events::run_message_loop(|| {
         // Check for shutdown request from console control handler
-        unsafe {
-            if SHUTDOWN_REQUESTED {
-                println!("🛑 Shutdown requested - exiting gracefully...");
-                return false; // Exit the loop
+        if SHUTDOWN_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
+            println!("🛑 Shutdown requested - exiting gracefully...");
+
+            // Cleanup window events to stop the move/resize tracker
+            window_events::cleanup_hooks();
+
+            // Clear global server pointer
+            unsafe {
+                GLOBAL_IPC_SERVER = None;
             }
+
+            return false; // Exit the loop
+        }
+
+        if print_grid.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Ok(tracker) = tracker.lock() {
+                tracker.print_all_grids();
+            }
+            print_grid.store(false, std::sync::atomic::Ordering::SeqCst);
         }
 
         // Poll move/resize events (required for move/resize start/stop detection)
@@ -247,7 +406,9 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
             if !completed.is_empty() {
                 println!("🎬 Completed animations for {} windows", completed.len());
             }
-        } // Send heartbeat every 5 seconds to keep clients connected
+        }
+
+        // Send heartbeat every 5 seconds to keep clients connected
         if last_update.elapsed().as_secs() > 5 {
             // Send heartbeat to keep clients connected
             let uptime_ms = std::time::Instant::now()
@@ -290,6 +451,11 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     println!("🛑 Server event loop ended, shutting down server...");
+    println!("🧹 Cleaning up resources...");
+
+    // Final cleanup
+    window_events::cleanup_hooks();
+
     Ok(())
 }
 
@@ -467,6 +633,25 @@ fn show_help() {
     println!();
 }
 
+/// Get the window class name for a given HWND
+fn get_window_class(hwnd: u64) -> String {
+    unsafe {
+        let hwnd = hwnd as isize as winapi::shared::windef::HWND;
+        let mut class_buf = [0u16; 256];
+        let class_len = GetClassNameW(hwnd, class_buf.as_mut_ptr(), class_buf.len() as i32);
+
+        if class_len > 0 {
+            use std::ffi::OsString;
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&class_buf[..class_len as usize])
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            "(unknown)".to_string()
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
@@ -501,13 +686,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("✅ E-Grid server is already running!");
         println!("🎮 Starting client in interactive mode...");
 
-        // Start a detached client first
-        if let Err(e) = start_detached_client() {
-            println!("⚠️ Failed to start detached client: {}", e);
-        } else {
-            thread::sleep(Duration::from_millis(1000)); // Let client start
-        }
-
         // Then start interactive mode
         interactive_mode()
     } else {
@@ -523,11 +701,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Give server time to start
         println!("⏳ Waiting for server to initialize...");
         thread::sleep(Duration::from_millis(3000));
-
-        // Start detached client
-        if let Err(e) = start_detached_client() {
-            println!("⚠️ Failed to start detached client: {}", e);
-        }
 
         // Wait for server
         server_handle.join().unwrap();

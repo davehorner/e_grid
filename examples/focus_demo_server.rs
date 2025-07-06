@@ -1,4 +1,5 @@
-use e_grid::ipc::{self, WindowDetails, WindowEvent, WindowFocusEvent};
+use e_grid::ipc::{self, WindowEvent};
+use e_grid::ipc_protocol::{WindowDetails, WindowFocusEvent};
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::prelude::*;
 use iceoryx2::service::ipc::Service;
@@ -159,6 +160,7 @@ impl FocusDemoServer {
         let event = WindowEvent {
             event_type: event_type as u8,
             hwnd: hwnd as u64,
+            process_id: Self::get_process_id(hwnd),
             row: 0, // Simplified for demo
             col: 0,
             old_row: 0,
@@ -198,7 +200,6 @@ impl FocusDemoServer {
             monitor_col_start: 0,
             monitor_row_end: 1,
             monitor_col_end: 1,
-            title_len: 0,
         };
 
         if let Err(e) = self.details_publisher.send_copy(details) {

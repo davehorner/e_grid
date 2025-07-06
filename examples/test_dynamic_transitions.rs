@@ -279,20 +279,20 @@ fn main() {
     }
 
     let monitor_rect = if tracker.monitor_grids.len() > 1 {
-        let (left, top, right, bottom) = tracker.monitor_grids[1].monitor_rect;
+        let mon_rect = &tracker.monitor_grids[1].monitor_rect;
         RECT {
-            left,
-            top,
-            right,
-            bottom,
+            left: mon_rect.left,
+            top: mon_rect.top,
+            right: mon_rect.right,
+            bottom: mon_rect.bottom,
         }
     } else {
-        let (left, top, right, bottom) = tracker.monitor_grids[0].monitor_rect;
+        let mon_rect = &tracker.monitor_grids[0].monitor_rect;
         RECT {
-            left,
-            top,
-            right,
-            bottom,
+            left: mon_rect.left,
+            top: mon_rect.top,
+            right: mon_rect.right,
+            bottom: mon_rect.bottom,
         }
     };
 

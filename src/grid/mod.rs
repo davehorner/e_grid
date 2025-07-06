@@ -4,6 +4,7 @@
 pub mod animation;
 pub mod basic;
 pub mod layout;
+pub mod monitor_grid;
 pub mod traits;
 pub mod zorder;
 

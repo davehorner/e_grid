@@ -19,37 +19,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let node = NodeBuilder::new().create::<iceoryx2::service::ipc::Service>()?;
 
     // Setup command publisher
+    let window_command_service = node
+        .service_builder(&ServiceName::new(ipc::GRID_WINDOW_COMMANDS_SERVICE)?)
+        .publish_subscribe::<e_grid::ipc_protocol::WindowCommand>()
+        .open()?;
+    let mut window_command_publisher = window_command_service.publisher_builder().create()?;
+
+    // Setup command publisher
     let command_service = node
         .service_builder(&ServiceName::new(ipc::GRID_COMMANDS_SERVICE)?)
-        .publish_subscribe::<ipc::WindowCommand>()
+        .publish_subscribe::<e_grid::ipc_protocol::IpcCommand>()
         .open()?;
-    let mut command_publisher = command_service.publisher_builder().create()?;
+    let command_publisher = command_service.publisher_builder().create()?;
 
     // Setup layout publisher
     let layout_service = node
         .service_builder(&ServiceName::new(ipc::GRID_LAYOUT_SERVICE)?)
-        .publish_subscribe::<ipc::GridLayoutMessage>()
+        .publish_subscribe::<e_grid::ipc_protocol::GridLayoutMessage>()
         .open()?;
     let layout_publisher = layout_service.publisher_builder().create()?;
 
     // Setup cell assignment publisher
     let cell_service = node
         .service_builder(&ServiceName::new(ipc::GRID_CELL_ASSIGNMENTS_SERVICE)?)
-        .publish_subscribe::<ipc::GridCellAssignment>()
+        .publish_subscribe::<e_grid::ipc_protocol::GridCellAssignment>()
         .open()?;
     let cell_publisher = cell_service.publisher_builder().create()?;
 
     // Setup animation publisher
     let animation_service = node
         .service_builder(&ServiceName::new(ipc::ANIMATION_COMMANDS_SERVICE)?)
-        .publish_subscribe::<ipc::AnimationCommand>()
+        .publish_subscribe::<e_grid::ipc_protocol::AnimationCommand>()
         .open()?;
     let mut animation_publisher = animation_service.publisher_builder().create()?;
 
     // Setup response subscriber
     let response_service = node
         .service_builder(&ServiceName::new(ipc::GRID_RESPONSE_SERVICE)?)
-        .publish_subscribe::<ipc::WindowResponse>()
+        .publish_subscribe::<e_grid::ipc_protocol::WindowResponse>()
         .open()?;
     let mut response_subscriber = response_service.subscriber_builder().create()?;
 
@@ -77,12 +84,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let choice = input.trim();
 
         match choice {
-            "1" => get_window_list(&mut command_publisher)?,
-            "2" => save_current_layout(&mut command_publisher)?,
-            "3" => apply_layout_animated(&mut command_publisher)?,
+            "1" => get_window_list(&mut window_command_publisher)?,
+            "2" => save_current_layout(&mut window_command_publisher)?,
+            "3" => apply_layout_animated(&mut window_command_publisher)?,
             "4" => animate_specific_window(&mut animation_publisher)?,
             "5" => get_animation_status(&mut animation_publisher)?,
-            "6" => demo_layout_transitions(&mut command_publisher, &mut animation_publisher)?,
+            "6" => {
+                demo_layout_transitions(&mut window_command_publisher, &mut animation_publisher)?
+            }
             "7" => stop_all_animations(&mut animation_publisher)?,
             "q" | "Q" => break,
             _ => println!("❌ Invalid choice. Please try again."),
@@ -99,11 +108,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn get_window_list(
-    publisher: &mut Publisher<iceoryx2::service::ipc::Service, ipc::WindowCommand, ()>,
+    publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::WindowCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("📋 Requesting window list from server...");
 
-    let command = ipc::WindowCommand {
+    let command = e_grid::ipc_protocol::WindowCommand {
         command_type: 2, // get_windows
         ..Default::default()
     };
@@ -117,7 +130,11 @@ fn get_window_list(
 }
 
 fn save_current_layout(
-    publisher: &mut Publisher<iceoryx2::service::ipc::Service, ipc::WindowCommand, ()>,
+    publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::WindowCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     print!("💾 Enter layout name to save: ");
     io::stdout().flush()?;
@@ -134,7 +151,7 @@ fn save_current_layout(
     // Simple hash of layout name for ID
     let layout_id: u32 = layout_name.chars().map(|c| c as u32).sum();
 
-    let command = ipc::WindowCommand {
+    let command = e_grid::ipc_protocol::WindowCommand {
         command_type: 6, // save_layout
         layout_id,
         ..Default::default()
@@ -146,7 +163,11 @@ fn save_current_layout(
 }
 
 fn apply_layout_animated(
-    publisher: &mut Publisher<iceoryx2::service::ipc::Service, ipc::WindowCommand, ()>,
+    publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::WindowCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     print!("🗂️ Enter layout name to apply: ");
     io::stdout().flush()?;
@@ -184,7 +205,7 @@ fn apply_layout_animated(
 
     let layout_id: u32 = layout_name.chars().map(|c| c as u32).sum();
 
-    let command = ipc::WindowCommand {
+    let command = e_grid::ipc_protocol::WindowCommand {
         command_type: 5, // apply_grid_layout
         layout_id,
         animation_duration_ms: duration_ms,
@@ -201,7 +222,11 @@ fn apply_layout_animated(
 }
 
 fn animate_specific_window(
-    publisher: &mut Publisher<iceoryx2::service::ipc::Service, ipc::AnimationCommand, ()>,
+    publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::AnimationCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     print!("🎬 Enter window HWND (decimal): ");
     io::stdout().flush()?;
@@ -251,7 +276,7 @@ fn animate_specific_window(
     io::stdin().read_line(&mut easing_input)?;
     let easing_type: u8 = easing_input.trim().parse().unwrap_or(4).clamp(0, 6);
 
-    let command = ipc::AnimationCommand {
+    let command = e_grid::ipc_protocol::AnimationCommand {
         command_type: 0, // start_animation
         hwnd,
         duration_ms,
@@ -271,11 +296,15 @@ fn animate_specific_window(
 }
 
 fn get_animation_status(
-    publisher: &mut Publisher<iceoryx2::service::ipc::Service, ipc::AnimationCommand, ()>,
+    publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::AnimationCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("📊 Requesting animation status for all windows...");
 
-    let command = ipc::AnimationCommand {
+    let command = e_grid::ipc_protocol::AnimationCommand {
         command_type: 4, // get_status
         hwnd: 0,         // All windows
         ..Default::default()
@@ -287,8 +316,16 @@ fn get_animation_status(
 }
 
 fn demo_layout_transitions(
-    command_publisher: &mut Publisher<iceoryx2::service::ipc::Service, ipc::WindowCommand, ()>,
-    animation_publisher: &mut Publisher<iceoryx2::service::ipc::Service, ipc::AnimationCommand, ()>,
+    command_publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::WindowCommand,
+        (),
+    >,
+    animation_publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::AnimationCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("🔄 Starting automatic layout transition demo...");
     println!("This will:");
@@ -298,7 +335,7 @@ fn demo_layout_transitions(
     println!("  4. Transition between layouts with different easing functions");
 
     // Step 1: Save current layout
-    let save_command = ipc::WindowCommand {
+    let save_command = e_grid::ipc_protocol::WindowCommand {
         command_type: 6, // save_layout
         layout_id: "demo_start".chars().map(|c| c as u32).sum(),
         ..Default::default()
@@ -310,7 +347,7 @@ fn demo_layout_transitions(
 
     // Step 2: Apply demo layout with bounce animation
     println!("🎬 Applying demo layout with Bounce easing...");
-    let apply_command = ipc::WindowCommand {
+    let apply_command = e_grid::ipc_protocol::WindowCommand {
         command_type: 5, // apply_grid_layout
         layout_id: "demo_start".chars().map(|c| c as u32).sum(),
         animation_duration_ms: 3000,
@@ -323,7 +360,7 @@ fn demo_layout_transitions(
 
     // Step 3: Apply with elastic easing
     println!("🎬 Applying demo layout with Elastic easing...");
-    let elastic_command = ipc::WindowCommand {
+    let elastic_command = e_grid::ipc_protocol::WindowCommand {
         command_type: 5, // apply_grid_layout
         layout_id: "demo_start".chars().map(|c| c as u32).sum(),
         animation_duration_ms: 2500,
@@ -339,11 +376,15 @@ fn demo_layout_transitions(
 }
 
 fn stop_all_animations(
-    publisher: &mut Publisher<iceoryx2::service::ipc::Service, ipc::AnimationCommand, ()>,
+    publisher: &mut Publisher<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::AnimationCommand,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("🛑 Stopping all active animations...");
 
-    let command = ipc::AnimationCommand {
+    let command = e_grid::ipc_protocol::AnimationCommand {
         command_type: 1, // stop_animation
         hwnd: 0,         // All windows
         ..Default::default()
@@ -355,7 +396,11 @@ fn stop_all_animations(
 }
 
 fn check_responses(
-    subscriber: &mut Subscriber<iceoryx2::service::ipc::Service, ipc::WindowResponse, ()>,
+    subscriber: &mut Subscriber<
+        iceoryx2::service::ipc::Service,
+        e_grid::ipc_protocol::WindowResponse,
+        (),
+    >,
 ) -> Result<(), Box<dyn std::error::Error>> {
     while let Some(sample) = subscriber.receive()? {
         let response = *sample;

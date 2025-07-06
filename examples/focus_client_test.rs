@@ -1,5 +1,5 @@
-use e_grid::ipc;
 use e_grid::ipc_client::GridClient;
+use e_grid::ipc_protocol;
 use std::thread;
 use std::time::Duration;
 
@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = GridClient::new()?;
 
     // Set up a focus callback to explicitly handle focus events
-    client.set_focus_callback(Box::new(|focus_event: ipc::WindowFocusEvent| {
+    client.set_focus_callback(Box::new(|focus_event: ipc_protocol::WindowFocusEvent| {
         let event_type = if focus_event.event_type == 0 {
             "FOCUSED"
         } else {
@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "🎯 [{}] Window {} (PID: {}) at timestamp: {}",
             event_type, focus_event.hwnd, focus_event.process_id, timestamp
         );
-    }));
+    }))?;
 
     // Start background monitoring for real-time updates
     client.start_background_monitoring()?;

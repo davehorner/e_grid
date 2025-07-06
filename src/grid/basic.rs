@@ -2,23 +2,22 @@
 // This maintains backwards compatibility with the existing grid system
 
 use crate::config::GridConfig;
-use crate::display::format_hwnd_display;
 use crate::grid::traits::{CellDisplay, GridResult, GridTrait};
 use crate::window::WindowInfo;
 use std::collections::HashMap;
-use winapi::shared::windef::{HWND, RECT};
+use winapi::shared::windef::RECT;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BasicCellState {
-    Empty,          // No window (on-screen area)
-    Occupied(HWND), // Window present
-    OffScreen,      // Off-screen area (outside actual monitor bounds)
+    Empty,         // No window (on-screen area)
+    Occupied(u64), // Window present
+    OffScreen,     // Off-screen area (outside actual monitor bounds)
 }
 
 pub struct BasicGrid {
     config: GridConfig,
     grid: Vec<Vec<BasicCellState>>,
-    windows: HashMap<HWND, WindowInfo>,
+    windows: HashMap<u64, WindowInfo>,
     monitor_bounds: (i32, i32, i32, i32), // (left, top, right, bottom)
 }
 
@@ -88,11 +87,11 @@ impl BasicGrid {
     }
 
     /// Add a window to the grid
-    pub fn add_window(&mut self, hwnd: HWND, window_info: WindowInfo) -> GridResult<()> {
+    pub fn add_window(&mut self, hwnd: u64, window_info: WindowInfo) -> GridResult<()> {
         self.windows.insert(hwnd, window_info.clone());
 
         // Calculate which cells this window occupies
-        let cells = self.window_to_cells(&window_info.rect);
+        let cells = self.window_to_cells(&window_info.window_rect);
 
         for (row, col) in cells {
             self.grid[row][col] = BasicCellState::Occupied(hwnd);
@@ -124,8 +123,7 @@ impl BasicGrid {
                     BasicCellState::Empty => print!(" . "),
                     BasicCellState::OffScreen => print!(" - "),
                     BasicCellState::Occupied(hwnd) => {
-                        let display = format_hwnd_display(*hwnd as u64);
-                        print!("{:>3}", display);
+                        print!("{:>3}", hwnd);
                     }
                 }
             }
@@ -135,7 +133,7 @@ impl BasicGrid {
     }
 
     // Public getter methods for accessing private fields
-    pub fn windows(&self) -> &HashMap<HWND, WindowInfo> {
+    pub fn windows(&self) -> &HashMap<u64, WindowInfo> {
         &self.windows
     }
 
@@ -154,29 +152,15 @@ impl GridTrait for BasicGrid {
         self.clear();
 
         // Re-add all windows with their current positions
-        let windows_to_update: Vec<(HWND, WindowInfo)> = self
+        let windows_to_update: Vec<(u64, WindowInfo)> = self
             .windows
             .iter()
             .map(|(&hwnd, info)| (hwnd, info.clone()))
             .collect();
 
         for (hwnd, window_info) in windows_to_update {
-            // Get current window rectangle
-            let mut current_rect = RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            };
-            if unsafe { winapi::um::winuser::GetWindowRect(hwnd, &mut current_rect) } != 0 {
-                let updated_info = WindowInfo {
-                    rect: current_rect,
-                    ..window_info
-                };
-                self.add_window(hwnd, updated_info)?;
-            }
+            self.add_window(hwnd, window_info)?;
         }
-
         Ok(())
     }
 
@@ -197,7 +181,7 @@ impl GridTrait for BasicGrid {
         Ok(matches!(self.grid[row][col], BasicCellState::Occupied(_)))
     }
 
-    fn get_cell_windows(&self, row: usize, col: usize) -> GridResult<Vec<HWND>> {
+    fn get_cell_windows(&self, row: usize, col: usize) -> GridResult<Vec<u64>> {
         self.validate_coordinates(row, col)?;
 
         match self.grid[row][col] {
@@ -206,7 +190,7 @@ impl GridTrait for BasicGrid {
         }
     }
 
-    fn assign_window(&mut self, hwnd: HWND, row: usize, col: usize) -> GridResult<()> {
+    fn assign_window(&mut self, hwnd: u64, row: usize, col: usize) -> GridResult<()> {
         self.validate_coordinates(row, col)?;
 
         // Clear the window from its current position
@@ -218,7 +202,7 @@ impl GridTrait for BasicGrid {
         Ok(())
     }
 
-    fn remove_window(&mut self, hwnd: HWND) -> GridResult<()> {
+    fn remove_window(&mut self, hwnd: u64) -> GridResult<()> {
         self.windows.remove(&hwnd);
 
         // Remove from grid
@@ -231,12 +215,11 @@ impl GridTrait for BasicGrid {
                 }
             }
         }
-
         Ok(())
     }
 
-    fn get_all_windows(&self) -> Vec<HWND> {
-        self.windows.keys().copied().collect()
+    fn get_all_windows(&self) -> Vec<u64> {
+        self.windows.keys().cloned().collect()
     }
 }
 
@@ -251,7 +234,7 @@ impl CellDisplay for BasicCellState {
 
     fn get_hwnd(&self) -> Option<u64> {
         match self {
-            BasicCellState::Occupied(hwnd) => Some(*hwnd as u64),
+            BasicCellState::Occupied(hwnd) => Some(*hwnd),
             _ => None,
         }
     }

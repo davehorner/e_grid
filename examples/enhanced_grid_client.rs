@@ -95,11 +95,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example window operations (these would typically come from user input)
     let example_hwnd = 12345u64;
 
-    // Move window to grid cell (with error handling)
-    match grid_client.move_window_to_cell(example_hwnd, 1, 2) {
-        Ok(_) => println!("✅ Move window command sent"),
-        Err(e) => println!("⚠️  Move window failed: {}", e),
-    }
+    // // Move window to grid cell (with error handling)
+    // match grid_client.move_window_to_cell(example_hwnd, 1, 2) {
+    //     Ok(_) => println!("✅ Move window command sent"),
+    //     Err(e) => println!("⚠️  Move window failed: {}", e),
+    // }
 
     // Assign window to virtual cell
     match grid_client.assign_window_to_virtual_cell(example_hwnd, 0, 0) {
@@ -116,6 +116,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match grid_client.request_grid_state() {
         Ok(_) => println!("✅ Grid state requested"),
         Err(e) => println!("⚠️  Grid state request failed: {}", e),
+    }
+
+    match grid_client.request_monitor_list() {
+        Ok(_) => println!("✅ Monitor list requested"),
+        Err(e) => println!("⚠️  Monitor list request failed: {}", e),
     }
 
     // 8. Main event loop
@@ -152,17 +157,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "\n⚙️  Current grid configuration: {}x{}",
                 grid_config.rows, grid_config.cols
             );
-        }
-
-        // Toggle auto-display as demonstration
-        if loop_count == 15 {
-            grid_client.set_auto_display(false);
-            println!("🔄 Auto-display disabled");
-        }
-
-        if loop_count == 25 {
-            grid_client.set_auto_display(true);
-            println!("🔄 Auto-display re-enabled");
         }
     }
 }

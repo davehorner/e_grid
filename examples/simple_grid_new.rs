@@ -31,7 +31,7 @@ fn main() {
     }
 
     println!("Displaying initial grid...");
-    tracker.print_grid();
+    tracker.print_all_grids();
     println!("Initial grid displayed successfully!");
 
     println!("Creating tracker arc...");
