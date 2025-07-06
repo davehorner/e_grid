@@ -54,7 +54,7 @@ impl WindowTracker {
         let mut ret = Self::new_with_config(GridConfig::default());
         ret.find_desktop_hwnds();
         ret.last_scan_time =
-            std::sync::Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(2));
+            std::sync::Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1));
         ret
     }
     /// Returns the current grid state in IPC protocol format (GridState)
@@ -211,6 +211,21 @@ impl WindowTracker {
         }
     }
 
+    pub fn get_window_class(hwnd: u64) -> String {
+        unsafe {
+            let mut buffer = [0u16; 256];
+            let len = GetClassNameW(hwnd as HWND, buffer.as_mut_ptr(), buffer.len() as i32);
+            if len > 0 {
+                String::from_utf16_lossy(&buffer[..len as usize])
+                    .chars()
+                    .take(50)
+                    .collect()
+            } else {
+                String::new()
+            }
+        }
+    }
+
     pub fn get_window_title(hwnd: u64) -> String {
         unsafe {
             let mut buffer = [0u16; 256];
@@ -261,6 +276,20 @@ impl WindowTracker {
             let ex_style = GetWindowLongW(hwnd as HWND, GWL_EXSTYLE) as u32;
             if (ex_style & WS_EX_TOOLWINDOW) != 0 {
                 // println!("[DEBUG] Skipping hwnd=0x{:X}: toolwindow", hwnd);
+                return false;
+            }
+            let style = GetWindowLongW(hwnd as HWND, GWL_STYLE) as u32;
+            if (style & WS_CHILD) != 0 {
+                // println!("[DEBUG] Skipping hwnd=0x{:X}: is a child window", hwnd);
+                return false;
+            }
+            // Exclude "Windows.UI.Composition.DesktopWindowContentBridge" windows
+            let class_name = Self::get_window_class_name(hwnd);
+            if class_name.is_empty() ||
+               class_name == "Windows.UI.Composition.DesktopWindowContentBridge"
+               || class_name == "Windows.UI.Core.CoreWindow"
+               || class_name == "XamlExplorerHostIslandWindow"
+            {
                 return false;
             }
             // println!("[DEBUG] Accepting hwnd=0x{:X}: '{}'", hwnd, title);
@@ -426,7 +455,7 @@ impl WindowTracker {
         {
             let mut last = self.last_scan_time.lock().unwrap();
             let now = std::time::Instant::now();
-            if now.duration_since(*last) < std::time::Duration::from_secs(2) {
+            if now.duration_since(*last) < std::time::Duration::from_secs(1) {
                 // Too soon, skip update
                 // println!("[DEBUG] Skipping grid update: too soon since last update");
                 return;
@@ -800,6 +829,28 @@ impl WindowTracker {
         println!("=== VIRTUAL GRID (All Monitors Combined) ===");
         self.print_virtual_grid();
         let z_map = crate::util::get_hwnd_z_order_map();
+        
+        // Find the foremost (topmost) window across all windows
+        let mut foremost_hwnd: Option<u64> = None;
+        let mut foremost_z: Option<usize> = None;
+        let mut fg_hwnd = None;
+        for entry in &self.windows {
+            let (hwnd, _) = entry.pair();
+            if let Some(&z) = z_map.get(hwnd) {
+                if foremost_z.map_or(true, |fz| z < fz) {
+                    foremost_hwnd = Some(*hwnd);
+                    foremost_z = Some(z);
+                }
+            }
+        }
+        
+        // Get the current foreground window and store its HWND
+        fg_hwnd = unsafe { GetForegroundWindow().as_ref() }
+            .map(|hwnd| hwnd as *const _ as u64);
+
+        if let Some(fg_hwnd) = fg_hwnd {
+            println!("Foreground window: \x1b[34m0x{:X}\x1b[0m", fg_hwnd);
+        }
         // Print individual monitor grids
         for (index, monitor_grid) in self.monitor_grids.iter().enumerate() {
             println!();
@@ -814,7 +865,6 @@ impl WindowTracker {
 
             // Count windows on this monitor
             let mut windows_on_monitor = 0;
-            let mut printed_windows = 0;
             for entry in &self.windows {
                 let (hwnd, window_info) = entry.pair();
 
@@ -834,49 +884,7 @@ impl WindowTracker {
                     && window_rect.bottom > monitor_rect.top;
                 if overlaps {
                     windows_on_monitor += 1;
-                    if printed_windows < 100 {
-                        let title = String::from_utf16_lossy(&window_info.title[..window_info.title_len as usize]);
-                        println!(
-                            "Window HWND: 0x{:X} | Title: '{}' | Rect: ({}, {}) to ({}, {}) | Size: {}x{}",
-                            hwnd,
-                            title,
-                            window_rect.left, window_rect.top, window_rect.right, window_rect.bottom,
-                            window_rect.right - window_rect.left, window_rect.bottom - window_rect.top
-                        );
-                        println!(
-                            "  └─ Monitor bounds: ({}, {}) to ({}, {}) | Size: {}x{}",
-                            monitor_grid.monitor_rect.left, monitor_grid.monitor_rect.top,
-                            monitor_grid.monitor_rect.right, monitor_grid.monitor_rect.bottom,
-                            monitor_grid.monitor_rect.right - monitor_grid.monitor_rect.left,
-                            monitor_grid.monitor_rect.bottom - monitor_grid.monitor_rect.top
-                        );
-                        // Show which grid cells this window covers on this monitor
-                        let calculated_cells = monitor_grid.window_to_grid_cells(&window_rect);
-                        println!(
-                            "  └─ Grid cells on this monitor: {}: {:?}",
-                            calculated_cells.len(), calculated_cells
-                        );
-                        printed_windows += 1;
-                    }
                 }
-                // Print grid cell info for each window
-    //             if window_info.grid_cells_len > 0 {
-    //                 let (start_row, start_col) = window_info.grid_cells[0];
-    //                 let grid_cells_len = window_info
-    //                     .grid_cells_len
-    //                     .min(window_info.grid_cells.len() as u32)
-    //                     as usize;
-    // //                 if grid_cells_len > 0 {
-    // //                     let (start_row, start_col) = window_info.grid_cells[0];
-    // //                     let (end_row, end_col) = window_info.grid_cells[grid_cells_len - 1];
-    // //                     println!(
-    // //     "Window HWND: 0x{:X}  start_row: {} start_col: {}  end_row: {} end_col: {} (cells: {})",
-    // //     hwnd, start_row, start_col, end_row, end_col, window_info.grid_cells_len
-    // // );
-    // //                 }
-    //             } else {
-    //                 println!("Window HWND: 0x{:X}  (no grid cells assigned)", hwnd);
-    //             }
             }
             if windows_on_monitor > 100 {
                 println!("    ... and {} more windows", windows_on_monitor - 100);
@@ -900,64 +908,197 @@ impl WindowTracker {
             }
             println!();
 
+            // Determine max row to print (support up to 91+ for special visualization)
+            let max_display_row = monitor_grid.config.rows.min(95);
+
             // Print grid rows
-            for row in 0..monitor_grid.config.rows.min(32) {
+            for row in 0..max_display_row {
                 print!("{:2} ", row);
                 for col in 0..monitor_grid.config.cols.min(32) {
-                    // Find all windows occupying this cell using dynamic calculation
-                    let mut topmost_hwnd: Option<u64> = None;
-                    let mut topmost_z: Option<usize> = None;
-                    
-                    for entry in &self.windows {
-                        let (hwnd, window_info) = entry.pair();
-                        let window_rect = window_info.window_rect.0;
+                    if row == 89 {
+                        // Row 89: Display cell count for each window (number of cells it occupies)
+                        let mut max_cell_count = 0;
+                        for entry in &self.windows {
+                            let (hwnd, window_info) = entry.pair();
+                            let window_rect = window_info.window_rect.0;
+                            let monitor_rect = RECT {
+                                left: monitor_grid.monitor_rect.left,
+                                top: monitor_grid.monitor_rect.top,
+                                right: monitor_grid.monitor_rect.right,
+                                bottom: monitor_grid.monitor_rect.bottom,
+                            };
+                            let overlaps = window_rect.left < monitor_rect.right
+                                && window_rect.right > monitor_rect.left
+                                && window_rect.top < monitor_rect.bottom
+                                && window_rect.bottom > monitor_rect.top;
+                            
+                            if overlaps {
+                                let cells = monitor_grid.window_to_grid_cells(&window_rect);
+                                // Check if this window has any cells at the current column
+                                let has_cell_in_col = cells.iter().any(|(_, c)| *c == col);
+                                if has_cell_in_col {
+                                    max_cell_count = max_cell_count.max(cells.len());
+                                }
+                            }
+                        }
+                        if max_cell_count > 0 {
+                            print!("{:02} ", max_cell_count.min(99));
+                        } else {
+                            print!(".. ");
+                        }
+                    } else if row == 90 {
+                        // Row 90: Display fully spanning virtual grid
+                        let mut has_spanning_window = false;
+                        for entry in &self.windows {
+                            let (hwnd, window_info) = entry.pair();
+                            let window_rect = window_info.window_rect.0;
+                            
+                            // Check if window spans multiple monitors or is maximized
+                            let window_width = window_rect.right - window_rect.left;
+                            let window_height = window_rect.bottom - window_rect.top;
+                            let monitor_width = monitor_grid.monitor_rect.right - monitor_grid.monitor_rect.left;
+                            let monitor_height = monitor_grid.monitor_rect.bottom - monitor_grid.monitor_rect.top;
+                            
+                            let is_spanning = window_width >= monitor_width * 2 || window_height >= monitor_height * 2;
+                            
+                            if is_spanning {
+                                let cells = monitor_grid.window_to_grid_cells(&window_rect);
+                                // Check if this spanning window has any cells at the current column
+                                let has_cell_in_col = cells.iter().any(|(_, c)| *c == col);
+                                if has_cell_in_col {
+                                    has_spanning_window = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if has_spanning_window {
+                            print!("## ");
+                        } else {
+                            print!(".. ");
+                        }
+                    } else if row >= 91 {
+                        // Row 91+: Display windows by Z-order depth (91 = foremost, 92 = second layer, etc.)
+                        let depth_layer = row - 91;
+                        let mut windows_at_col: Vec<(u64, usize)> = Vec::new();
                         
-                        // Check if window overlaps this monitor
-                        let monitor_rect = RECT {
-                            left: monitor_grid.monitor_rect.left,
-                            top: monitor_grid.monitor_rect.top,
-                            right: monitor_grid.monitor_rect.right,
-                            bottom: monitor_grid.monitor_rect.bottom,
-                        };
-                        let overlaps = window_rect.left < monitor_rect.right
-                            && window_rect.right > monitor_rect.left
-                            && window_rect.top < monitor_rect.bottom
-                            && window_rect.bottom > monitor_rect.top;
-                        
-                        if overlaps {
-                            // Use dynamic calculation to check if this window covers this cell
-                            let cells = monitor_grid.window_to_grid_cells(&window_rect);
-                            if cells.contains(&(row, col)) {
-                                if let Some(&z) = z_map.get(hwnd) {
-                                    if topmost_z.map_or(true, |tz| z < tz) {
-                                        topmost_hwnd = Some(*hwnd);
-                                        topmost_z = Some(z);
+                        for entry in &self.windows {
+                            let (hwnd, window_info) = entry.pair();
+                            let window_rect = window_info.window_rect.0;
+                            let monitor_rect = RECT {
+                                left: monitor_grid.monitor_rect.left,
+                                top: monitor_grid.monitor_rect.top,
+                                right: monitor_grid.monitor_rect.right,
+                                bottom: monitor_grid.monitor_rect.bottom,
+                            };
+                            let overlaps = window_rect.left < monitor_rect.right
+                                && window_rect.right > monitor_rect.left
+                                && window_rect.top < monitor_rect.bottom
+                                && window_rect.bottom > monitor_rect.top;
+                            
+                            if overlaps {
+                                let cells = monitor_grid.window_to_grid_cells(&window_rect);
+                                // Check if this window has any cells at the current column
+                                let has_cell_in_col = cells.iter().any(|(_, c)| *c == col);
+                                if has_cell_in_col {
+                                    if let Some(&z) = z_map.get(hwnd) {
+                                        windows_at_col.push((*hwnd, z));
                                     }
                                 }
                             }
                         }
-                    }
-                    
-                    if let Some(hwnd) = topmost_hwnd {
-                        if self.is_desktop_hwnd(hwnd) {
-                            print!(".. ");
+                        
+                        // Sort by Z-order (lower Z = more foreground)
+                        windows_at_col.sort_by_key(|&(_, z)| z);
+                        
+                        if let Some(&(hwnd, _)) = windows_at_col.get(depth_layer) {
+                            if self.is_desktop_hwnd(hwnd) {
+                                print!(".. ");
+                            } else {
+                                print!("{:02X} ", hwnd & 0xFF);
+                            }
                         } else {
-                            print!("{:02X} ", hwnd & 0xFF);
+                            print!(".. ");
                         }
                     } else {
-                        // Check if cell is off-screen
-                        match monitor_grid.grid[row][col] {
-                            CellState::OffScreen => {
-                                print!("XX ");
+                        // Standard grid display for rows 0-88
+                        // Find all windows occupying this cell using dynamic calculation
+                        let mut topmost_hwnd: Option<u64> = None;
+                        let mut topmost_z: Option<usize> = None;
+                        
+                        for entry in &self.windows {
+                            let (hwnd, window_info) = entry.pair();
+                            let window_rect = window_info.window_rect.0;
+                            
+                            // Check if window overlaps this monitor
+                            let monitor_rect = RECT {
+                                left: monitor_grid.monitor_rect.left,
+                                top: monitor_grid.monitor_rect.top,
+                                right: monitor_grid.monitor_rect.right,
+                                bottom: monitor_grid.monitor_rect.bottom,
+                            };
+                            let overlaps = window_rect.left < monitor_rect.right
+                                && window_rect.right > monitor_rect.left
+                                && window_rect.top < monitor_rect.bottom
+                                && window_rect.bottom > monitor_rect.top;
+                            
+                            if overlaps {
+                                // Use dynamic calculation to check if this window covers this cell
+                                let cells = monitor_grid.window_to_grid_cells(&window_rect);
+                                if cells.contains(&(row, col)) {
+                                    if let Some(&z) = z_map.get(hwnd) {
+                                        if topmost_z.map_or(true, |tz| z < tz) {
+                                            topmost_hwnd = Some(*hwnd);
+                                            topmost_z = Some(z);
+                                        }
+                                    }
+                                }
                             }
-                            _ => {
+                        }
+                        
+                        if let Some(hwnd) = topmost_hwnd {
+                            if self.is_desktop_hwnd(hwnd) {
                                 print!(".. ");
+                            } else {
+                                // Check if this is the foremost window and color it red
+                                if foremost_hwnd == Some(hwnd) {
+                                    print!("\x1b[31m{:02X}\x1b[0m ", hwnd & 0xFF); // Red foreground
+                                } else if fg_hwnd == Some(hwnd) {
+                                    print!("\x1b[34m{:02X}\x1b[0m ", hwnd & 0xFF); // Blue foreground
+                                } else {
+                                    print!("{:02X} ", hwnd & 0xFF);
+                                }
+                            }
+                        } else {
+                            // Check if cell is off-screen
+                            match monitor_grid.grid[row][col] {
+                                CellState::OffScreen => {
+                                    print!("XX ");
+                                }
+                                _ => {
+                                    print!(".. ");
+                                }
                             }
                         }
                     }
                 }
-                println!();
+                
+                // Add row description for special rows
+                match row {
+                    89 => println!(" <- Cell counts"),
+                    90 => println!(" <- Spanning windows"),
+                    91 => println!(" <- Foremost visible"),
+                    92 => println!(" <- Second layer"),
+                    93 => println!(" <- Third layer"),
+                    94 => println!(" <- Fourth layer"),
+                    _ => println!(),
+                }
             }
+        }
+        
+        // Print legend
+        if foremost_hwnd.is_some() {
+            println!();
+            println!("Legend: \x1b[31mRed\x1b[0m = Foremost window (topmost Z-order)");
         }
         println!();
     }
@@ -1081,14 +1222,14 @@ impl WindowTracker {
     }
 
     pub fn update_monitor_grids(&mut self) {
-        println!("Updating monitor grids...");
+        // println!("Updating monitor grids...");
         for monitor_grid in &mut self.monitor_grids {
-            println!(
-                "Updating grid for monitor {}: {}x{}",
-                monitor_grid.monitor_id,
-                monitor_grid.config.rows,
-                monitor_grid.config.cols
-            );
+            // println!(
+            //     "Updating grid for monitor {}: {}x{}",
+            //     monitor_grid.monitor_id,
+            //     monitor_grid.config.rows,
+            //     monitor_grid.config.cols
+            // );
             monitor_grid.update_grid_for_monitor(&self.windows);
         }
     }
@@ -1535,5 +1676,160 @@ impl WindowTracker {
         self.update_grid();
         self.initialize_monitor_grids();
         self.update_monitor_grids();
+    }
+
+    /// Add window creation/destruction detection
+    pub fn detect_window_lifecycle_events(&mut self) -> Vec<crate::ipc_protocol::GridEvent> {
+        let mut events = Vec::new();
+        
+        // Get current windows from system
+        let current_windows = self.enumerate_windows();
+        
+        // Detect NEW windows (create events)
+        for entry in current_windows.iter() {
+            let hwnd = entry.key();
+            let window_info = entry.value();
+            if !self.windows.contains_key(hwnd) {
+                // This is a new window!
+                let create_event = crate::ipc_protocol::GridEvent::WindowCreated {
+                    hwnd: *hwnd,
+                    title: String::from_utf16_lossy(&window_info.title),
+                    row: 0, // Will be calculated properly
+                    col: 0,
+                    grid_top_left_row: 0,
+                    grid_top_left_col: 0, 
+                    grid_bottom_right_row: 0,
+                    grid_bottom_right_col: 0,
+                    real_x: window_info.window_rect.left,
+                    real_y: window_info.window_rect.top,
+                    real_width: (window_info.window_rect.right - window_info.window_rect.left) as u32,
+                    real_height: (window_info.window_rect.bottom - window_info.window_rect.top) as u32,
+                    monitor_id: 0, // Will be determined
+                };
+                events.push(create_event);
+                
+                println!("✨ [LIFECYCLE] Window CREATED: HWND 0x{:X} - '{}'", 
+                         hwnd, String::from_utf16_lossy(&window_info.title).chars().take(50).collect::<String>());
+            }
+        }
+        
+        // Detect DESTROYED windows (destroy events)
+        let mut destroyed_windows = Vec::new();
+        for entry in self.windows.iter() {
+            let hwnd = entry.key();
+            if !current_windows.contains_key(hwnd) {
+                // This window was destroyed!
+                let title = if let Some(window_info) = self.windows.get(hwnd) {
+                    String::from_utf16_lossy(&window_info.title)
+                } else {
+                    "(Unknown)".to_string()
+                };
+                
+                let destroy_event = crate::ipc_protocol::GridEvent::WindowDestroyed {
+                    hwnd: *hwnd,
+                    title: title.clone(),
+                };
+                events.push(destroy_event);
+                destroyed_windows.push(*hwnd);
+                
+                println!("💀 [LIFECYCLE] Window DESTROYED: HWND 0x{:X} - '{}'", 
+                         hwnd, title.chars().take(50).collect::<String>());
+            }
+        }
+        
+        // Remove destroyed windows from our tracking
+        for hwnd in destroyed_windows {
+            self.windows.remove(&hwnd);
+        }
+        
+        // Update our window list with current windows
+        self.windows = current_windows;
+        
+        events
+    }
+
+    /// Call this periodically to detect window lifecycle changes
+    pub fn update_window_lifecycle(&mut self) -> Vec<crate::ipc_protocol::GridEvent> {
+        self.detect_window_lifecycle_events()
+    }
+
+    /// Enumerate all windows currently visible to the system
+    pub fn enumerate_windows(&self) -> DashMap<u64, WindowInfo> {
+        let mut windows = DashMap::new();
+
+        unsafe {
+            extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
+                let windows = unsafe { &mut *(lparam as *mut DashMap<u64, WindowInfo>) };
+                let mut class_buf = [0u16; 256];
+                let len = unsafe { GetClassNameW(hwnd, class_buf.as_mut_ptr(), 256) };
+                if len > 0 {
+                    let class = String::from_utf16_lossy(&class_buf[..len as usize]);
+                    // Filter out unwanted windows by class name
+                    if class.contains("SomeUnwantedClassName") {
+                        return 1; // Skip this window
+                    }
+                }
+                // Determine Z-order for this window
+                let z_order = crate::util::get_hwnd_z_order_map()
+                    .get(&(hwnd as u64))
+                    .copied()
+                    .unwrap_or(0) as u32;
+
+                // Gather window info fields
+                let mut title_buf = [0u16; 256];
+                let title_len = unsafe {
+                    GetWindowTextW(hwnd, title_buf.as_mut_ptr(), title_buf.len() as i32)
+                };
+                let mut class_name_buf = [0u16; 256];
+                let class_name_len = unsafe {
+                    GetClassNameW(hwnd, class_name_buf.as_mut_ptr(), class_name_buf.len() as i32)
+                };
+                let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                let _ = unsafe { GetWindowRect(hwnd, &mut rect) };
+                let is_visible = unsafe { IsWindowVisible(hwnd) != 0 };
+                let is_minimized = unsafe { IsIconic(hwnd) != 0 };
+                let mut process_id: u32 = 0;
+                unsafe { GetWindowThreadProcessId(hwnd, &mut process_id); }
+
+                // Fill WindowInfo with actual data
+                let _ = windows.insert(
+                    hwnd as u64,
+                    WindowInfo {
+                        hwnd: hwnd as u64,
+                        title: title_buf,
+                        title_len: title_len as u32,
+                        monitor_ids: [0; 8], // You may want to fill this if needed
+                        window_rect: RectWrapper::from_rect(rect),
+                        is_visible,
+                        is_minimized,
+                        process_id,
+                        class_name: class_name_buf,
+                        class_name_len: class_name_len as u32,
+                        z_order,
+                    },
+                );
+                // Add the window to the list
+                let _ = windows.insert(
+                    hwnd as u64,
+                    WindowInfo {
+                        hwnd: hwnd as u64,
+                        title: [0u16; 256],
+                        title_len: 0,
+                        monitor_ids: [0; 8],
+                        window_rect: RectWrapper::default(),
+                        is_visible: false,
+                        is_minimized: false,
+                        process_id: 0,
+                        class_name: [0u16; 256],
+                        class_name_len: 0,
+                        z_order
+                    },
+                );
+                1 // Continue enumeration
+            }
+            EnumWindows(Some(enum_proc), &mut windows as *mut _ as LPARAM);
+        }
+
+        windows
     }
 }

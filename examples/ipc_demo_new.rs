@@ -13,7 +13,7 @@ fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     println!("======================================");
 
     // Add a delay to ensure server is ready
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    std::thread::sleep(std::time::Duration::from_secs(1));
     // Create iceoryx2 node for client
     let node = match NodeBuilder::new().create::<iceoryx2::service::ipc::Service>() {
         Ok(node) => {

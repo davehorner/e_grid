@@ -326,6 +326,7 @@ pub struct WindowEvent {
     pub real_width: u32,
     pub real_height: u32,
     pub monitor_id: u32, // Which monitor this window is on
+    pub process_id: u32, // Process ID for the window
 }
 
 impl Default for WindowEvent {
@@ -349,6 +350,7 @@ impl Default for WindowEvent {
             real_width: 0,
             real_height: 0,
             monitor_id: 0,
+            process_id: 0,
         }
     }
 }
@@ -821,4 +823,21 @@ impl Default for AnimationStatus {
 pub struct WindowListMessage {
     pub window_count: u32,
     pub windows: [WindowDetails; MAX_WINDOWS],
+}
+
+// NEW: Window event types for IPC
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WindowEventType {
+    Moved { hwnd: isize, x: i32, y: i32 },
+    Resized { hwnd: isize, width: u32, height: u32 },
+    MinimizeStart { hwnd: isize },
+    MinimizeEnd { hwnd: isize },
+    RestoreStart { hwnd: isize },
+    RestoreEnd { hwnd: isize },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IpcMessage {
+    // ...existing variants...
+    WindowEvent(WindowEventType),
 }

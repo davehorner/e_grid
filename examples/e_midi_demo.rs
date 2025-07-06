@@ -109,10 +109,9 @@ fn is_hwnd_foreground(hwnd: u64) -> bool {
         true
     }
 }
+
 #[cfg(target_os = "windows")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    //    let mut client = GridClient::new().unwrap();
-
     let mut client: Option<GridClient> = None;
     match GridClient::new() {
         Ok(c) => {
@@ -157,52 +156,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let midi_player = Arc::new(midi_player);
     // Get the MIDI command sender from the player (mpsc::Sender)
     let midi_sender = Arc::new(midi_player.get_command_sender());
+    
+    // Set up window event callback for debug - let's see all events
+    client
+        .set_window_event_callback(|event| {
+            match event.event_type {
+                0 => {
+                    println!("✨ [WINDOW EVENT] Window CREATED - HWND: {}", event.hwnd);
+                }
+                1 => {
+                    println!("💀 [WINDOW EVENT] Window DESTROYED - HWND: {}", event.hwnd);
+                }
+                2 => {
+                    println!("🔄 [WINDOW EVENT] Window MOVED - HWND: {}", event.hwnd);
+                }
+                4 => {
+                    println!("🚀 [WINDOW EVENT] Move START - HWND: {}", event.hwnd);
+                }
+                5 => {
+                    println!("🏁 [WINDOW EVENT] Move STOP - HWND: {}", event.hwnd);
+                }
+                6 => {
+                    println!("📏 [WINDOW EVENT] Resize START - HWND: {}", event.hwnd);
+                }
+                7 => {
+                    println!("📐 [WINDOW EVENT] Resize STOP - HWND: {}", event.hwnd);
+                }
+                _ => println!("📊 [WINDOW EVENT] Type: {} HWND: {}", event.event_type, event.hwnd),
+            }
+        })
+        .unwrap();
+    println!("✅ [e_midi_demo] Registered window event callback with detailed logging");
+
     // Set up move/resize START callback
-    let song_map_for_start = Arc::clone(&song_map);
     let midi_sender_start = Arc::clone(&midi_sender);
     client
-        .set_move_resize_start_callback(move |e| {
-            let song_index = 0;
-            let _ = midi_sender_start.send(e_midi::MidiCommand::Stop);
-            // Add a short delay to allow the MIDI thread/device to process Stop
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            let _ = midi_sender_start.send(e_midi::MidiCommand::PlaySongResumeAware {
-                song_index: Some(song_index),
+        .set_move_resize_start_callback(move |event| {
+            println!("🔥 [DEBUG] Move/resize START callback triggered! HWND: {}, event_type: {}", event.hwnd, event.event_type);
+            
+            // Send play command to start music during resize/move
+            if let Err(e) = midi_sender_start.send(e_midi::MidiCommand::PlaySongResumeAware { 
+                song_index: Some(1),
                 position_ms: None,
                 tracks: None,
                 tempo_bpm: None,
-            });
-            println!(
-                "▶️ [MOVE/RESIZE START] Queued play song {} for HWND {:?} (type={})",
-                song_index, e.hwnd, e.event_type
-            );
+            }) {
+                eprintln!("❌ [MOVE START] Failed to send play command: {}", e);
+            } else {
+                println!("🎵 [MOVE START] Successfully queued play song 1 for HWND {}", event.hwnd);
+            }
         })
         .unwrap();
-    println!("[e_midi_demo] Registered move/resize start callback");
+    println!("✅ [e_midi_demo] Registered move/resize start callback");
 
     // Set up move/resize STOP callback
     let midi_sender_stop = Arc::clone(&midi_sender);
     client
-        .set_move_resize_stop_callback(move |e| {
-            let _ = midi_sender_stop.send(e_midi::MidiCommand::Stop);
-            println!(
-                "⏹️ [MOVE/RESIZE STOP] Queued stop playback for HWND {:?} (type={})",
-                e.hwnd, e.event_type
-            );
+        .set_move_resize_stop_callback(move |event| {
+            println!("🔥 [DEBUG] Move/resize STOP callback triggered! HWND: {}, event_type: {}", event.hwnd, event.event_type);
+            
+            // Immediately stop music when resize/move ends
+            if let Err(e) = midi_sender_stop.send(e_midi::MidiCommand::Stop) {
+                eprintln!("❌ [MOVE STOP] Failed to send stop command: {}", e);
+            } else {
+                println!("🛑 [MOVE STOP] Successfully stopped music for HWND {}", event.hwnd);
+            }
         })
         .unwrap();
-    println!("[e_midi_demo] Registered move/resize stop callback");
-
-    // Set up window event callback for debug
-    client
-        .set_window_event_callback(|event| {
-            println!(
-                "[CALLBACK] WindowEvent: type={} hwnd={}",
-                event.event_type, event.hwnd
-            );
-        })
-        .unwrap();
-    println!("[e_midi_demo] Registered window event callback");
+    println!("✅ [e_midi_demo] Registered move/resize stop callback");
 
     // Set up focus callback (lock-free)
     let song_map_for_focus = Arc::clone(&song_map);
@@ -242,14 +263,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[e_midi_demo] Registered focus callback");
 
     client.start_background_monitoring().unwrap();
-    println!("[e_midi_demo] Started background monitoring");
+    println!("✅ [e_midi_demo] Started background monitoring");
+    
+    // Add some initial status info
+    println!("🎵 MIDI Player Status:");
+    println!("   - Total songs available: {}", total_songs);
+    println!("   - Command sender ready: true");
+    
+    println!("🔄 Waiting for window events...");
+    println!("💡 Try moving or resizing a window to trigger move/resize events!");
+    
+    // Add a test to verify IPC connectivity
+    println!("🔍 Testing IPC connection...");
+    match client.request_grid_state() {
+        Ok(_) => println!("✅ IPC connection verified - server responding"),
+        Err(e) => println!("❌ IPC connection issue: {}", e),
+    }
+    
+    println!("🔍 Expected behavior:");
+    println!("   1. Server detects move/resize: [SERVER CALLBACK] Window event");
+    println!("   2. Server publishes via IPC: Should see [WINDOW EVENT] messages here");
+    println!("   3. Client callbacks trigger: Should see [DEBUG] messages here");
+    println!("   4. MIDI commands sent: Should hear music start/stop");
+    println!();
+    println!("🚨 If you see [SERVER CALLBACK] but NO [WINDOW EVENT], the IPC publishing is broken!");
+    
     loop {
-        println!("[e_midi_demo] Main loop alive");
+        // Reduce log spam but keep some periodic status
+        static mut LOOP_COUNT: u32 = 0;
+        unsafe {
+            LOOP_COUNT += 1;
+            if LOOP_COUNT % 60 == 0 {  // Every 60 seconds
+                println!("[e_midi_demo] Main loop alive - {} minutes elapsed", LOOP_COUNT / 60);
+                println!("🔍 IPC Status check...");
+                match client.request_grid_state() {
+                    Ok(_) => println!("   ✅ IPC still connected"),
+                    Err(e) => println!("   ❌ IPC connection lost: {}", e),
+                }
+            }
+        }
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 fn main() {
-    println!("demo_focus is only supported on Windows.");
+    println!("e_midi_demo is only supported on Windows.");
 }

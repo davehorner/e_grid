@@ -377,7 +377,7 @@ impl GridIpcManager {
 
         Ok(())
     }
-    fn send_response(&mut self, response: IpcResponse) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn send_response(&mut self, response: IpcResponse) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ref mut publisher) = self.response_publisher {
             debug!("📤 Sent response via iceoryx2: {:?}", &response);
             publisher.send_copy(response)?;
@@ -385,7 +385,7 @@ impl GridIpcManager {
         Ok(())
     }
 
-    fn handle_command(&mut self, command: IpcCommand) -> Result<IpcResponse, Box<dyn std::error::Error>> {
+    pub fn handle_command(&mut self, command: IpcCommand) -> Result<IpcResponse, Box<dyn std::error::Error>> {
         // Just print out the command for debugging
         println!("Received IpcCommand: {:?}", command);
         // Optionally, return a default response

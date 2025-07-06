@@ -1,6 +1,7 @@
 use e_grid::ipc_client::GridClient;
 use std::thread;
 use std::time::Duration;
+use std::sync::mpsc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔥 E-Grid Non-Interactive Client Demo - Real-Time Grid Reconstruction");
@@ -9,7 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  📡 Connect to the E-Grid server");
     println!("  📋 Request and display window lists");
     println!("  🔍 Monitor real-time window updates");
-    println!("  � Show grid state changes automatically");
+    println!("  🎨 Show grid state changes automatically with red highlighting for topmost window");
     println!("  🎯 Demonstrate grid assignments");
     println!();
 
@@ -51,49 +52,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     })?;
-
-    println!("📋 Registering focus callback...");
-    client.set_focus_callback(|focus_event| {
-        println!(
-            "🔍 [DEBUG] DEMO CALLBACK CALLED for event type: {}",
-            focus_event.event_type
-        );
-
+let (focus_tx, focus_rx) = mpsc::channel::<e_grid::ipc_client::WindowFocusEvent>();
+let focus_tx_cb = focus_tx.clone();
+client.set_focus_callback(move |focus_event| {
+        // Enhanced visually distinct log messages for focus events
         let event_name = if focus_event.event_type == 0 {
-            "🟢 FOCUSED"
+            "FOCUSED"
         } else {
-            "🔴 DEFOCUSED"
+            "DEFOCUSED"
         };
-
         println!(
-            "{} - Window: {} (PID: {}) at timestamp: {}",
+            "[FOCUS EVENT] {}: HWND {} (PID: {}) at timestamp: {}",
             event_name, focus_event.hwnd, focus_event.process_id, focus_event.timestamp
         );
-
-        // Show application hash for identification
-        if focus_event.app_name_hash != 0 {
-            println!("   📱 App Hash: 0x{:x}", focus_event.app_name_hash);
-        }
-
-        // Show window title hash if available
-        if focus_event.window_title_hash != 0 {
-            println!("   🪟 Title Hash: 0x{:x}", focus_event.window_title_hash);
-        }
-
-        println!("   ─────────────────────────────");
+        focus_tx_cb.send(focus_event).expect("Failed to send focus event");
     })?;
+    println!("📋 Registering focus callback...");
+    // If you want to process focus events in the main thread, use a second channel:
+    // let (focus_tx, focus_rx) = mpsc::channel::<e_grid::ipc_client::WindowEvent>();
+    // and send events from the spawned thread to the main thread via focus_tx.
+
+
+    // Instead of spawning a thread, process focus events in the main loop below.
+    // If you want to process focus events asynchronously, use a thread only for receiving and forwarding events, not for accessing GridClient.
+    // Here, we will process focus events in the main loop.
+    // Enable red highlighting for topmost window
+    client.set_highlight_topmost(true)?;
+    
     // Enable auto-display for real-time updates
-    client.set_auto_display(true);
+    // client.set_auto_display(true);
     // Start background monitoring for real-time updates
     client.start_background_monitoring()?;
 
     println!("✅ Connected to E-Grid server");
     println!("🔍 Background monitoring started - real-time updates enabled!");
+    println!("🎨 Red highlighting enabled for topmost window!");
     println!("📡 Initial window data requested automatically");
     println!();
 
-    // Give some time for initial data to arrive
-    thread::sleep(Duration::from_millis(800));
+    // Give some time for initial data to arrive and show status
+    for i in 1..=8 {
+        thread::sleep(Duration::from_millis(500));
+        let monitor_count = client.monitors.len();
+        let window_count = client.windows.len();
+        let has_valid_grids = client.has_valid_grid_data.load(std::sync::atomic::Ordering::Relaxed);
+        
+        println!("⏳ Waiting for data... ({}s elapsed, {} monitors, {} windows, grids valid: {})", 
+                 (i as f32) * 0.5, monitor_count, window_count, has_valid_grids);
+        
+        if monitor_count > 0 && has_valid_grids {
+            break;
+        }
+    }
 
     // println!("\n📋 Initial Window List:");
     // client.display_window_list();
@@ -104,85 +114,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Non-interactive demo loop with automatic actions
     let mut demo_cycle = 0;
 
-    println!("\n🎬 Starting automated demo cycle...");
-    println!("💡 Move windows around to see real-time updates!");
-    println!("🛑 Press Ctrl+C to stop the demo");
-    println!();
-
     loop {
         demo_cycle += 1;
-        println!("🔄 Demo Cycle #{}", demo_cycle);
+        //println!("🔄 Demo Cycle #{}", demo_cycle);
+
+        // Process any focus events received from the channel
+        while let Ok(focus_event) = focus_rx.try_recv() {
+            println!(
+                "🔍 [DEBUG] DEMO CALLBACK CALLED for event type: {}",
+                focus_event.event_type
+            );
+
+            let event_name = if focus_event.event_type == 0 {
+                "🟢 FOCUSED"
+            } else {
+                "🔴 DEFOCUSED"
+            };
+
+            println!(
+                "{} - Window: {} (PID: {}) at timestamp: {}",
+                event_name, focus_event.hwnd, focus_event.process_id, focus_event.timestamp
+            );
+
+            println!("   ─────────────────────────────");
+            println!("   🗺️  Printing all grids for debug:");
+            client.print_all_grids();
+        }
 
         // Periodic actions to demonstrate functionality
-        match demo_cycle % 6 {
-            1 => {
-                println!("📤 Requesting fresh window list from server...");
-                client.request_window_list()?;
-                thread::sleep(Duration::from_millis(300));
-                // client.display_window_list();
-            }
-            2 => {
-                println!("📊 Displaying current grid state...");
-                client.display_current_grid();
-            }
-            3 => {
-                println!("🔄 Requesting grid state from server...");
-                // After requesting grid state
-                let req_result = client.request_grid_state();
-                println!("[DEBUG] request_grid_state() result: {:?}", req_result);
-                thread::sleep(Duration::from_millis(300));
-                let grid_state_result = client.get_current_grid();
-                match grid_state_result {
-                    Ok(grid) => {
-                        println!("[DEBUG] Grid state received: {:?}", grid);
-                    }
-                    Err(e) => println!("[DEBUG] Failed to get grid state: {}", e),
-                }
-                client.display_current_grid();
-            }
-            4 => {
-                println!("� Refreshing all data from server...");
-                client.request_window_list()?;
-                client.request_grid_state()?;
-                thread::sleep(Duration::from_millis(500));
-            }
-            5 => {
-                // println!("� Current window summary:");
-                // client.display_window_list();
-            }
-            _ => {
-                println!("🔍 Monitoring for real-time window changes...");
-                // Avoid mutable borrow of client in closure
-                demonstrate_auto_assignment(&mut client)?;
-            }
-        }
+        // println!("🔄 Demo Cycle #{}", demo_cycle);
 
         // Wait between demo actions - this gives time for real-time updates to show
-        thread::sleep(Duration::from_secs(2));
+        thread::sleep(Duration::from_millis(400));
 
         // Occasional longer pause to let user observe
-        if demo_cycle % 10 == 0 {
-            println!("\n⏸️  Pausing to observe real-time updates...");
-            println!("   (This is a good time to move windows around!)");
-            thread::sleep(Duration::from_secs(5));
-        }
+        // if demo_cycle % 10 == 0 {
+        //     println!("\n⏸️  Pausing to observe real-time updates...");
+        //     println!("   (This is a good time to move windows around!)");
+        //     println!("   🎨 Watch for the \x1b[31mred highlighting\x1b[0m on the topmost window!");
+        //     thread::sleep(Duration::from_secs(5));
+        // }
     }
 }
 
-fn demonstrate_auto_assignment(client: &mut GridClient) -> Result<(), Box<dyn std::error::Error>> {
-    // Get current window list to demonstrate assignment
-    client.request_window_list()?;
-    thread::sleep(Duration::from_millis(200));
-
-    // Try to automatically assign a window to demonstrate grid assignment
-    // This is just for demo purposes - in a real application, you'd assign specific windows
-    println!("🎯 Demonstrating automatic window assignment...");
-
-    // For demo purposes, we'll just mention what could be done
-    // In a real scenario, you'd have specific HWNDs to work with
-    println!("   (In a real scenario, windows would be assigned to grid cells here)");
-    println!("   Example: client.assign_window_to_virtual_cell(hwnd, 2, 3)");
-    println!("   � The server will process assignments and update all connected clients!");
-
-    Ok(())
-}

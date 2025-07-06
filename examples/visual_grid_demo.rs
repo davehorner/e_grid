@@ -1042,7 +1042,7 @@ impl VisualGridDemo {
 
         // Show final 8x8 grid for 2 seconds
         println!("\n✅ Phase 3: Final 8x8 Grid");
-        let phase3_end = Instant::now() + Duration::from_secs(2);
+        let phase3_end = Instant::now() + Duration::from_secs(1);
 
         while Instant::now() < phase3_end {
             self.render_frame(frame_count)?;

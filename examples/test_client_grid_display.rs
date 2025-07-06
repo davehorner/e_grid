@@ -1,6 +1,4 @@
 use e_grid::GridClient;
-use std::thread;
-use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🧪 Testing client grid display...");
@@ -17,23 +15,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Start monitoring
-    println!("🔍 Starting background monitoring...");
-    client.start_background_monitoring()?;
+    // Start services (automatically starts monitoring and populates monitor data)
+    println!("� Starting services...");
+    client.start_services()?;
 
-    // Wait a moment for initial data
-    thread::sleep(Duration::from_secs(2));
-
-    // Display current grid state
+    // Display current grid state (monitor data is now available)
     println!("\n🎯 === CLIENT GRID DISPLAY TEST ===");
-    client.display_current_grid();
-
-    // Wait a bit more to see real-time updates
-    println!("\n⏱️  Waiting for real-time updates...");
-    thread::sleep(Duration::from_secs(3));
-
-    // Display again to see any changes
-    println!("\n🔄 === UPDATED CLIENT GRID DISPLAY ===");
     client.display_current_grid();
 
     println!("\n✅ Client test completed successfully");

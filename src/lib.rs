@@ -34,7 +34,7 @@ use crate::grid::GridConfig;
 pub use crate::grid_client_config::GridClientConfig;
 pub use crate::performance_monitor::{EventType, OperationTimer, PerformanceMonitor};
 pub use crate::window::WindowInfo;
-use crate::window_tracker::WindowTracker;
+pub use crate::window_tracker::WindowTracker;
 pub use grid::animation::EasingType;
 
 // Import the heartbeat service module
@@ -43,11 +43,11 @@ pub use heartbeat::HeartbeatService;
 
 // Import window events module with unified hook management
 pub mod window_events;
-pub use window_events::{cleanup_hooks, setup_window_events, WindowEventConfig};
+pub use window_events::{setup_window_events, WindowEventConfig};
 
 // Coverage threshold: percentage of cell area that must be covered by window
 // to consider the window as occupying that cell (0.0 to 1.0)
-pub const COVERAGE_THRESHOLD: f32 = 0.01; // 30% coverage required
+pub const COVERAGE_THRESHOLD: f32 = 0.30; // 30% coverage required
 pub const MAX_WINDOW_GRID_CELLS: usize = 64;
 // Animation and Tweening System
 // #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -388,11 +388,11 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
         // println!("Checking window #{}: {}", counter,
         //     if title.is_empty() { "<No Title>" } else { &title });
         // println!("  -> Adding manageable window: {}", title);
-        if tracker.add_window(hwnd as u64) {
-            // println!("  -> Added successfully");
-        } else {
-            // println!("  -> Failed to add window");
-        }
+        tracker.add_window(hwnd as u64);
+        //     // println!("  -> Added successfully");
+        // } else {
+        //     // println!("  -> Failed to add window");
+        // }
     }
 
     1 // Continue enumeration
@@ -566,10 +566,10 @@ impl WindowEventSystem {
             
             // Check blacklist first, before any processing
             if self.blacklisted_hwnds.contains_key(&hwnd) {
-                println!(
-                    "[WindowEventSystem] Skipping blacklisted HWND={:?} for event {:?}",
-                    hwnd, event_type
-                );
+                // println!(
+                //     "[WindowEventSystem] Skipping blacklisted HWND={:?} for event {:?}",
+                //     hwnd, event_type
+                // );
                 continue;
             }
             
@@ -693,6 +693,16 @@ impl WindowEventSystem {
                             }
                         }
                         if should_call {
+                            // Check if this is the focused window
+                            let is_focused_window = unsafe {
+                                let fg_hwnd = winapi::um::winuser::GetForegroundWindow();
+                                !fg_hwnd.is_null() && fg_hwnd == hwnd
+                            };
+                            
+                            if is_focused_window {
+                                println!("🔥 RESIZE STOP for focused window 0x{:X}", hwnd as u64);
+                            }
+                            
                             for cb in self.move_resize_stop_callbacks.iter() {
                                 cb.value()(hwnd, &*window_info);
                             }

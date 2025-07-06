@@ -19,7 +19,7 @@ fn main() {
     tracker.scan_existing_windows();
 
     // Display the grid
-    tracker.print_grid();
+    tracker.print_all_grids();
 
     println!("Press Enter to exit...");
     let mut input = String::new();

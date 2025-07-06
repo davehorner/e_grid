@@ -73,12 +73,16 @@ impl GridIpcServer {
     /// Create a new IPC server instance
     pub fn new(
         tracker: Arc<Mutex<WindowTracker>>,
-        windows: Arc<DashMap<u64, crate::WindowInfo>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Get the config from the tracker once during initialization
         let config = {
             let tracker_guard = tracker.lock().unwrap();
             tracker_guard.config.clone()
+        };
+
+        let windows = {
+            let tracker_guard = tracker.lock().unwrap();
+            Arc::new(tracker_guard.windows.clone())
         };
 
         Ok(Self {
@@ -309,15 +313,18 @@ impl GridIpcServer {
 
         // Publish initial monitor list for clients
         let initial_monitor_list = self.enumerate_monitors();
+        println!("🔍 [DEBUG] Enumerated {} monitors for initial publish", initial_monitor_list.monitor_count);
         if let Some(ref mut publisher) = self.monitor_list_publisher {
             match publisher.send_copy(initial_monitor_list) {
                 Ok(_) => {
-                    info!("📡 [STARTUP] Published initial monitor list with {} monitors", initial_monitor_list.monitor_count);
+                    println!("📡 [STARTUP] Published initial monitor list with {} monitors", initial_monitor_list.monitor_count);
                 }
                 Err(e) => {
-                    warn!("❌ Failed to publish initial monitor list: {}", e);
+                    println!("❌ Failed to publish initial monitor list: {}", e);
                 }
             }
+        } else {
+            println!("❌ Monitor list publisher is None!");
         }
 
         self.is_running = true;
@@ -464,18 +471,21 @@ impl GridIpcServer {
                     }))
                 } else {
                     // GetMonitorList: enumerate real monitors and publish them
+                    println!("🔍 [COMMAND] Received GetMonitorList command");
                     let monitor_list = self.enumerate_monitors();
                     
                     // Publish the monitor list data
                     if let Some(ref mut publisher) = self.monitor_list_publisher {
                         match publisher.send_copy(monitor_list) {
                             Ok(_) => {
-                                debug!("📡 [MONITOR LIST] Published monitor list with {} monitors", monitor_list.monitor_count);
+                                println!("📡 [MONITOR LIST] Published monitor list with {} monitors", monitor_list.monitor_count);
                             }
                             Err(e) => {
-                                warn!("❌ Failed to publish monitor list: {}", e);
+                                println!("❌ Failed to publish monitor list: {}", e);
                             }
                         }
+                    } else {
+                        println!("❌ Monitor list publisher is None!");
                     }
                     
                     Ok(Box::new(IpcResponse {
@@ -1676,10 +1686,14 @@ impl GridIpcServer {
         struct MonitorEnumContext {
             monitors: Vec<MonitorGridIPC>,
             next_id: u32,
+            grid_rows: usize,
+            grid_cols: usize,
         }
         let mut context = MonitorEnumContext {
             monitors: Vec::new(),
             next_id: 0,
+            grid_rows: self.config.rows,
+            grid_cols: self.config.cols,
         };
 
         unsafe extern "system" fn monitor_enum_proc(
@@ -1707,8 +1721,8 @@ impl GridIpcServer {
                     height,
                     x: rect.left,
                     y: rect.top,
-                    rows: 1, // or your default
-                    cols: 1, // or your default
+                    rows: context.grid_rows as u32,
+                    cols: context.grid_cols as u32,
                     name: {
                         let mut arr = [0u8; 64];
                         let bytes = name.as_bytes();
@@ -1732,6 +1746,57 @@ impl GridIpcServer {
                 &mut context as *mut _ as isize,
             );
         }
+
+        // Add virtual screen information as a special monitor entry
+        let virtual_rect = unsafe {
+            winapi::shared::windef::RECT {
+                left: winapi::um::winuser::GetSystemMetrics(winapi::um::winuser::SM_XVIRTUALSCREEN),
+                top: winapi::um::winuser::GetSystemMetrics(winapi::um::winuser::SM_YVIRTUALSCREEN),
+                right: winapi::um::winuser::GetSystemMetrics(winapi::um::winuser::SM_XVIRTUALSCREEN) 
+                    + winapi::um::winuser::GetSystemMetrics(winapi::um::winuser::SM_CXVIRTUALSCREEN),
+                bottom: winapi::um::winuser::GetSystemMetrics(winapi::um::winuser::SM_YVIRTUALSCREEN) 
+                    + winapi::um::winuser::GetSystemMetrics(winapi::um::winuser::SM_CYVIRTUALSCREEN),
+            }
+        };
+
+        // Add virtual desktop as a monitor entry (with special ID)
+        // Populate the virtual desktop grid with actual grid data from the tracker
+        let virtual_grid_data = if let Ok(tracker) = self.tracker.lock() {
+            let mut grid_data = [[0u64; 32]; 32];
+            for (row_idx, row) in tracker.grid.iter().enumerate().take(context.grid_rows) {
+                for (col_idx, cell) in row.iter().enumerate().take(context.grid_cols) {
+                    grid_data[row_idx][col_idx] = match cell {
+                        crate::CellState::Occupied(hwnd) => *hwnd,
+                        crate::CellState::Empty => 0u64,
+                        crate::CellState::OffScreen => u64::MAX, // Special value for offscreen areas
+                    };
+                }
+            }
+            grid_data
+        } else {
+            [[0u64; 32]; 32] // Fallback to empty grid if tracker is locked
+        };
+
+        context.monitors.push(MonitorGridIPC {
+            monitor_id: 999, // Special ID for virtual desktop
+            grid_type: GridType::Virtual,
+            width: virtual_rect.right - virtual_rect.left,
+            height: virtual_rect.bottom - virtual_rect.top,
+            x: virtual_rect.left,
+            y: virtual_rect.top,
+            rows: context.grid_rows as u32,
+            cols: context.grid_cols as u32,
+            name: {
+                let name = "VIRTUAL_DESKTOP";
+                let mut arr = [0u8; 64];
+                let bytes = name.as_bytes();
+                let len = bytes.len().min(64);
+                arr[..len].copy_from_slice(&bytes[..len]);
+                arr
+            },
+            name_len: "VIRTUAL_DESKTOP".len() as u32,
+            grid: virtual_grid_data, // Populated virtual desktop grid
+        });
 
         let mut monitors_array: [MonitorGridIPC; 16] = [MonitorGridIPC::default(); 16];
         let count = context.monitors.len().min(16);
@@ -1790,15 +1855,12 @@ pub fn start_server_with_tick<F>(mut tick_callback: F) -> Result<(), Box<dyn std
 where
     F: FnMut(),
 {
+    let tracker = WindowTracker::new();
+    tracker.enumerate_windows();
     // Create the window tracker
-    let tracker = Arc::new(Mutex::new(WindowTracker::new()));
-    // Get the shared lock-free window state
-    let windows = {
-        let tracker_guard = tracker.lock().unwrap();
-        tracker_guard.windows.clone()
-    };
+    let tracker = Arc::new(Mutex::new(tracker));
     // Create and setup the IPC server
-    let mut ipc_server = crate::ipc_server::GridIpcServer::new(tracker.clone(), Arc::new(windows))?;
+    let mut ipc_server = crate::ipc_server::GridIpcServer::new(tracker.clone())?;
     ipc_server.setup_services()?;
     ipc_server.start_background_event_loop()?;
     // Setup WinEvent hooks for real-time monitoring (optional, can ignore errors)
