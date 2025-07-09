@@ -2,7 +2,6 @@
 
 use crate::config::GridConfig;
 use std::collections::HashMap;
-use winapi::shared::windef::HWND;
 
 /// Result type for grid operations
 pub type GridResult<T> = Result<T, GridError>;
@@ -16,7 +15,7 @@ pub enum GridError {
         max_row: usize,
         max_col: usize,
     },
-    WindowNotFound(HWND),
+    WindowNotFound(u64),
     ConfigurationError(String),
     DisplayError(String),
     AnimationError(String),
@@ -67,16 +66,16 @@ pub trait GridTrait {
     fn is_cell_occupied(&self, row: usize, col: usize) -> GridResult<bool>;
 
     /// Get windows in a specific cell (may be multiple for z-order grids)
-    fn get_cell_windows(&self, row: usize, col: usize) -> GridResult<Vec<HWND>>;
+    fn get_cell_windows(&self, row: usize, col: usize) -> GridResult<Vec<u64>>;
 
     /// Assign a window to a specific cell
-    fn assign_window(&mut self, hwnd: HWND, row: usize, col: usize) -> GridResult<()>;
+    fn assign_window(&mut self, hwnd: u64, row: usize, col: usize) -> GridResult<()>;
 
     /// Remove a window from the grid
-    fn remove_window(&mut self, hwnd: HWND) -> GridResult<()>;
+    fn remove_window(&mut self, hwnd: u64) -> GridResult<()>;
 
     /// Get all windows currently tracked by this grid
-    fn get_all_windows(&self) -> Vec<HWND>;
+    fn get_all_windows(&self) -> Vec<u64>;
 
     /// Validate coordinates against grid bounds
     fn validate_coordinates(&self, row: usize, col: usize) -> GridResult<()> {
@@ -98,7 +97,7 @@ pub trait CellDisplay {
     /// Get the display string for this cell
     fn display_cell(&self) -> &str;
 
-    /// Get the HWND if this cell contains a window
+    /// Get the window handle if this cell contains a window
     fn get_hwnd(&self) -> Option<u64>;
 
     /// Get the z-order index if this is a layered cell
@@ -117,12 +116,12 @@ pub trait AnimatableGrid: GridTrait {
     /// Start animating windows to new positions
     fn animate_to_layout(
         &mut self,
-        target_layout: &HashMap<HWND, (usize, usize)>,
+        target_layout: &HashMap<u64, (usize, usize)>,
         duration_ms: u64,
     ) -> GridResult<()>;
 
     /// Update animation frame
-    fn update_animations(&mut self) -> GridResult<Vec<HWND>>; // Returns completed animations
+    fn update_animations(&mut self) -> GridResult<Vec<u64>>; // Returns completed animations
 
     /// Check if any animations are active
     fn has_active_animations(&self) -> bool;
@@ -137,19 +136,19 @@ pub trait ZOrderGrid: GridTrait {
     fn layer_count(&self) -> usize;
 
     /// Get windows at a specific layer
-    fn get_layer_windows(&self, layer: usize) -> GridResult<Vec<HWND>>;
+    fn get_layer_windows(&self, layer: usize) -> GridResult<Vec<u64>>;
 
     /// Get the z-order of a window
-    fn get_window_z_order(&self, hwnd: HWND) -> GridResult<usize>;
+    fn get_window_z_order(&self, hwnd: u64) -> GridResult<usize>;
 
     /// Get the visibility map for all cells (which parts of windows are visible)
-    fn get_visibility_map(&self) -> HashMap<(usize, usize), Vec<(HWND, bool)>>; // (row, col) -> [(hwnd, is_visible)]
+    fn get_visibility_map(&self) -> HashMap<(usize, usize), Vec<(u64, bool)>>; // (row, col) -> [(hwnd, is_visible)]
 
     /// Bring window to front
-    fn bring_to_front(&mut self, hwnd: HWND) -> GridResult<()>;
+    fn bring_to_front(&mut self, hwnd: u64) -> GridResult<()>;
 
     /// Send window to back
-    fn send_to_back(&mut self, hwnd: HWND) -> GridResult<()>;
+    fn send_to_back(&mut self, hwnd: u64) -> GridResult<()>;
 }
 
 /// Trait for grids that support layout saving/loading

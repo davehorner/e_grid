@@ -4,13 +4,16 @@
 use crate::config::GridConfig;
 use crate::display::format_hwnd_display;
 use crate::grid::traits::{AnimatableGrid, CellDisplay, GridError, GridResult, GridTrait};
+use crate::window::info::RectWrapper;
 use crate::window::{WindowAnimation, WindowInfo};
+use iceoryx2::prelude::ZeroCopySend;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use winapi::shared::windef::{HWND, RECT};
+use winapi::shared::windef::RECT;
 use winapi::um::winuser::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Copy)]
+#[repr(C)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Copy, ZeroCopySend)]
 pub enum EasingType {
     Linear,
     EaseIn,
@@ -24,9 +27,9 @@ pub enum EasingType {
 #[derive(Debug, Clone)]
 pub enum AnimationCellState {
     Empty,
-    Occupied(HWND),
+    Occupied(u64),
     Animating {
-        hwnd: HWND,
+        hwnd: u64,
         target_cell: (usize, usize),
         progress: f32,
     },
@@ -36,8 +39,8 @@ pub enum AnimationCellState {
 pub struct AnimationGrid {
     config: GridConfig,
     grid: Vec<Vec<AnimationCellState>>,
-    windows: HashMap<HWND, WindowInfo>,
-    active_animations: HashMap<HWND, WindowAnimation>,
+    windows: HashMap<u64, WindowInfo>,
+    active_animations: HashMap<u64, WindowAnimation>,
     monitor_bounds: (i32, i32, i32, i32), // (left, top, right, bottom)
     animation_fps: u64,                   // Target FPS for animations
 }
@@ -219,7 +222,7 @@ impl AnimationGrid {
     /// Start a batch animation for multiple windows
     fn start_batch_animation(
         &mut self,
-        targets: HashMap<HWND, (usize, usize, RECT)>,
+        targets: HashMap<u64, (usize, usize, RECT)>,
         duration_ms: u64,
         easing: EasingType,
     ) -> GridResult<()> {
@@ -227,8 +230,8 @@ impl AnimationGrid {
             if let Some(window_info) = self.windows.get(&hwnd) {
                 let animation = WindowAnimation::new(
                     hwnd,
-                    window_info.rect,
-                    target_rect,
+                    window_info.window_rect,
+                    RectWrapper::from_rect(target_rect),
                     Duration::from_millis(duration_ms),
                     easing.clone(),
                 );
@@ -255,7 +258,7 @@ impl AnimationGrid {
     }
 
     /// Find the current grid position of a window
-    fn find_window_position(&self, hwnd: HWND) -> Option<(usize, usize)> {
+    fn find_window_position(&self, hwnd: u64) -> Option<(usize, usize)> {
         for (row, grid_row) in self.grid.iter().enumerate() {
             for (col, cell) in grid_row.iter().enumerate() {
                 match cell {
@@ -344,7 +347,7 @@ impl AnimationGrid {
     }
 
     /// Add a window to the grid
-    pub fn add_window(&mut self, hwnd: HWND, window_info: WindowInfo) -> GridResult<()> {
+    pub fn add_window(&mut self, hwnd: u64, window_info: WindowInfo) -> GridResult<()> {
         self.windows.insert(hwnd, window_info);
 
         // Find an empty cell to place the window
@@ -435,7 +438,7 @@ impl GridTrait for AnimationGrid {
         Ok(!matches!(self.grid[row][col], AnimationCellState::Empty))
     }
 
-    fn get_cell_windows(&self, row: usize, col: usize) -> GridResult<Vec<HWND>> {
+    fn get_cell_windows(&self, row: usize, col: usize) -> GridResult<Vec<u64>> {
         self.validate_coordinates(row, col)?;
 
         match &self.grid[row][col] {
@@ -445,7 +448,7 @@ impl GridTrait for AnimationGrid {
         }
     }
 
-    fn assign_window(&mut self, hwnd: HWND, row: usize, col: usize) -> GridResult<()> {
+    fn assign_window(&mut self, hwnd: u64, row: usize, col: usize) -> GridResult<()> {
         self.validate_coordinates(row, col)?;
 
         // Clear the window from its current position
@@ -457,7 +460,7 @@ impl GridTrait for AnimationGrid {
         Ok(())
     }
 
-    fn remove_window(&mut self, hwnd: HWND) -> GridResult<()> {
+    fn remove_window(&mut self, hwnd: u64) -> GridResult<()> {
         self.windows.remove(&hwnd);
         self.active_animations.remove(&hwnd);
 
@@ -481,7 +484,7 @@ impl GridTrait for AnimationGrid {
         Ok(())
     }
 
-    fn get_all_windows(&self) -> Vec<HWND> {
+    fn get_all_windows(&self) -> Vec<u64> {
         self.windows.keys().copied().collect()
     }
 }
@@ -489,7 +492,7 @@ impl GridTrait for AnimationGrid {
 impl AnimatableGrid for AnimationGrid {
     fn animate_to_layout(
         &mut self,
-        target_layout: &HashMap<HWND, (usize, usize)>,
+        target_layout: &HashMap<u64, (usize, usize)>,
         duration_ms: u64,
     ) -> GridResult<()> {
         let mut targets = HashMap::new();
@@ -501,7 +504,7 @@ impl AnimatableGrid for AnimationGrid {
 
         self.start_batch_animation(targets, duration_ms, EasingType::EaseInOut)
     }
-    fn update_animations(&mut self) -> GridResult<Vec<HWND>> {
+    fn update_animations(&mut self) -> GridResult<Vec<u64>> {
         let mut completed_animations = Vec::new();
         let mut window_updates = Vec::new();
         let mut grid_updates = Vec::new();
@@ -526,7 +529,7 @@ impl AnimatableGrid for AnimationGrid {
             // Move the window
             unsafe {
                 SetWindowPos(
-                    hwnd,
+                    hwnd as winapi::shared::windef::HWND,
                     std::ptr::null_mut(),
                     current_rect.left,
                     current_rect.top,

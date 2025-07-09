@@ -5,19 +5,25 @@ use winapi::shared::windef::HWND;
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::winuser::{
     SetWinEventHook, UnhookWinEvent, CHILDID_SELF, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
-    EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
-    EVENT_SYSTEM_MINIMIZESTART, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT,
+    EVENT_OBJECT_HIDE, EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, EVENT_SYSTEM_FOREGROUND,
+    EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT,
 };
+
+// Add the missing type aliases
+type HWINEVENTHOOK = winapi::shared::windef::HWINEVENTHOOK;
+type DWORD = winapi::shared::minwindef::DWORD;
+type LONG = winapi::shared::ntdef::LONG;
 
 /// Configuration for window events with optional callbacks
 pub struct WindowEventConfig {
     pub tracker: Arc<Mutex<WindowTracker>>,
-    pub focus_callback: Option<Box<dyn Fn(HWND, bool) + Send + Sync>>, // hwnd, is_focused
+    pub focus_callback: Option<Box<dyn Fn(u64, bool) + Send + Sync>>, // hwnd, is_focused
     pub heartbeat_reset: Option<Box<dyn Fn() + Send + Sync>>,
     pub event_callback: Option<Box<dyn Fn(crate::ipc_protocol::GridEvent) + Send + Sync>>, // NEW: event publishing callback
     pub debug_mode: bool,
     // --- UPDATED: For move/resize tracking ---
-    pub move_resize_event_queue: Option<Arc<crossbeam_queue::SegQueue<(isize, crate::MoveResizeEventType)>>>,
+    pub move_resize_event_queue:
+        Option<Arc<crossbeam_queue::SegQueue<(isize, crate::MoveResizeEventType)>>>,
     pub move_resize_states: Option<Arc<dashmap::DashMap<isize, crate::MoveResizeState>>>,
 }
 
@@ -36,7 +42,7 @@ impl WindowEventConfig {
 
     pub fn with_focus_callback<F>(mut self, callback: F) -> Self
     where
-        F: Fn(HWND, bool) + Send + Sync + 'static,
+        F: Fn(u64, bool) + Send + Sync + 'static,
     {
         self.focus_callback = Some(Box::new(callback));
         self
@@ -68,39 +74,55 @@ impl WindowEventConfig {
 pub struct DebugEventCallback;
 
 impl WindowEventCallback for DebugEventCallback {
-    fn on_window_created(&self, hwnd: HWND, window_info: &WindowInfo) {
+    fn on_window_created(&self, hwnd: u64, window_info: &WindowInfo) {
         // Only show manageable windows in debug output
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: CREATED (Manageable)");
+            let title_str = {
+                // Convert &[u16; 256] to String, trimming at null terminator
+                let nul_pos = window_info
+                    .title
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(window_info.title.len());
+                String::from_utf16_lossy(&window_info.title[..nul_pos])
+            };
             println!(
                 "   Window: {}",
-                if window_info.title.is_empty() {
+                if title_str.is_empty() {
                     "<No Title>"
                 } else {
-                    &window_info.title
+                    &title_str
                 }
             );
             println!("   HWND: {:?}", hwnd);
-            println!();
         }
     }
 
-    fn on_window_destroyed(&self, hwnd: HWND) {
+    fn on_window_destroyed(&self, hwnd: u64) {
         println!("🔔 WINDOW EVENT: DESTROYED");
         println!("   HWND: {:?}", hwnd);
         println!();
     }
 
-    fn on_window_moved(&self, hwnd: HWND, window_info: &WindowInfo) {
+    fn on_window_moved(&self, hwnd: u64, window_info: &WindowInfo) {
         // Only show manageable windows in debug output
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: MOVED/RESIZED (Manageable)");
+            let title_str = {
+                let nul_pos = window_info
+                    .title
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(window_info.title.len());
+                String::from_utf16_lossy(&window_info.title[..nul_pos])
+            };
             println!(
                 "   Window: {}",
-                if window_info.title.is_empty() {
+                if title_str.is_empty() {
                     "<No Title>"
                 } else {
-                    &window_info.title
+                    &title_str
                 }
             );
             println!("   HWND: {:?}", hwnd);
@@ -108,16 +130,25 @@ impl WindowEventCallback for DebugEventCallback {
         }
     }
 
-    fn on_window_activated(&self, hwnd: HWND, window_info: &WindowInfo) {
+    fn on_window_activated(&self, hwnd: u64, window_info: &WindowInfo) {
         // Only show manageable windows in debug output
         if WindowTracker::is_manageable_window(hwnd) {
             println!("🔔 WINDOW EVENT: ACTIVATED (Manageable)");
+            let title_str = {
+                // Convert &[u16; 256] to String, trimming at null terminator
+                let nul_pos = window_info
+                    .title
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(window_info.title.len());
+                String::from_utf16_lossy(&window_info.title[..nul_pos])
+            };
             println!(
                 "   Window: {}",
-                if window_info.title.is_empty() {
+                if title_str.is_empty() {
                     "<No Title>"
                 } else {
-                    &window_info.title
+                    &title_str
                 }
             );
             println!("   HWND: {:?}", hwnd);
@@ -125,20 +156,29 @@ impl WindowEventCallback for DebugEventCallback {
         }
     }
 
-    fn on_window_minimized(&self, hwnd: HWND) {
+    fn on_window_minimized(&self, hwnd: u64) {
         println!("🔔 WINDOW EVENT: MINIMIZED");
         println!("   HWND: {:?}", hwnd);
         println!();
     }
 
-    fn on_window_restored(&self, hwnd: HWND, window_info: &WindowInfo) {
+    fn on_window_restored(&self, hwnd: u64, window_info: &WindowInfo) {
         println!("🔔 WINDOW EVENT: RESTORED");
+        let title_str = {
+            // Convert &[u16; 256] to String, trimming at null terminator
+            let nul_pos = window_info
+                .title
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(window_info.title.len());
+            String::from_utf16_lossy(&window_info.title[..nul_pos])
+        };
         println!(
             "   Window: {}",
-            if window_info.title.is_empty() {
+            if title_str.is_empty() {
                 "<No Title>"
             } else {
-                &window_info.title
+                &title_str
             }
         );
         println!("   HWND: {:?}", hwnd);
@@ -150,7 +190,7 @@ impl WindowEventCallback for DebugEventCallback {
 // These are accessed only from the main thread and properly synchronized
 static mut WINDOW_EVENT_CONFIG: Option<WindowEventConfig> = None;
 static mut EVENT_HOOKS: Vec<winapi::shared::windef::HWINEVENTHOOK> = Vec::new();
-static mut LAST_FOCUSED_WINDOW: Option<HWND> = None;
+static mut LAST_FOCUSED_WINDOW: Option<u64> = None;
 
 // WinEvent hook procedure - unified event handling with optional callbacks
 pub unsafe extern "system" fn win_event_proc(
@@ -172,25 +212,6 @@ pub unsafe extern "system" fn win_event_proc(
         Some(config) => config,
         None => return, // No configuration available
     };
-    // if config.debug_mode {
-    //     let event_name = match event {
-    //         3 => "EVENT_SYSTEM_FOREGROUND (FOCUS)",
-    //         32768 => {
-    //             //"EVENT_OBJECT_SHOW"
-    //             return; // Skip SHOW events for now
-    //         }
-    //         32769 => {
-    //             //"EVENT_OBJECT_HIDE"
-    //             return; // Skip events for now
-    //         }
-    //         32779 => "EVENT_OBJECT_LOCATIONCHANGE (MOVE/RESIZE)",
-    //         _ => "OTHER",
-    //     };
-    //     println!(
-    //         "🔍 WinEvent: event={} ({}), hwnd={:?}",
-    //         event, event_name, hwnd
-    //     );
-    // }
 
     // Always try to reset heartbeat if callback is available
     if let Some(ref heartbeat_reset) = config.heartbeat_reset {
@@ -199,119 +220,241 @@ pub unsafe extern "system" fn win_event_proc(
 
     // Handle focus events specially
     if event == EVENT_SYSTEM_FOREGROUND {
+        let hwnd_u64 = hwnd as u64;
+        if !WindowTracker::is_manageable_window(hwnd_u64) {
+            return;
+        }
         if let Some(ref focus_callback) = config.focus_callback {
             // Send DEFOCUSED for previous window if it exists
             if let Some(prev_hwnd) = LAST_FOCUSED_WINDOW {
-                if prev_hwnd != hwnd && !prev_hwnd.is_null() {
+                if prev_hwnd != hwnd as u64 {
                     if config.debug_mode {
-                        println!("🎯 Focus: DEFOCUSED HWND {:?}", prev_hwnd);
+                        let class_name = WindowTracker::get_window_class(prev_hwnd);
+                        let title = WindowTracker::get_window_title(prev_hwnd);
+                        println!(
+                            "🎯 Focus: DEFOCUSED HWND {:?} {class_name} {title}",
+                            prev_hwnd
+                        );
                     }
                     focus_callback(prev_hwnd, false); // false = DEFOCUSED
                 }
             }
 
             // Update last focused window and send FOCUSED
-            LAST_FOCUSED_WINDOW = Some(hwnd);
+            LAST_FOCUSED_WINDOW = Some(hwnd as u64);
             if config.debug_mode {
-                println!("🎯 Focus: FOCUSED HWND {:?}", hwnd);
+                let class_name = WindowTracker::get_window_class(hwnd as u64);
+                let title = WindowTracker::get_window_title(hwnd as u64);
+                println!("🎯 Focus: FOCUSED HWND {:?} {class_name} {title}", hwnd);
             }
-            focus_callback(hwnd, true); // true = FOCUSED
+            focus_callback(hwnd as u64, true); // true = FOCUSED
         }
     }
 
-    // Update window tracker
-    if let Ok(mut tracker) = config.tracker.try_lock() {
-        // if config.debug_mode {
-        //     println!("🔍 Processing event {} for window {:?}", event, hwnd);
-        // }
+    // NEW: Handle create/destroy events with callbacks
+    match event {
+        EVENT_OBJECT_CREATE => {
+            let hwnd_u64 = hwnd as u64;
+            if WindowTracker::is_manageable_window(hwnd_u64) {
+                println!("🆕 [WINEVENT] Window CREATED: HWND 0x{:X}", hwnd_u64);
 
+                if let Some(ref callback) = config.event_callback {
+                    let title = WindowTracker::get_window_title(hwnd_u64);
+                    let event = crate::ipc_protocol::GridEvent::WindowCreated {
+                        hwnd: hwnd_u64,
+                        title,
+                        row: 0,
+                        col: 0,
+                        grid_top_left_row: 0,
+                        grid_top_left_col: 0,
+                        grid_bottom_right_row: 0,
+                        grid_bottom_right_col: 0,
+                        real_x: 0,
+                        real_y: 0,
+                        real_width: 0,
+                        real_height: 0,
+                        monitor_id: 0,
+                    };
+                    callback(event);
+                }
+            }
+        }
+        EVENT_OBJECT_DESTROY => {
+            let hwnd_u64 = hwnd as u64;
+
+            // Check if the window is currently tracked as manageable before proceeding
+            if let Ok(tracker) = config.tracker.lock() {
+                if !tracker.windows.contains_key(&hwnd_u64) {
+                    // Not a managed/tracked window, skip further processing
+                    return;
+                }
+            }
+            // Always send destroy events - let the main.rs event handler determine
+            // if this was a manageable window using the tracking
+            let class_name = WindowTracker::get_window_class_name(hwnd_u64);
+            let title = WindowTracker::get_window_title(hwnd_u64);
+
+            println!(
+                "💀 [WINEVENT] Window DESTROYED: HWND 0x{:X} {class_name} {title}",
+                hwnd_u64
+            );
+
+            if let Some(ref callback) = config.event_callback {
+                let title = if title.is_empty() {
+                    "(destroyed)".to_string()
+                } else {
+                    title
+                };
+                let event = crate::ipc_protocol::GridEvent::WindowDestroyed {
+                    hwnd: hwnd_u64,
+                    title,
+                };
+                callback(event);
+            }
+        }
+        EVENT_OBJECT_SHOW => {
+            let hwnd_u64 = hwnd as u64;
+            if WindowTracker::is_manageable_window(hwnd_u64) {
+                let class = WindowTracker::get_window_class(hwnd_u64);
+                if class == "Windows.UI.Composition.DesktopWindowContentBridge" {
+                    // Skip hidden windows that are part of the Windows UI framework
+                    return;
+                }
+                println!("👁️ [WINEVENT] Window SHOWN: HWND 0x{:X}", hwnd_u64);
+
+                if let Some(ref callback) = config.event_callback {
+                    let title = WindowTracker::get_window_title(hwnd_u64);
+                    let event = crate::ipc_protocol::GridEvent::WindowCreated {
+                        hwnd: hwnd_u64,
+                        title,
+                        row: 0,
+                        col: 0,
+                        grid_top_left_row: 0,
+                        grid_top_left_col: 0,
+                        grid_bottom_right_row: 0,
+                        grid_bottom_right_col: 0,
+                        real_x: 0,
+                        real_y: 0,
+                        real_width: 0,
+                        real_height: 0,
+                        monitor_id: 0,
+                    };
+                    callback(event);
+                }
+            }
+        }
+        EVENT_OBJECT_HIDE => {
+            let hwnd_u64 = hwnd as u64;
+            if let Some(ref callback) = config.event_callback {
+                if WindowTracker::is_manageable_window(hwnd_u64) {
+                    println!("🙈 [WINEVENT] Window HIDDEN: HWND 0x{:X}", hwnd_u64);
+                    let title = WindowTracker::get_window_title(hwnd_u64);
+                    let event = crate::ipc_protocol::GridEvent::WindowDestroyed {
+                        hwnd: hwnd_u64,
+                        title,
+                    };
+                    callback(event);
+                }
+            }
+        }
+        _ => {
+            // Handle other events (LOCATIONCHANGE, etc.) - existing code
+        }
+    }
+
+    // Update window tracker - existing code for LOCATIONCHANGE, etc.
+    if let Ok(mut tracker) = config.tracker.try_lock() {
         match event {
             EVENT_OBJECT_CREATE => {
-                if WindowTracker::is_manageable_window(hwnd) {
-                    tracker.add_window(hwnd);
+                if WindowTracker::is_manageable_window(hwnd as u64) {
+                    tracker.add_window(hwnd as u64);
                 }
             }
             EVENT_OBJECT_DESTROY => {
-                tracker.remove_window(hwnd);
+                tracker.remove_window(hwnd as u64);
             }
             EVENT_OBJECT_LOCATIONCHANGE => {
-                println!("🔍 LOCATIONCHANGE event for HWND {:?}", hwnd);
-                if WindowTracker::is_manageable_window(hwnd) {
-                    println!("   ...is manageable!");
-                    // Ensure window is tracked before updating
-                    if !tracker.windows.contains_key(&hwnd) {
-                        println!("   [DEBUG] Window not in tracker.windows, calling add_window for HWND {:?}", hwnd);
-                        tracker.add_window(hwnd);
-                    }
-                    tracker.update_window(hwnd);
-                    // --- ADDED: Move/Resize tracking ---
-                    if config.move_resize_event_queue.is_none() {
-                        println!("   [DEBUG] move_resize_event_queue is None");
-                    }
-                    if config.move_resize_states.is_none() {
-                        println!("   [DEBUG] move_resize_states is None");
-                    }
-                    if let (Some(event_queue), Some(states)) = (
-                        config.move_resize_event_queue.as_ref(),
-                        config.move_resize_states.as_ref(),
-                    ) {
-                        let hwnd_val = hwnd as isize;
-                        if !tracker.windows.contains_key(&hwnd) {
-                            println!("   [DEBUG] tracker.windows.get(&hwnd) is None for HWND {:?}", hwnd);
-                        }
-                        if let Some(window_info) = tracker.windows.get(&hwnd) {
-                            let new_rect = window_info.rect;
-                            let mut entry = states.entry(hwnd_val).or_insert(crate::MoveResizeState {
-                                last_event: std::time::Instant::now(),
-                                in_progress: false,
-                                last_rect: new_rect,
-                                last_type: None, // Track last event type
-                            });
-                            entry.last_event = std::time::Instant::now();
-                            let prev_rect = entry.last_rect;
-                            // --- DEBUG PRINTS: Show prev_rect and new_rect ---
-                            println!("[MOVE/RESIZE DEBUG] HWND {:?} prev_rect: l={},t={},r={},b={} | new_rect: l={},t={},r={},b={}",
-                                hwnd,
-                                prev_rect.left, prev_rect.top, prev_rect.right, prev_rect.bottom,
-                                new_rect.left, new_rect.top, new_rect.right, new_rect.bottom
-                            );
-                            let moved = prev_rect.left != new_rect.left || prev_rect.top != new_rect.top;
-                            let resized = (prev_rect.right - prev_rect.left != new_rect.right - new_rect.left)
-                                || (prev_rect.bottom - prev_rect.top != new_rect.bottom - new_rect.top);
-                            use crate::MoveResizeEventType::*;
-                            if !entry.in_progress {
-                                // Only emit a start event if not already in progress
-                                if moved && !resized {
-                                    println!("[MOVE/RESIZE] Gesture detected: MoveStart for HWND {:?}", hwnd);
-                                    event_queue.push((hwnd_val, MoveStart));
-                                    entry.in_progress = true;
-                                    entry.last_type = Some(MoveStart);
-                                } else if resized && !moved {
-                                    println!("[MOVE/RESIZE] Gesture detected: ResizeStart for HWND {:?}", hwnd);
-                                    event_queue.push((hwnd_val, ResizeStart));
-                                    entry.in_progress = true;
-                                    entry.last_type = Some(ResizeStart);
-                                } else if moved && resized {
-                                    println!("[MOVE/RESIZE] Gesture detected: BothStart for HWND {:?}", hwnd);
-                                    event_queue.push((hwnd_val, BothStart));
-                                    entry.in_progress = true;
-                                    entry.last_type = Some(BothStart);
+                if WindowTracker::is_manageable_window(hwnd as u64) {
+                    // Quick validation: check if we can get a valid rect before processing
+                    if let Some(rect) = WindowTracker::get_window_rect(hwnd as u64) {
+                        // Ensure rect is reasonable (not zero-sized or negative)
+                        if rect.right > rect.left && rect.bottom > rect.top {
+                            // Ensure window is tracked before updating
+                            if !tracker.windows.contains_key(&(hwnd as u64)) {
+                                tracker.add_window(hwnd as u64);
+                            }
+                            tracker.update_window(hwnd as u64);
+
+                            // Re-enabled: Move/Resize tracking - feed directly into global queue
+                            if let (Some(_event_queue), Some(states)) = (
+                                config.move_resize_event_queue.as_ref(),
+                                config.move_resize_states.as_ref(),
+                            ) {
+                                let hwnd_val = hwnd as isize;
+                                if let Some(window_info) = tracker.windows.get(&(hwnd as u64)) {
+                                    let mut entry =
+                                        states.entry(hwnd_val).or_insert(crate::MoveResizeState {
+                                            last_event: std::time::Instant::now(),
+                                            in_progress: std::sync::atomic::AtomicBool::new(false),
+                                            last_rect: window_info.window_rect.0,
+                                            last_type: None,
+                                        });
+
+                                    let now = std::time::Instant::now();
+                                    let prev_rect = entry.last_rect;
+                                    let current_rect = window_info.window_rect.0;
+
+                                    let moved = prev_rect.left != current_rect.left
+                                        || prev_rect.top != current_rect.top;
+                                    let resized = (prev_rect.right - prev_rect.left
+                                        != current_rect.right - current_rect.left)
+                                        || (prev_rect.bottom - prev_rect.top
+                                            != current_rect.bottom - current_rect.top);
+
+                                    use crate::MoveResizeEventType::*;
+
+                                    if !entry.in_progress.load(std::sync::atomic::Ordering::Relaxed)
+                                    {
+                                        // Start detection - only if not already in progress
+                                        if moved && !resized {
+                                            println!("[MOVE/RESIZE] Gesture detected: MoveStart for HWND {:?}", hwnd);
+                                            crate::GLOBAL_EVENT_QUEUE.push((hwnd_val, MoveStart));
+                                            // DON'T set in_progress here - let WindowEventSystem handle it
+                                            entry.last_type = Some(MoveStart);
+                                        } else if resized && !moved {
+                                            println!("[MOVE/RESIZE] Gesture detected: ResizeStart for HWND {:?}", hwnd);
+                                            crate::GLOBAL_EVENT_QUEUE.push((hwnd_val, ResizeStart));
+                                            // DON'T set in_progress here - let WindowEventSystem handle it
+                                            entry.last_type = Some(ResizeStart);
+                                        } else if moved && resized {
+                                            println!("[MOVE/RESIZE] Gesture detected: BothStart for HWND {:?}", hwnd);
+                                            crate::GLOBAL_EVENT_QUEUE.push((hwnd_val, BothStart));
+                                            // DON'T set in_progress here - let WindowEventSystem handle it
+                                            entry.last_type = Some(BothStart);
+                                        }
+                                    }
+
+                                    // Update tracking state only if rect has changed
+                                    if prev_rect.left != current_rect.left
+                                        || prev_rect.top != current_rect.top
+                                        || prev_rect.right != current_rect.right
+                                        || prev_rect.bottom != current_rect.bottom
+                                    {
+                                        entry.last_event = now;
+                                        entry.last_rect = current_rect;
+                                    }
                                 }
                             }
-                            entry.last_rect = new_rect;
                         }
                     }
-                } else {
-                    println!("   ...NOT manageable!");
                 }
-                // ...existing code...
             }
             EVENT_SYSTEM_MINIMIZESTART => {
-                tracker.remove_window(hwnd);
+                tracker.remove_window(hwnd as u64);
             }
             EVENT_SYSTEM_MINIMIZEEND => {
-                if WindowTracker::is_manageable_window(hwnd) {
-                    tracker.add_window(hwnd);
+                if WindowTracker::is_manageable_window(hwnd as u64) {
+                    tracker.add_window(hwnd as u64);
                 }
             }
             _ => {} // Unhandled event types
@@ -330,10 +473,12 @@ pub fn setup_window_events(config: WindowEventConfig) -> Result<(), String> {
 
         println!("🔧 Setting up unified WinEvent hooks...");
 
-        // Set up hooks for different window events
+        // Set up hooks for different window events - UPDATED to include CREATE/DESTROY
         let events_to_hook = [
             (EVENT_OBJECT_CREATE, "Window Creation"),
             (EVENT_OBJECT_DESTROY, "Window Destruction"),
+            (EVENT_OBJECT_SHOW, "Window Show"),
+            (EVENT_OBJECT_HIDE, "Window Hide"),
             (EVENT_OBJECT_LOCATIONCHANGE, "Window Move/Resize"),
             (EVENT_SYSTEM_FOREGROUND, "Window Activation/Focus"),
             (EVENT_SYSTEM_MINIMIZESTART, "Window Minimize"),
@@ -390,11 +535,12 @@ pub fn setup_window_events(config: WindowEventConfig) -> Result<(), String> {
 
 pub fn cleanup_hooks() {
     unsafe {
+        let len = EVENT_HOOKS.len();
         // Clean up hooks
-        for hook in &EVENT_HOOKS {
-            UnhookWinEvent(*hook);
+        for i in 0..len {
+            UnhookWinEvent(EVENT_HOOKS[i]);
         }
-        EVENT_HOOKS = Vec::new();
+        EVENT_HOOKS.clear();
 
         // Clear state
         WINDOW_EVENT_CONFIG = None;
@@ -474,4 +620,24 @@ where
     }
 
     Ok(())
+}
+
+// Add helper function to check if window is toplevel
+pub unsafe fn is_toplevel_window(hwnd: HWND) -> bool {
+    use winapi::um::winuser::{GetParent, GetWindow, GW_OWNER};
+
+    // Check if window has a parent (not desktop)
+    let parent = GetParent(hwnd);
+    if !parent.is_null() {
+        return false;
+    }
+
+    // Check if window has an owner
+    let owner = GetWindow(hwnd, GW_OWNER);
+    if !owner.is_null() {
+        return false;
+    }
+
+    // Additional check: ensure it's a manageable window
+    WindowTracker::is_manageable_window(hwnd as u64)
 }

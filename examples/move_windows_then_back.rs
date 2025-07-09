@@ -1,4 +1,4 @@
-use e_grid::{EasingType, GridConfig, WindowAnimation, WindowTracker};
+use e_grid::{EasingType, WindowAnimation, WindowTracker};
 use rand::Rng;
 use std::collections::HashMap;
 use std::ptr;
@@ -117,7 +117,7 @@ fn main() {
     // Determine optimal grid size based on number of windows
     let window_count = windows.len().min(24); // Increase limit for better testing
     let (grid_rows, grid_cols) = determine_optimal_grid_size(window_count);
-    let grid_config = GridConfig::new(grid_rows, grid_cols);
+    let grid_config = e_grid::grid::GridConfig::new(grid_rows, grid_cols);
     let mut tracker = WindowTracker::new_with_config(grid_config);
     println!(
         "✅ WindowTracker created with {}x{} dynamic grid",
@@ -164,20 +164,20 @@ fn main() {
     }
 
     let monitor_1_rect = if tracker.monitor_grids.len() > 1 {
-        let (left, top, right, bottom) = tracker.monitor_grids[1].monitor_rect;
+        let rect = &tracker.monitor_grids[1].monitor_rect;
         RECT {
-            left,
-            top,
-            right,
-            bottom,
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
         }
     } else {
-        let (left, top, right, bottom) = tracker.monitor_grids[0].monitor_rect;
+        let rect = &tracker.monitor_grids[0].monitor_rect;
         RECT {
-            left,
-            top,
-            right,
-            bottom,
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
         }
     };
 
@@ -194,46 +194,49 @@ fn main() {
     );
     println!("📐 Grid Layout Preview:");
     // Dynamic grid preview
-    print!("   ┌");
+    let mut line = String::from("   ┌");
     for col in 0..grid_cols {
-        print!("─────");
+        line.push_str("─────");
         if col < grid_cols - 1 {
-            print!("┬");
+            line.push('┬');
         }
     }
-    println!("┐");
+    line.push('┐');
+    println!("{}", line);
 
     for row in 0..grid_rows {
-        print!("   │");
+        let mut line = String::from("   │");
         for col in 0..grid_cols {
             let index = row * grid_cols + col;
             if index < original_positions.len() {
-                print!(" {:2}  │", index + 1);
+                line.push_str(&format!(" {:2}  │", index + 1));
             } else {
-                print!("  -  │");
+                line.push_str("  -  │");
             }
         }
-        println!();
+        println!("{}", line);
         if row < grid_rows - 1 {
-            print!("   ├");
+            let mut line = String::from("   ├");
             for col in 0..grid_cols {
-                print!("─────");
+                line.push_str("─────");
                 if col < grid_cols - 1 {
-                    print!("┼");
+                    line.push('┼');
                 }
             }
-            println!("┤");
+            line.push('┤');
+            println!("{}", line);
         }
     }
 
-    print!("   └");
+    let mut line = String::from("   └");
     for col in 0..grid_cols {
-        print!("─────");
+        line.push_str("─────");
         if col < grid_cols - 1 {
-            print!("┴");
+            line.push('┴');
         }
     }
-    println!("┘");
+    line.push('┘');
+    println!("{}", line);
     println!();
 
     let easing_types = [
@@ -264,10 +267,13 @@ fn main() {
         println!(
             "  📍 Window {}: '{}' -> Grid[{},{}] at [{},{}] ({:?}, {}ms)",
             i + 1,
-            if title.len() > 20 {
-                &title[..20]
-            } else {
-                title
+            {
+                let t = title;
+                if t.chars().count() > 20 {
+                    t.chars().take(20).collect::<String>()
+                } else {
+                    t.clone()
+                }
             },
             row,
             col,
@@ -279,7 +285,7 @@ fn main() {
 
         // Create animation
         let animation = WindowAnimation::new(
-            *hwnd,
+            *hwnd as u64,
             *original_rect,
             grid_rect,
             Duration::from_millis(duration_ms),
@@ -291,7 +297,7 @@ fn main() {
         // Start the animation by moving window to start position and then animate
         tracker
             .start_window_animation(
-                *hwnd,
+                *hwnd as u64,
                 grid_rect,
                 Duration::from_millis(duration_ms),
                 easing_type,
@@ -317,7 +323,7 @@ fn main() {
                 let current_rect = animation.get_current_rect();
                 unsafe {
                     SetWindowPos(
-                        animation.hwnd,
+                        animation.hwnd as HWND,
                         ptr::null_mut(),
                         current_rect.left,
                         current_rect.top,
@@ -360,7 +366,7 @@ fn main() {
         }
 
         let return_animation = WindowAnimation::new(
-            *hwnd,
+            *hwnd as u64,
             current_rect,
             *original_rect,
             Duration::from_millis(duration_ms),

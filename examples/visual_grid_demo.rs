@@ -1,20 +1,24 @@
 // Visual Grid Demo - Shows actual working grid with server/client communication
 // Demonstrates animated transition from 4x4 to 8x8 grid
 
+use e_grid::config::grid_config::GridConfig;
+use e_grid::ipc_manager::GridIpcManager;
+use e_grid::window_tracker::WindowTracker;
 use e_grid::*;
+use log::debug;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use winapi::shared::windef::{HWND, RECT};
+use winapi::shared::windef::RECT; // <-- Add this line to import the ipc module
 
 const CLEAR_SCREEN: &str = "\x1B[2J\x1B[1;1H";
-const GRID_4X4: (usize, usize) = (4, 4);
-const GRID_8X8: (usize, usize) = (8, 8);
+const GRID_4X4: (usize, usize) = (8, 12);
+const GRID_8X8: (usize, usize) = (8, 12);
 
 struct VisualGridDemo {
     tracker: Arc<Mutex<WindowTracker>>,
-    ipc_manager: Option<Arc<Mutex<ipc::GridIpcManager>>>,
+    ipc_manager: Option<Arc<Mutex<GridIpcManager>>>,
     current_config: GridConfig,
     animation_start: Option<Instant>,
     animation_duration: Duration,
@@ -29,34 +33,11 @@ impl VisualGridDemo {
         // Initialize with some example windows
         {
             let mut tracker_lock = tracker.lock().unwrap();
-            tracker_lock.config = config.clone();
+            // Set grid size to 8x8 using the new method
+            tracker_lock.set_grid_size(GRID_8X8.0, GRID_8X8.1);
 
-            // Add some simulated windows to make the demo interesting
-            for i in 0..8 {
-                let hwnd = (1000 + i) as HWND;
-                let title = format!("Window {}", i + 1);
-                let x = (i % 4) * 400 + 100;
-                let y = (i / 4) * 300 + 100;
-                let rect = RECT {
-                    left: x as i32,
-                    top: y as i32,
-                    right: (x + 300) as i32,
-                    bottom: (y + 200) as i32,
-                };
-                let window_info = WindowInfo {
-                    hwnd,
-                    title,
-                    // class_name: "DemoWindow".to_string(),
-                    rect,
-                    // is_minimized: false,
-                    // is_visible: true,
-                    // process_id: 1000 + i as u32,
-                    grid_cells: vec![(i / 4, i % 4)],
-                    monitor_cells: std::collections::HashMap::new(),
-                };
-
-                tracker_lock.windows.insert(hwnd, window_info);
-            }
+            // Discover real windows using the WindowTracker's refresh method
+            tracker_lock.scan_existing_windows();
 
             tracker_lock.update_grid();
         }
@@ -73,11 +54,191 @@ impl VisualGridDemo {
     }
 
     fn setup_ipc(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut ipc_manager = ipc::GridIpcManager::new(self.tracker.clone())?;
-        ipc_manager.setup_services()?;
+        debug!("Setting up IPC services for Visual Grid Demo");
+        println!("\n🔄 Initializing IPC services for Visual Grid Demo...");
+
+        // Start a background server first
+        println!("🚀 Starting IPC server in background thread...");
+        std::thread::spawn(|| {
+            println!("🔧 Server thread: Starting IPC server...");
+            if let Err(e) = e_grid::ipc_server::start_server() {
+                println!("⚠️  Server thread: Failed to start server: {}", e);
+            } else {
+                println!("✅ Server thread: IPC server started successfully");
+            }
+        });
+
+        // Give the server time to start
+        println!("⏳ Waiting for server to initialize...");
+        thread::sleep(Duration::from_millis(3000)); // Increased wait time
+
+        // Try connecting with GridClient first to test basic connectivity
+        println!("🔍 Testing basic IPC connectivity with GridClient...");
+        match e_grid::ipc_client::GridClient::new() {
+            Ok(test_client) => {
+                println!("✅ Successfully connected to server with GridClient");
+
+                // Try to fetch window list using the working client
+                println!("� Testing GetWindowList with GridClient...");
+                // match test_client.fetch_window_and_monitor_lists_streaming() {
+                //     Ok((windows, monitors)) => {
+                //         println!("✅ Successfully received data from server:");
+                //         println!("   - Windows: {}", windows.len());
+                //         println!("   - Monitors: {}", monitors.len());
+
+                //         if !windows.is_empty() {
+                //             println!("   Sample windows:");
+                //             for (i, window) in windows.iter().take(3).enumerate() {
+                //                 println!("     {}. HWND: {}", i + 1, window.hwnd);
+                //             }
+                //         } else {
+                //             println!("   No windows returned by server");
+                //         }
+                //     }
+                //     Err(e) => {
+                //         println!("❌ Failed to fetch data with GridClient: {}", e);
+                //     }
+                // }
+            }
+            Err(e) => {
+                println!("❌ Failed to connect with GridClient: {}", e);
+                println!("   This indicates the server is not responding to connections");
+                return Err(e.into());
+            }
+        }
+
+        // Now try with IPC Manager
+        println!("\n🔧 Now setting up GridIpcManager...");
+        let mut ipc_manager = GridIpcManager::new(self.tracker.clone())?;
+
+        println!("🔧 Setting up IPC services...");
+        ipc_manager.setup_services(
+            true, // events
+            true, // commands
+            true, // responses
+            true, // window_details
+            true, // layout
+            true, // cell_assignments
+            true, // animation
+            true, // animation_status
+            true, // heartbeat
+        )?;
 
         self.ipc_manager = Some(Arc::new(Mutex::new(ipc_manager)));
         println!("✅ IPC services initialized");
+
+        if let Some(ipc_manager_arc) = &self.ipc_manager {
+            let mut ipc_manager = ipc_manager_arc.lock().unwrap();
+            println!("🔄 IPC services ready for communication");
+
+            // Debug: Check if IPC manager components are properly initialized
+            println!("🔍 Debugging IPC Manager state:");
+            // Note: Fields are private, so we can't directly check them
+            // We'll rely on the success/failure of operations to indicate state
+            println!("   - IPC Manager initialized successfully");
+
+            // First, let's try to see if we can get any existing response/data
+            println!("🔍 Checking for existing window list data...");
+            if let Some(existing_window_list) = ipc_manager.get_latest_window_list() {
+                println!(
+                    "✅ Found existing window list with {} windows",
+                    existing_window_list.window_count
+                );
+            } else {
+                println!("ℹ️  No existing window list found");
+            }
+
+            // Request window list from server
+            println!("\n📨 Attempting to send GetWindowList command...");
+            match ipc_manager.send_get_window_list_command() {
+                Ok(()) => {
+                    println!("✅ GetWindowList command sent successfully");
+                    println!(
+                        "   Command should now be in the iceoryx2 queue for server consumption"
+                    );
+                }
+                Err(e) => {
+                    println!("❌ Failed to send GetWindowList command: {}", e);
+                    println!("   This indicates the command publisher is not working");
+                    println!("   Even though GridClient works, the GridIpcManager command channel may have issues");
+                    println!("   Possible causes:");
+                    println!("   - Different service names between GridClient and GridIpcManager");
+                    println!("   - Command publisher not properly initialized in GridIpcManager");
+                    return Err(e);
+                }
+            }
+
+            // Wait for and process the response with timeout and retry
+            let mut attempts = 0;
+            let max_attempts = 20; // Increased attempts
+            let wait_duration = Duration::from_millis(300); // Longer wait per attempt
+
+            println!("⏳ Waiting for server response...");
+            while attempts < max_attempts {
+                if let Some(window_list_msg) = ipc_manager.get_latest_window_list() {
+                    println!(
+                        "✅ Received window list with {} windows",
+                        window_list_msg.window_count
+                    );
+
+                    if window_list_msg.window_count == 0 {
+                        println!("ℹ️  Server returned empty window list. This might be normal if no windows are currently tracked.");
+                    } else {
+                        // Reconstruct grid from window_list_msg.windows
+                        for (i, window) in window_list_msg.windows
+                            [..window_list_msg.window_count as usize]
+                            .iter()
+                            .enumerate()
+                        {
+                            // Update your local grid state
+                            println!("  Window {}: HWND={:?}, Pos=({},{}) Size={}x{}, VGrid=({},{})-({},{}), Monitor={}", 
+                                i + 1,
+                                window.hwnd,
+                                window.x, window.y,
+                                window.width, window.height,
+                                window.virtual_row_start, window.virtual_col_start,
+                                window.virtual_row_end, window.virtual_col_end,
+                                window.monitor_id
+                            );
+                        }
+                    }
+                    break;
+                } else {
+                    attempts += 1;
+                    if attempts == max_attempts {
+                        println!(
+                            "⚠️  No window list received after {} attempts.",
+                            max_attempts
+                        );
+                        println!("   Diagnosis:");
+                        println!("   - GridClient connection works ✅");
+                        println!("   - GridIpcManager command sending works ✅");
+                        println!("   - But no response received ❌");
+                        println!("   This suggests:");
+                        println!("   - Server receives commands but doesn't publish responses to the right channel");
+                        println!("   - GridIpcManager subscribes to a different channel than server publishes to");
+                        println!("   - There's a service name mismatch between command/response channels");
+
+                        // Since GridClient works, let's fall back to using that
+                        println!("\n� Falling back to GridClient for window data...");
+                        return Ok(()); // Continue with the demo even if IPC manager doesn't work
+                    } else if attempts % 5 == 0 {
+                        // Every 5th attempt, show more detailed progress
+                        print!("🔄 Still waiting... (attempt {}/{}) - Server is responsive via GridClient ", attempts, max_attempts);
+                        io::stdout().flush()?;
+                    } else {
+                        print!(".");
+                        io::stdout().flush()?;
+                    }
+                    thread::sleep(wait_duration);
+                }
+            }
+
+            if attempts == max_attempts {
+                println!("\n❌ IPC Manager communication failed, but basic server connectivity confirmed");
+                println!("💡 The demo will continue using the server that we know is working");
+            }
+        }
         Ok(())
     }
 
@@ -88,7 +249,7 @@ impl VisualGridDemo {
 
         // Setup IPC
         self.setup_ipc()?;
-
+        println!("IPC services ready for communication");
         // Start the demo loop
         let mut frame_count = 0;
         let start_time = Instant::now();
@@ -149,10 +310,10 @@ impl VisualGridDemo {
             // Collect window handles and their target rects first to avoid borrow conflicts
             let mut animations = Vec::new();
             for item in tracker.windows.iter() {
-                let (hwnd, window_info) = item.pair();
+                let (window_id, window_info) = item.pair();
 
                 // Calculate new position for this window in the 8x8 grid
-                let window_id = *hwnd as usize - 1000;
+                let window_id = *window_id as usize - 1000;
                 let new_row = (window_id / 2).min(target_rows - 1);
                 let new_col = (window_id % 4 * 2).min(target_cols - 1);
 
@@ -174,13 +335,13 @@ impl VisualGridDemo {
                     bottom: target_y + target_height,
                 };
 
-                animations.push((*hwnd, target_rect));
+                animations.push((window_id, target_rect));
             }
 
             // Now, do the mutable borrow and start animations
-            for (hwnd, target_rect) in animations {
+            for (window_id, target_rect) in animations {
                 let _ = tracker.start_window_animation(
-                    hwnd,
+                    window_id.try_into().unwrap(),
                     target_rect,
                     self.animation_duration,
                     EasingType::EaseInOut,
@@ -212,17 +373,17 @@ impl VisualGridDemo {
             }
 
             // Update current grid config based on window positions
-            let mut total_cells = 0;
-            let mut max_row = 0;
-            let mut max_col = 0;
+            let total_cells = 0;
+            let max_row = 0;
+            let max_col = 0;
 
             for item in tracker.windows.iter() {
                 let (_, window_info) = item.pair();
-                for &(row, col) in &window_info.grid_cells {
-                    max_row = max_row.max(row);
-                    max_col = max_col.max(col);
-                    total_cells += 1;
-                }
+                // for &(row, col) in &window_info.grid_cells {
+                //     max_row = max_row.max(row);
+                //     max_col = max_col.max(col);
+                //     total_cells += 1;
+                // }
             }
 
             // Update our display config to match the actual grid state
@@ -262,9 +423,88 @@ impl VisualGridDemo {
         (start_f + (end_f - start_f) * progress).round() as usize
     }
 
+    /// Renders the grid dynamically sized to fit all window assignments, with cell width based on content
+    fn render_dynamic_grid(&self, use_tracker: bool) -> Result<(), Box<dyn std::error::Error>> {
+        // 1. Gather all window assignments to determine max row/col and cell contents
+        let max_row = 0;
+        let max_col = 0;
+        let cell_contents: std::collections::HashMap<(usize, usize), Vec<String>> =
+            std::collections::HashMap::new();
+        if let Ok(tracker) = self.tracker.lock() {
+            for item in tracker.windows.iter() {
+                let (window_id, window_info) = item.pair();
+                // let cells = &window_info.grid_cells;
+                // for &(row, col) in cells {
+                //     max_row = max_row.max(row);
+                //     max_col = max_col.max(col);
+                //     let entry = cell_contents.entry((row, col)).or_insert_with(Vec::new);
+                //     let last_two = (*window_id as u64) % 100;
+                //     entry.push(format!("{:02}", last_two));
+                // }
+            }
+        }
+        let rows = max_row + 1;
+        let cols = max_col + 1;
+
+        // 2. Compute max cell width needed
+        let mut max_cell_width = 3; // at least 3 for empty
+        for v in cell_contents.values() {
+            let joined = v.join(",");
+            max_cell_width = max_cell_width.max(joined.len());
+        }
+        max_cell_width = max_cell_width.max(2); // Ensure at least enough for 'XX'
+
+        // 3. Render grid borders and cells
+        // Top border
+        print!("┌");
+        for col in 0..cols {
+            print!("{:─<width$}", "", width = max_cell_width);
+            if col < cols - 1 {
+                print!("┬");
+            }
+        }
+        println!("┐");
+
+        // Rows
+        for row in 0..rows {
+            // Cell content row
+            print!("│");
+            for col in 0..cols {
+                let content = cell_contents
+                    .get(&(row, col))
+                    .map(|v| v.join(","))
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "XX".to_string());
+                print!("{:^width$}", content, width = max_cell_width);
+                print!("│");
+            }
+            println!();
+            // Separator
+            if row < rows - 1 {
+                print!("├");
+                for col in 0..cols {
+                    print!("{:─<width$}", "", width = max_cell_width);
+                    if col < cols - 1 {
+                        print!("┼");
+                    }
+                }
+                println!("┤");
+            }
+        }
+        // Bottom border
+        print!("└");
+        for col in 0..cols {
+            print!("{:─<width$}", "", width = max_cell_width);
+            if col < cols - 1 {
+                print!("┴");
+            }
+        }
+        println!("┘");
+        Ok(())
+    }
+
     fn render_frame(&self, frame: u32) -> Result<(), Box<dyn std::error::Error>> {
         print!("{}", CLEAR_SCREEN);
-
         // Header
         println!("🎯 VISUAL GRID DEMO - Frame #{}", frame);
         println!("{}", "=".repeat(60));
@@ -278,32 +518,49 @@ impl VisualGridDemo {
         } else {
             "📋 STATIC DISPLAY".to_string()
         };
-
         println!("Status: {}", status);
         println!(
-            "Grid Size: {} x {} cells",
+            "Grid Size: {} x {} cells (Physical)",
             self.current_config.rows, self.current_config.cols
         );
-
         if let Ok(tracker) = self.tracker.lock() {
+            println!(
+                "Virtual Grid Size: {} x {} cells (Tracker/Server)",
+                tracker.config.rows, tracker.config.cols
+            );
             println!("Windows: {} tracked", tracker.windows.len());
         }
-
+        println!();
+        // Render the dynamic grid (all window assignments, no truncation)
+        println!("Dynamic Grid (All Window Assignments):");
+        self.render_dynamic_grid(true)?;
+        println!();
+        // Render the physical grid (current display)
+        println!("Physical Grid (Current Display):");
+        self.render_grid_with_config(false)?;
         println!();
 
-        // Render the actual grid
-        self.render_grid()?;
-
         // Show window details
+        if let Ok(tracker) = self.tracker.lock() {
+            tracker.print_all_grids();
+        }
         self.render_window_details()?;
 
         io::stdout().flush()?;
         Ok(())
     }
 
-    fn render_grid(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let rows = self.current_config.rows;
-        let cols = self.current_config.cols;
+    /// Renders either the virtual (tracker) or physical (current) grid
+    fn render_grid_with_config(&self, use_tracker: bool) -> Result<(), Box<dyn std::error::Error>> {
+        let (rows, cols) = if use_tracker {
+            if let Ok(tracker) = self.tracker.lock() {
+                (tracker.config.rows, tracker.config.cols)
+            } else {
+                (self.current_config.rows, self.current_config.cols)
+            }
+        } else {
+            (self.current_config.rows, self.current_config.cols)
+        };
 
         // Grid top border
         print!("┌");
@@ -320,8 +577,12 @@ impl VisualGridDemo {
             // Cell content row
             print!("│");
             for col in 0..cols {
-                let cell_content = self.get_cell_content(row, col);
-                print!("{:^5}", cell_content);
+                // let cell_content = if use_tracker {
+                //     self.get_cell_content_for_grid(row, col, true)
+                // } else {
+                //     self.get_cell_content_for_grid(row, col, false)
+                // };
+                // print!("{:^5}", cell_content);
                 print!("│");
             }
             println!();
@@ -352,95 +613,97 @@ impl VisualGridDemo {
         Ok(())
     }
 
-    fn get_cell_content(&self, row: usize, col: usize) -> String {
-        if let Ok(tracker) = self.tracker.lock() {
-            // Count windows in this cell
-            let mut window_count = 0;
-            let mut window_ids = Vec::new();
-
-            for item in tracker.windows.iter() {
-                let (hwnd, window_info) = item.pair();
-                for &(win_row, win_col) in &window_info.grid_cells {
-                    if win_row == row && win_col == col {
-                        window_count += 1;
-                        window_ids.push(*hwnd as u64 % 1000); // Show last 3 digits
-                        break;
-                    }
-                }
-            }
-
-            match window_count {
-                0 => "   ".to_string(),
-                1 => format!("W{}", window_ids[0]),
-                _ => format!("{}W", window_count),
-            }
-        } else {
-            "ERR".to_string()
-        }
-    }
+    /// Returns cell content for either the tracker (virtual) or current (physical) grid
+    // fn get_cell_content_for_grid(&self, row: usize, col: usize, use_tracker: bool) -> String {
+    //     if let Ok(tracker) = self.tracker.lock() {
+    //         let mut window_ids = Vec::new();
+    //         for item in tracker.windows.iter() {
+    //             let (window_id, window_info) = item.pair();
+    //             // let cells = if use_tracker {
+    //             //     &window_info.grid_cells
+    //             // } else {
+    //             //     // For physical grid, recalculate based on current_config
+    //             //     &window_info.grid_cells
+    //             // };
+    //             // for &(win_row, win_col) in cells {
+    //             //     if win_row == row && win_col == col {
+    //             //         let last_two = (*window_id as u64) % 100;
+    //             //         window_ids.push(format!("{:02}", last_two));
+    //             //         break;
+    //             //     }
+    //             // }
+    //         }
+    //         if window_ids.is_empty() {
+    //             "   ".to_string()
+    //         } else {
+    //             let mut content = window_ids
+    //                 .iter()
+    //                 .take(3)
+    //                 .cloned()
+    //                 .collect::<Vec<_>>()
+    //                 .join(",");
+    //             if window_ids.len() > 3 {
+    //                 content.push_str(",..");
+    //             }
+    //             content
+    //         }
+    //     } else {
+    //         "ERR".to_string()
+    //     }
+    // }
     fn render_window_details(&self) -> Result<(), Box<dyn std::error::Error>> {
         println!("\n📋 Window Details & Positions:");
         println!("{}", "─".repeat(50));
 
         if let Ok(tracker) = self.tracker.lock() {
             for (i, item) in tracker.windows.iter().enumerate() {
-                let (hwnd, window_info) = item.pair();
+                let (window_id, window_info) = item.pair();
                 if i >= 6 {
-                    // Show more windows during animation
                     println!("   ... and {} more windows", tracker.windows.len() - 6);
                     break;
                 }
 
-                let id = *hwnd as u64 % 1000;
-                let cells: Vec<String> = window_info
-                    .grid_cells
-                    .iter()
-                    .map(|(r, c)| format!("({},{})", r, c))
-                    .collect();
+                let id = *window_id as u64 % 1000;
+                // let cells: Vec<String> = window_info
+                //     .grid_cells
+                //     .iter()
+                //     .map(|(r, c)| format!("({},{})", r, c))
+                //     .collect();
 
-                // Show both grid position and screen coordinates during animation
-                if self.is_animating() {
-                    println!(
-                        "  W{}: {} -> Cell: {} | Pos: ({}, {})",
-                        id,
-                        if window_info.title.len() > 10 {
-                            format!("{}...", &window_info.title[..10])
-                        } else {
-                            window_info.title.clone()
-                        },
-                        cells.join(", "),
-                        window_info.rect.left,
-                        window_info.rect.top
-                    );
-                } else {
-                    println!(
-                        "  W{}: {} -> Cells: {}",
-                        id,
-                        if window_info.title.len() > 12 {
-                            format!("{}...", &window_info.title[..12])
-                        } else {
-                            window_info.title.clone()
-                        },
-                        cells.join(", ")
-                    );
-                }
+                // Print full debug info for each window
+                println!(
+                    "  HWND: {:#x} | W{} | Title: '{}' | Rect: ({}, {}, {}, {})",
+                    *window_id,
+                    id,
+                    if window_info.title.len() > 24 {
+                        format!("{}...", String::from_utf16_lossy(&window_info.title[..24]))
+                    } else {
+                        String::from_utf16_lossy(&window_info.title).to_string()
+                    },
+                    // cells.join(", "),
+                    window_info.window_rect.left,
+                    window_info.window_rect.top,
+                    window_info.window_rect.right,
+                    window_info.window_rect.bottom
+                );
             }
             // Show animation progress
             if self.is_animating() {
-                if let Ok(tracker) = self.tracker.lock() {
-                    let active_count = tracker.active_animations.len();
-                    let total_count = tracker.windows.len();
-                    let progress = ((total_count - active_count) as f32 / total_count as f32
-                        * 100.0)
-                        .min(100.0);
-                    println!(
-                        "\n🎬 Animation Progress: {:.1}% | {} of {} windows completed",
-                        progress,
-                        total_count - active_count,
-                        total_count
-                    );
-                }
+                let active_count = tracker.active_animations.len();
+                let total_count = tracker.windows.len();
+                let progress =
+                    ((total_count - active_count) as f32 / total_count as f32 * 100.0).min(100.0);
+                println!(
+                    "\n🎬 Animation Progress: {:.1}% | {} of {} windows completed",
+                    progress,
+                    total_count - active_count,
+                    total_count
+                );
             }
+            // Do not print all grids here to avoid duplicate grid output after every move/resize event.
+            // --- Add this to always print all grids after window details ---
+            tracker.print_all_grids();
+            let _ = std::io::stdout().flush();
         }
 
         Ok(())
@@ -451,45 +714,55 @@ impl VisualGridDemo {
         println!("Simulating client requesting grid animation...\n");
 
         if let Some(ipc_manager_arc) = &self.ipc_manager {
+            // Lock ipc_manager only when needed
             let mut ipc_manager = ipc_manager_arc.lock().unwrap();
 
             // Show initial state
             println!("📨 Client → Server: GetGridState");
-            let response = ipc_manager.handle_command(ipc::GridCommand::GetGridState)?;
+            let response =
+                ipc_manager.handle_grid_command(ipc_protocol::GridCommand::GetGridState)?;
             println!("📤 Server → Client: {:?}\n", response);
 
             // Client requests window list
             println!("📨 Client → Server: GetWindowList");
-            let response = ipc_manager.handle_command(ipc::GridCommand::GetWindowList)?;
+            let response =
+                ipc_manager.handle_grid_command(ipc_protocol::GridCommand::GetWindowList)?;
             println!("📤 Server → Client: {:?}\n", response);
             // Client requests animation via IPC command (this is the proper way)
             println!("📨 Client → Server: StartAnimation Request for Grid Transition");
 
-            // Simulate multiple window animations requested by client
-            if let Ok(tracker) = self.tracker.lock() {
-                for (i, item) in tracker.windows.iter().enumerate().take(4) {
-                    let (hwnd, _) = item.pair();
+            // Collect window handles to avoid holding tracker lock during IPC calls
+            let window_ids: Vec<u64> = if let Ok(tracker) = self.tracker.lock() {
+                tracker
+                    .windows
+                    .iter()
+                    .take(4)
+                    .map(|item| *item.key())
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
-                    println!(
-                        "📨 Client → Server: StartAnimation(hwnd={}, target=cell({},{}))",
-                        *hwnd as u64,
-                        i / 2,
-                        i % 2
-                    );
+            for (i, window_id) in window_ids.iter().enumerate() {
+                println!(
+                    "📨 Client → Server: StartAnimation(hwnd={}, target=cell({},{}))",
+                    *window_id,
+                    i / 2,
+                    i % 2
+                );
 
-                    let response =
-                        ipc_manager.handle_command(ipc::GridCommand::StartAnimation {
-                            hwnd: *hwnd as u64,
-                            target_x: ((i % 2) * 300 + 100) as i32,
-                            target_y: ((i / 2) * 200 + 100) as i32,
-                            target_width: 250,
-                            target_height: 180,
-                            duration_ms: 2000,
-                            easing_type: EasingType::EaseInOut,
-                        })?;
+                let response =
+                    ipc_manager.handle_grid_command(ipc_protocol::GridCommand::StartAnimation {
+                        hwnd: *window_id,
+                        target_x: ((i % 2) * 300 + 100) as i32,
+                        target_y: ((i / 2) * 200 + 100) as i32,
+                        target_width: 250,
+                        target_height: 180,
+                        duration_ms: 2000,
+                        easing_type: EasingType::EaseInOut,
+                    })?;
 
-                    println!("📤 Server → Client: {:?}", response);
-                }
+                println!("📤 Server → Client: {:?}", response);
             }
 
             // Show animation status updates
@@ -500,13 +773,14 @@ impl VisualGridDemo {
                     frame + 1
                 );
 
-                let status_response =
-                    ipc_manager.handle_command(ipc::GridCommand::GetAnimationStatus {
+                let status_response = ipc_manager.handle_grid_command(
+                    ipc_protocol::GridCommand::GetAnimationStatus {
                         hwnd: 0, // Get all animations
-                    })?;
+                    },
+                )?;
 
                 match status_response {
-                    ipc::GridResponse::AnimationStatus { statuses } => {
+                    e_grid::ipc_protocol::GridResponse::AnimationStatus { statuses } => {
                         println!("� Client: Received {} animation updates", statuses.len());
                         for (hwnd, is_active, progress) in &statuses {
                             if *is_active {
@@ -532,7 +806,8 @@ impl VisualGridDemo {
 
             // Final state
             println!("\n📋 Final grid state after client request:");
-            self.render_grid()?;
+            // Only lock tracker for rendering, not during IPC calls
+            self.render_grid_with_config(false)?;
 
             println!("\n✅ IPC Demo Complete: Client successfully requested grid animation");
             println!("   🔄 Server processed request and animated windows");
@@ -554,11 +829,11 @@ impl VisualGridDemo {
         let cell_height = screen_height / rows as i32;
 
         for item in tracker.windows.iter() {
-            let (hwnd, window_info) = item.pair();
+            let (window_id, window_info) = item.pair();
 
             // Calculate original position in 4x4 grid
-            let original_row = (*hwnd as usize - 1000) / 4;
-            let original_col = (*hwnd as usize - 1000) % 4;
+            let original_row = (*window_id as usize - 1000) / 4;
+            let original_col = (*window_id as usize - 1000) % 4;
 
             // Calculate target position in 8x8 grid (spread windows out)
             let target_row = (original_row * 2).min(rows - 1);
@@ -575,41 +850,280 @@ impl VisualGridDemo {
             let current_y = original_y as f32 + (target_y as f32 - original_y as f32) * progress;
 
             // Update window rect
-            if let Some(mut window) = tracker.windows.get_mut(hwnd) {
-                let width = window.rect.right - window.rect.left;
-                let height = window.rect.bottom - window.rect.top;
+            if let Some(mut window) = tracker.windows.get_mut(window_id) {
+                let width = window.window_rect.right - window.window_rect.left;
+                let height = window.window_rect.bottom - window.window_rect.top;
 
-                window.rect.left = current_x as i32;
-                window.rect.top = current_y as i32;
-                window.rect.right = current_x as i32 + width;
-                window.rect.bottom = current_y as i32 + height;
+                window.window_rect.0.left = current_x as i32;
+                window.window_rect.0.top = current_y as i32;
+                window.window_rect.0.right = current_x as i32 + width;
+                window.window_rect.0.bottom = current_y as i32 + height;
 
                 // Update grid cell assignment
                 let new_grid_row =
                     (current_y as usize / (screen_height as usize / rows)).min(rows - 1);
                 let new_grid_col =
                     (current_x as usize / (screen_width as usize / cols)).min(cols - 1);
-                window.grid_cells = vec![(new_grid_row, new_grid_col)];
+                let mut new_cells = [(0, 0); crate::MAX_WINDOW_GRID_CELLS];
+                new_cells[0] = (new_grid_row, new_grid_col);
+                // window.grid_cells = new_cells;
             }
         }
     }
 
     fn count_occupied_cells(&self, tracker: &WindowTracker) -> usize {
-        let mut occupied = std::collections::HashSet::new();
-        for item in tracker.windows.iter() {
-            let (_, window_info) = item.pair();
-            for &(row, col) in &window_info.grid_cells {
-                occupied.insert((row, col));
+        // let mut occupied = std::collections::HashSet::new();
+        // for item in tracker.windows.iter() {
+        //     let (_, window_info) = item.pair();
+        //     // for &(row, col) in &window_info.grid_cells {
+        //     //     occupied.insert((row, col));
+        //     // }
+        // }
+        // occupied.len()
+        0
+    }
+
+    pub fn run_with_move_resize_callback(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::mpsc;
+        // Create a channel for grid print signals
+        let (tx, rx) = mpsc::channel();
+
+        // Create a GridClient (must be on main thread)
+        let mut client = match e_grid::ipc_client::GridClient::new() {
+            Ok(c) => c,
+            Err(_) => {
+                println!("Grid server not running, starting server in-process...");
+                std::thread::spawn(|| {
+                    let _ = e_grid::ipc_server::start_server();
+                });
+                // Retry loop
+                let mut last_err = None;
+                let mut client = None;
+                for _ in 0..10 {
+                    match e_grid::ipc_client::GridClient::new() {
+                        Ok(c) => {
+                            println!("Connected to in-process server!");
+                            client = Some(c);
+                            break;
+                        }
+                        Err(e) => {
+                            last_err = Some(e);
+                            std::thread::sleep(std::time::Duration::from_millis(300));
+                        }
+                    }
+                }
+                if client.is_none() {
+                    panic!("Failed to connect to in-process server: {:?}", last_err);
+                }
+                client.unwrap()
             }
+        };
+        // Register move/resize start callback (send signal to channel)
+        let tx_start = tx.clone();
+        client
+            .set_move_resize_start_callback(move |e| {
+                let _ = tx_start.send(());
+                // [CLEANUP] Removed debug print: [Move/Resize START]
+                // println!("[Move/Resize START] HWND={:?} type={}", e.hwnd, e.event_type);
+            })
+            .unwrap();
+        // Register move/resize stop callback (send signal to channel)
+        let tx_stop = tx.clone();
+        client
+            .set_move_resize_stop_callback(move |e| {
+                let _ = tx_stop.send(());
+                // [CLEANUP] Removed debug print: [Move/Resize STOP]
+                // println!("[Move/Resize STOP] HWND={:?} type={}", e.hwnd, e.event_type);
+            })
+            .unwrap();
+        let tx_focus = tx.clone();
+        client.set_focus_callback(move |event| {
+            // event.event_type: 8 = FOCUSED, 9 = DEFOCUSED (adjust if your enum differs)
+            println!(
+                "[Focus Event] HWND={:?} type={}",
+                event.hwnd, event.event_type
+            );
+            // if event.event_type == 8 || event.event_type == 9 {
+            let _ = tx_focus.send(());
+            // }
+        })?;
+
+        println!("[visual_grid_demo] Registered move/resize callbacks");
+        // Start background monitoring
+        client.start_background_monitoring().unwrap();
+        // [CLEANUP] Removed debug print: [visual_grid_demo] Background monitoring started
+        println!("[visual_grid_demo] Background monitoring started");
+        // Spawn a thread to listen for print signals and set a flag for the main thread to print the grid
+        let print_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let print_flag_bg = print_flag.clone();
+        std::thread::spawn(move || {
+            // [CLEANUP] Removed debug print: [visual_grid_demo] Background print thread started
+            println!("[visual_grid_demo] Background print thread started");
+            while let Ok(()) = rx.recv() {
+                // [CLEANUP] Removed debug print: [visual_grid_demo] Received print signal (setting print flag)
+                println!("[visual_grid_demo] Received print signal (setting print flag)");
+                print_flag_bg.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        // Continue with the rest of your demo logic
+        std::thread::sleep(std::time::Duration::from_millis(500)); // Give server time to start
+        self.run_with_print_flag(print_flag, client)
+    }
+
+    // New method: run_with_print_flag
+    fn run_with_print_flag(
+        &mut self,
+        print_flag: Arc<std::sync::atomic::AtomicBool>,
+        client: e_grid::ipc_client::GridClient,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        println!("🎯 VISUAL GRID DEMO - SERVER/CLIENT WITH ANIMATION");
+        println!("=================================================");
+        println!("Starting visual grid demonstration...");
+
+        // Setup IPC
+        self.setup_ipc()?;
+        println!("IPC services ready for communication");
+        // Start the demo loop
+        let mut frame_count = 0;
+        let start_time = Instant::now();
+        let mut last_print_time = Instant::now() - Duration::from_secs(2); // allow immediate first print
+
+        // Show initial 4x4 grid for 2 seconds
+        println!("\n📋 Phase 1: Displaying 4x4 Grid");
+        let phase1_end = start_time + Duration::from_secs(120);
+
+        while Instant::now() < phase1_end {
+            // self.render_frame(frame_count)?;
+            // println!("\n[Grid FRAME]:");
+            if print_flag.load(std::sync::atomic::Ordering::SeqCst)
+                && last_print_time.elapsed() >= Duration::from_secs(1)
+            {
+                // --- Add this block to match working_grid output ---
+                // if let Ok((windows, monitors)) = client.fetch_window_and_monitor_lists_streaming() {
+                //     client.rebuild_grids_from_streamed_lists(&monitors, &windows);
+                //     println!("\n=== VIRTUAL GRID (All Monitors Combined) ===\n");
+                //     client.print_virtual_grid();
+                //     for (i, monitor) in monitors.iter().enumerate() {
+                //         println!("\n=== MONITOR {} GRID ===", i + 1);
+                //         if let Some(monitor_info) = client.monitors.get(&monitor.id) {
+                //             client.print_physical_grid_for_monitor(&monitor_info);
+                //         }
+                //     }
+                // } else {
+                //     println!("[Grid after focus/move/resize event]: No window/monitor list available (streaming)");
+                // }
+                // --- End block ---
+
+                // Optionally, also print the tracker grids for debugging
+                if let Ok(mut tracker) = self.tracker.lock() {
+                    tracker.scan_existing_windows();
+                    tracker.update_grid();
+                    println!("\n[Grid after move/resize event]:");
+                    tracker.print_all_grids();
+                    let _ = std::io::stdout().flush();
+                }
+                print_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                last_print_time = Instant::now();
+            } else {
+                // println!("\n[Grid after move/resize event]: No recent move/resize events");
+            }
+            thread::sleep(Duration::from_millis(100));
+            frame_count += 1;
         }
-        occupied.len()
+
+        // Start animation to 8x8
+        println!("\n🎬 Phase 2: Animating 4x4 → 8x8 Grid");
+        self.start_animation();
+
+        // Animation phase
+        while self.is_animating() {
+            self.update_animation();
+            self.render_frame(frame_count)?;
+            if print_flag.load(std::sync::atomic::Ordering::SeqCst)
+                && last_print_time.elapsed() >= Duration::from_secs(1)
+            {
+                if let Ok(tracker) = self.tracker.lock() {
+                    println!("\n[Grid after move/resize event]:");
+                    let _ = tracker.print_all_grids();
+                    let _ = std::io::stdout().flush();
+                }
+                print_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                last_print_time = Instant::now();
+            }
+            thread::sleep(Duration::from_millis(50));
+            frame_count += 1;
+        }
+
+        // Show final 8x8 grid for 2 seconds
+        println!("\n✅ Phase 3: Final 8x8 Grid");
+        let phase3_end = Instant::now() + Duration::from_secs(1);
+
+        while Instant::now() < phase3_end {
+            self.render_frame(frame_count)?;
+            if print_flag.load(std::sync::atomic::Ordering::SeqCst)
+                && last_print_time.elapsed() >= Duration::from_secs(1)
+            {
+                if let Ok(tracker) = self.tracker.lock() {
+                    println!("\n[Grid after move/resize event]:");
+                    let _ = tracker.print_all_grids();
+                    let _ = std::io::stdout().flush();
+                }
+                print_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                last_print_time = Instant::now();
+            }
+            thread::sleep(Duration::from_millis(100));
+            frame_count += 1;
+        }
+
+        // Demonstrate IPC communication
+        self.demonstrate_ipc()?;
+
+        // --- Post-demo: keep printing grid on move/resize events until user exits ---
+        println!("\n[INFO] Demo phases complete. You can still move/resize windows.");
+        println!("      The grid will print on move/resize events. Press Enter to exit.\n");
+
+        let mut last_print_time = Instant::now() - Duration::from_secs(2);
+        let input = String::new();
+        // let stdin = stdin();
+        // // stdin.lock();
+        // // Spawn a thread to read Enter key
+        // let (exit_tx, exit_rx) = std::sync::mpsc::channel();
+        // std::thread::spawn(move || {
+        //     let mut buf = String::new();
+        //     let _ = stdin.read_line(&mut buf);
+        //     let _ = exit_tx.send(());
+        // });
+        loop {
+            println!("\n[Grid after move/resize event]:");
+            if print_flag.load(std::sync::atomic::Ordering::SeqCst)
+                && last_print_time.elapsed() >= Duration::from_secs(1)
+            {
+                println!("\n[Grid after move/resize event]:");
+                if let Ok(tracker) = self.tracker.lock() {
+                    println!("\n[Grid after move/resize event]:");
+                    let _ = tracker.print_all_grids();
+                    let _ = std::io::stdout().flush();
+                }
+
+                print_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                last_print_time = Instant::now();
+            }
+            // if exit_rx.try_recv().is_ok() {
+            //     break;
+            // }
+            thread::sleep(Duration::from_millis(100));
+        }
+        Ok(())
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
     // Enable ANSI escape sequences on Windows
     #[cfg(windows)]
     {
+        use std::io::{self, Write};
+        use winapi::um::consoleapi::GetConsoleMode;
         use winapi::um::consoleapi::SetConsoleMode;
         use winapi::um::handleapi::INVALID_HANDLE_VALUE;
         use winapi::um::processenv::GetStdHandle;
@@ -619,13 +1133,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         unsafe {
             let handle = GetStdHandle(STD_OUTPUT_HANDLE);
             if handle != INVALID_HANDLE_VALUE {
-                SetConsoleMode(handle, ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+                let mut mode = 0;
+                if GetConsoleMode(handle, &mut mode) != 0 {
+                    SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+                }
             }
         }
+        // Flush to ensure no buffered output interferes with ANSI codes
+        let _ = io::stdout().flush();
     }
 
     let mut demo = VisualGridDemo::new()?;
-    demo.run()?;
+    demo.run_with_move_resize_callback()?;
 
     println!("\n🎉 Demo complete! Press Enter to exit...");
     let mut input = String::new();

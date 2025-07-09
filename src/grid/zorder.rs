@@ -6,7 +6,9 @@ use crate::display::format_hwnd_display;
 use crate::grid::traits::{
     CellDisplay, GridError, GridResult, GridTrait, ZOrderGrid as ZOrderGridTrait,
 };
-use crate::window::{WindowInfo, WindowTracker};
+use crate::window::info::RectWrapper;
+use crate::window::WindowInfo;
+use crate::window_tracker::WindowTracker;
 use std::collections::{BTreeMap, HashMap};
 use winapi::shared::windef::{HWND, RECT};
 use winapi::um::winuser::{GetWindow, GetWindowRect, GW_HWNDPREV};
@@ -22,7 +24,7 @@ pub enum ZOrderCellState {
 
 #[derive(Debug, Clone)]
 pub struct ZOrderWindow {
-    pub hwnd: HWND,
+    pub hwnd: u64,
     pub z_index: usize,             // 0 = back, higher = front
     pub coverage: f32,              // How much of the cell this window covers (0.0-1.0)
     pub is_visible: bool,           // Whether this window portion is visible (not obscured)
@@ -32,8 +34,8 @@ pub struct ZOrderWindow {
 pub struct ZOrderGrid {
     config: GridConfig,
     grid: Vec<Vec<ZOrderCellState>>,
-    windows: HashMap<HWND, WindowInfo>,
-    z_order_map: BTreeMap<usize, HWND>, // z_index -> HWND
+    windows: HashMap<u64, WindowInfo>,
+    z_order_map: BTreeMap<usize, u64>, // z_index -> u64
     next_z_index: usize,
     window_tracker: Option<WindowTracker>, // Optional reference to main tracker
 }
@@ -110,14 +112,15 @@ impl ZOrderGrid {
     }
 
     /// Get the current z-order from Windows
-    fn get_windows_z_order(&self) -> Vec<HWND> {
+    fn get_windows_z_order(&self) -> Vec<u64> {
         let mut z_order = Vec::new();
         let mut current_hwnd = unsafe { GetWindow(std::ptr::null_mut(), GW_HWNDPREV) };
 
         // Walk through windows from top to bottom
         while !current_hwnd.is_null() {
-            if self.windows.contains_key(&current_hwnd) {
-                z_order.push(current_hwnd);
+            let current_u64 = current_hwnd as u64;
+            if self.windows.contains_key(&current_u64) {
+                z_order.push(current_u64);
             }
             current_hwnd = unsafe { GetWindow(current_hwnd, GW_HWNDPREV) };
         }
@@ -173,7 +176,7 @@ impl ZOrderGrid {
     /// Add a window to the grid at its current position
     pub fn add_window(
         &mut self,
-        hwnd: HWND,
+        hwnd: u64,
         window_info: WindowInfo,
         monitor_bounds: (i32, i32, i32, i32),
     ) -> GridResult<()> {
@@ -185,7 +188,7 @@ impl ZOrderGrid {
         self.next_z_index += 1;
 
         // Calculate which cells this window occupies
-        let cells = self.window_to_cells(&window_info.rect, monitor_bounds);
+        let cells = self.window_to_cells(&window_info.window_rect, monitor_bounds);
 
         for (row, col, coverage) in cells {
             self.validate_coordinates(row, col)?;
@@ -288,8 +291,15 @@ impl ZOrderGrid {
                             let title = self
                                 .windows
                                 .get(&window.hwnd)
-                                .map(|w| w.title.as_str())
-                                .unwrap_or("Unknown");
+                                .map(|w| {
+                                    let nul_pos = w
+                                        .title
+                                        .iter()
+                                        .position(|&c| c == 0)
+                                        .unwrap_or(w.title.len());
+                                    String::from_utf16_lossy(&w.title[..nul_pos])
+                                })
+                                .unwrap_or_else(|| "Unknown".to_string());
 
                             println!(
                                 "  Layer {}: HWND {:?} - {} (Coverage: {:.1}%, Visible: {:.1}%) {}",
@@ -298,7 +308,7 @@ impl ZOrderGrid {
                                 if title.len() > 20 {
                                     &title[..20]
                                 } else {
-                                    title
+                                    &title
                                 },
                                 window.coverage * 100.0,
                                 window.visibility_percentage * 100.0,
@@ -333,7 +343,7 @@ impl GridTrait for ZOrderGrid {
         self.clear();
 
         // Re-add all windows (this will recalculate positions and z-order)
-        let windows_to_update: Vec<(HWND, WindowInfo)> = self
+        let windows_to_update: Vec<(u64, WindowInfo)> = self
             .windows
             .iter()
             .map(|(&hwnd, info)| (hwnd, info.clone()))
@@ -347,9 +357,9 @@ impl GridTrait for ZOrderGrid {
                 right: 0,
                 bottom: 0,
             };
-            if unsafe { GetWindowRect(hwnd, &mut current_rect) } != 0 {
+            if unsafe { GetWindowRect(hwnd as HWND, &mut current_rect) } != 0 {
                 let updated_info = WindowInfo {
-                    rect: current_rect,
+                    window_rect: RectWrapper(current_rect),
                     ..window_info
                 };
 
@@ -386,7 +396,7 @@ impl GridTrait for ZOrderGrid {
         ))
     }
 
-    fn get_cell_windows(&self, row: usize, col: usize) -> GridResult<Vec<HWND>> {
+    fn get_cell_windows(&self, row: usize, col: usize) -> GridResult<Vec<u64>> {
         self.validate_coordinates(row, col)?;
 
         match &self.grid[row][col] {
@@ -395,7 +405,7 @@ impl GridTrait for ZOrderGrid {
         }
     }
 
-    fn assign_window(&mut self, hwnd: HWND, row: usize, col: usize) -> GridResult<()> {
+    fn assign_window(&mut self, _hwnd: u64, row: usize, col: usize) -> GridResult<()> {
         self.validate_coordinates(row, col)?;
 
         // This is a simplified implementation - in practice, you'd want to
@@ -405,7 +415,7 @@ impl GridTrait for ZOrderGrid {
         ))
     }
 
-    fn remove_window(&mut self, hwnd: HWND) -> GridResult<()> {
+    fn remove_window(&mut self, hwnd: u64) -> GridResult<()> {
         self.windows.remove(&hwnd);
 
         // Remove from z-order map
@@ -429,7 +439,7 @@ impl GridTrait for ZOrderGrid {
         Ok(())
     }
 
-    fn get_all_windows(&self) -> Vec<HWND> {
+    fn get_all_windows(&self) -> Vec<u64> {
         self.windows.keys().copied().collect()
     }
 }
@@ -439,7 +449,7 @@ impl ZOrderGridTrait for ZOrderGrid {
         self.z_order_map.len()
     }
 
-    fn get_layer_windows(&self, layer: usize) -> GridResult<Vec<HWND>> {
+    fn get_layer_windows(&self, layer: usize) -> GridResult<Vec<u64>> {
         if layer >= self.layer_count() {
             return Err(GridError::ZOrderError(format!(
                 "Layer {} does not exist, max layer is {}",
@@ -449,7 +459,7 @@ impl ZOrderGridTrait for ZOrderGrid {
         }
 
         // Get windows at the specified z-order layer
-        let windows: Vec<HWND> = self
+        let windows: Vec<u64> = self
             .z_order_map
             .iter()
             .filter(|(&z_index, _)| z_index == layer)
@@ -459,7 +469,7 @@ impl ZOrderGridTrait for ZOrderGrid {
         Ok(windows)
     }
 
-    fn get_window_z_order(&self, hwnd: HWND) -> GridResult<usize> {
+    fn get_window_z_order(&self, hwnd: u64) -> GridResult<usize> {
         for (&z_index, &window_hwnd) in &self.z_order_map {
             if window_hwnd == hwnd {
                 return Ok(z_index);
@@ -468,13 +478,13 @@ impl ZOrderGridTrait for ZOrderGrid {
         Err(GridError::WindowNotFound(hwnd))
     }
 
-    fn get_visibility_map(&self) -> HashMap<(usize, usize), Vec<(HWND, bool)>> {
+    fn get_visibility_map(&self) -> HashMap<(usize, usize), Vec<(u64, bool)>> {
         let mut visibility_map = HashMap::new();
 
         for (row, grid_row) in self.grid.iter().enumerate() {
             for (col, cell) in grid_row.iter().enumerate() {
                 if let ZOrderCellState::Occupied { windows } = cell {
-                    let window_visibility: Vec<(HWND, bool)> =
+                    let window_visibility: Vec<(u64, bool)> =
                         windows.iter().map(|w| (w.hwnd, w.is_visible)).collect();
 
                     if !window_visibility.is_empty() {
@@ -487,7 +497,7 @@ impl ZOrderGridTrait for ZOrderGrid {
         visibility_map
     }
 
-    fn bring_to_front(&mut self, hwnd: HWND) -> GridResult<()> {
+    fn bring_to_front(&mut self, hwnd: u64) -> GridResult<()> {
         // Find the current z-index
         let current_z = self.get_window_z_order(hwnd)?;
 
@@ -504,7 +514,7 @@ impl ZOrderGridTrait for ZOrderGrid {
         Ok(())
     }
 
-    fn send_to_back(&mut self, hwnd: HWND) -> GridResult<()> {
+    fn send_to_back(&mut self, hwnd: u64) -> GridResult<()> {
         // Find the current z-index
         let current_z = self.get_window_z_order(hwnd)?;
 
@@ -545,7 +555,7 @@ impl CellDisplay for ZOrderCellState {
                     .iter()
                     .filter(|w| w.is_visible)
                     .max_by_key(|w| w.z_index)
-                    .map(|w| w.hwnd as u64)
+                    .map(|w| w.hwnd)
             }
             _ => None,
         }

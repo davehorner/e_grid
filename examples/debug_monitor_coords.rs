@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.display_window_list();
 
     // Stop the client
-    client.stop();
+    client.shutdown();
 
     println!("\n✅ Debug test completed");
     Ok(())

@@ -67,7 +67,7 @@ impl ComprehensiveFocusTracker {
         }
     }
 
-    fn handle_focus_event(&self, focus_event: e_grid::ipc::WindowFocusEvent) {
+    fn handle_focus_event(&self, focus_event: e_grid::ipc_protocol::WindowFocusEvent) {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -179,7 +179,11 @@ impl ComprehensiveFocusTracker {
         }
     }
 
-    fn handle_window_focused(&self, focus_event: e_grid::ipc::WindowFocusEvent, timestamp: u64) {
+    fn handle_window_focused(
+        &self,
+        focus_event: e_grid::ipc_protocol::WindowFocusEvent,
+        timestamp: u64,
+    ) {
         // Update current focused window
         let focused_window = FocusedWindow {
             hwnd: focus_event.hwnd,
@@ -201,7 +205,11 @@ impl ComprehensiveFocusTracker {
         self.start_music_for_app(focus_event.app_name_hash);
     }
 
-    fn handle_window_defocused(&self, focus_event: e_grid::ipc::WindowFocusEvent, timestamp: u64) {
+    fn handle_window_defocused(
+        &self,
+        focus_event: e_grid::ipc_protocol::WindowFocusEvent,
+        timestamp: u64,
+    ) {
         // Update focus time tracking
         if let Ok(mut current) = self.current_focused.lock() {
             if let Some(ref focused) = *current {

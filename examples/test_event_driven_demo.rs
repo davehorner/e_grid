@@ -24,6 +24,7 @@
 //! - Phase 3: Real-time event monitoring and display
 
 use e_grid::ipc_client::GridClient;
+// Add these trait imports if the methods are defined as extension traits
 use e_grid::ipc_server::GridIpcServer;
 use e_grid::window_events::{self, DebugEventCallback};
 use e_grid::{EasingType, GridConfig, WindowTracker};
@@ -61,11 +62,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔄 Event-driven system ready - message processing will happen in main thread...");
     // Step 3: Create and setup the IPC server (main thread for HWND safety)
     println!("🔧 Creating IPC server...");
-        let windows = {
-         let tracker_guard = tracker.lock().unwrap();
+    let windows = {
+        let tracker_guard = tracker.lock().unwrap();
         tracker_guard.windows.clone()
     };
-    let mut server = GridIpcServer::new(tracker.clone(),Arc::new(windows)).unwrap();
+    let mut server = GridIpcServer::new(tracker.clone()).unwrap();
     server.setup_services()?;
     // Note: NOT calling server.setup_window_events() to avoid duplicate hooks
     // The window_events::setup_window_events() above already set up the hooks
@@ -80,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 4: Create IPC client to communicate with server
     println!("🔧 Connecting IPC client...");
     let mut client = GridClient::new()?;
-    client.start_services()?;
+    client.start_background_monitoring()?;
     // Step 5: Initial scan and display
     println!("\n🔍 Performing initial window discovery via event system...");
 
@@ -153,8 +154,9 @@ fn demonstrate_grid_animation(
 
         // Validate window handle before trying to move it
         unsafe {
+            use winapi::shared::windef::HWND;
             use winapi::um::winuser::IsWindow;
-            if IsWindow(hwnd) == 0 {
+            if IsWindow(hwnd as HWND) == 0 {
                 println!("   ⚠️  Skipping invalid window handle: {:?}", hwnd);
                 continue;
             }
@@ -165,13 +167,16 @@ fn demonstrate_grid_animation(
             hwnd, hwnd as u64, row, col
         );
         // Send IPC command to move window to grid cell (this actually moves the window)
-        client.move_window_to_cell(hwnd as u64, row as u32, col as u32)?;
+        client.move_window_to_cell(
+            hwnd as u64,
+            row as u32,
+            col as u32,
+            1000,
+            EasingType::Bounce,
+        )?;
 
         // Process any pending commands on the server
         server.process_commands()?;
-
-        // Add animation command
-        client.animate_window(hwnd as u64, 1000, EasingType::Bounce)?;
 
         // Process any pending commands on the server
         server.process_commands()?;
@@ -213,15 +218,6 @@ fn demonstrate_window_rotation(
         };
         // Rotate windows through grid positions
         for (i, &hwnd) in window_list.iter().take(4).enumerate() {
-            // Validate window handle
-            unsafe {
-                use winapi::um::winuser::IsWindow;
-                if IsWindow(hwnd) == 0 {
-                    println!("     ⚠️  Skipping invalid window handle: {:?}", hwnd);
-                    continue;
-                }
-            }
-
             let base_pos = (i + rotation) % 4;
             let row = base_pos / 2;
             let col = base_pos % 2;
@@ -229,26 +225,17 @@ fn demonstrate_window_rotation(
                 "     📦 Moving window {:?} (as u64: {}) to [{},{}]",
                 hwnd, hwnd as u64, row, col
             );
-            client.move_window_to_cell(hwnd as u64, row as u32, col as u32)?;
+            // client.send_move_window_to_cell(hwnd as u64, row as u32, col as u32)?;
 
             // Process any pending commands on the server
             server.process_commands()?;
 
-            client.animate_window(hwnd as u64, 800, EasingType::EaseInOut)?;
+            // client.send_animate_window(hwnd as u64, 800, EasingType::EaseInOut)?;
 
             // Process any pending commands on the server
             server.process_commands()?;
-        }
-
-        thread::sleep(Duration::from_millis(1500)); // Let rotation complete
-
-        // Show updated state
-        {
-            let tracker_guard = tracker.lock().unwrap();
-            tracker_guard.print_all_grids();
         }
     }
-
     Ok(())
 }
 

@@ -17,16 +17,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tracker = WindowTracker::new();
     println!("📊 Initializing window tracking...");
     tracker.scan_existing_windows();
-    tracker.print_grid();
+    tracker.print_all_grids();
 
     let tracker = Arc::new(Mutex::new(tracker));
 
     // Create and setup the IPC server
     let windows = {
-         let tracker_guard = tracker.lock().unwrap();
+        let tracker_guard = tracker.lock().unwrap();
         tracker_guard.windows.clone()
     };
-    let mut ipc_server = ipc_server::GridIpcServer::new(tracker.clone(),Arc::new(windows))?;
+    let mut ipc_server = ipc_server::GridIpcServer::new(tracker.clone())?;
     println!("\n🔧 Setting up IPC server...");
     ipc_server.setup_services()?;
 
@@ -93,45 +93,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(tracker) = tracker.lock() {
                 println!("  🔄 Active windows: {}", tracker.windows.len());
 
-                // Print the current virtual grid
-                println!("  📱 Virtual Grid State:");
-                tracker.print_grid();
-
-                // Print all monitor grids
-                println!(
-                    "  🖥️ Monitor Grids ({} monitors):",
-                    tracker.monitor_grids.len()
-                );
-                for (i, monitor) in tracker.monitor_grids.iter().enumerate() {
-                    println!(
-                        "    Monitor {} ({}x{} at {},{}):",
-                        i,
-                        monitor.monitor_rect.2 - monitor.monitor_rect.0,
-                        monitor.monitor_rect.3 - monitor.monitor_rect.1,
-                        monitor.monitor_rect.0,
-                        monitor.monitor_rect.1
-                    );
-                    monitor.print_grid();
-                }
-
+                tracker.print_all_grids();
                 // Show recent window activity
                 if !tracker.windows.is_empty() {
                     println!("  📋 Recent windows:");
                     for (i, entry) in tracker.windows.iter().take(5).enumerate() {
                         let (_hwnd, window) = entry.pair();
-                        let title = if window.title.len() > 40 {
-                            format!("{}...", &window.title[..40])
-                        } else {
-                            window.title.clone()
+                        let title = {
+                            let nul_pos = window
+                                .title
+                                .iter()
+                                .position(|&c| c == 0)
+                                .unwrap_or(window.title.len());
+                            String::from_utf16_lossy(&window.title[..nul_pos])
                         };
                         println!(
-                            "    {}. {} [{}x{} at {},{}]",
+                            "    {}: HWND: {}, Title: {}, Size: {}x{}, Position: ({}, {})",
                             i + 1,
+                            window.hwnd,
                             title,
-                            window.rect.right - window.rect.left,
-                            window.rect.bottom - window.rect.top,
-                            window.rect.left,
-                            window.rect.top
+                            window.width(),
+                            window.height(),
+                            window.window_rect.left,
+                            window.window_rect.top
                         );
                     }
                     if tracker.windows.len() > 5 {
