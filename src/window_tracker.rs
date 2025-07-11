@@ -46,6 +46,29 @@ pub struct WindowTracker {
 }
 
 impl WindowTracker {
+
+
+        pub fn move_window_to_rect(&self, hwnd: u64, rect: RECT) -> Result<(), String> {
+        unsafe {
+            use winapi::um::winuser::{SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE};
+            let result = SetWindowPos(
+                hwnd as winapi::shared::windef::HWND,
+                std::ptr::null_mut(),
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            if result == 0 {
+                Err(format!("SetWindowPos failed for 0x{:X}", hwnd))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+
     pub fn new() -> Self {
         let mut ret = Self::new_with_config(GridConfig::default());
         ret.find_desktop_hwnds();
@@ -514,7 +537,7 @@ impl WindowTracker {
     }
 
     /// Convert grid cell to window rectangle on primary monitor
-    fn primary_monitor_cell_to_rect(&self, row: usize, col: usize) -> Option<RECT> {
+    pub fn primary_monitor_cell_to_rect(&self, row: usize, col: usize) -> Option<RECT> {
         if row >= self.config.rows || col >= self.config.cols {
             println!(
                 "❌ Invalid cell coordinates: ({}, {}) for grid ({}x{})",
