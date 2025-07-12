@@ -301,6 +301,7 @@ impl WindowTracker {
                 //println!("[DEBUG] Skipping hwnd=0x{:X}: minimized", hwnd);
                 return false;
             }
+
             let ex_style = GetWindowLongW(hwnd as HWND, GWL_EXSTYLE) as u32;
             if (ex_style & WS_EX_TOOLWINDOW) != 0 {
                 //println!("[DEBUG] Skipping hwnd=0x{:X}: toolwindow", hwnd);
@@ -319,6 +320,13 @@ impl WindowTracker {
                 || class_name == "XamlExplorerHostIslandWindow"
             {
                 return false;
+            }
+            // Exclude Chrome_WidgetWin_1 windows with no border (WS_BORDER not set)
+            if class_name == "Chrome_WidgetWin_1" {
+                let style = GetWindowLongW(hwnd as HWND, GWL_STYLE) as u32;
+                if (style & WS_BORDER) == 0 {
+                    return false; //tooltip!
+                }
             }
             //println!("[DEBUG] Accepting hwnd=0x{:X}: '{}'", hwnd, title);
             true
@@ -1366,6 +1374,42 @@ impl WindowTracker {
                                 "[DEBUG] SetWindowPos failed for hwnd=0x{:X} with error code: {}",
                                 hwnd, error
                             );
+                            // If error is 5 (access denied), try moving without resizing
+                            if error == 5 {
+                                let move_only_result = SetWindowPos(
+                                    hwnd as HWND,
+                                    std::ptr::null_mut(),
+                                    current_rect.left,
+                                    current_rect.top,
+                                    0,
+                                    0,
+                                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSIZE,
+                                );
+                                if move_only_result == 0 {
+                                    let move_error = GetLastError();
+                                    println!(
+                                        "[DEBUG] Move-only SetWindowPos also failed for hwnd=0x{:X} with error code: {}",
+                                        hwnd, move_error
+                                    );
+                                } else {
+                                    println!(
+                                        "[DEBUG] Move-only SetWindowPos succeeded for hwnd=0x{:X}",
+                                        hwnd
+                                    );
+                                }
+                                // Send window to backmost
+                                SetWindowPos(
+                                    hwnd as HWND,
+                                    HWND_BOTTOM,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                                );
+                                // Mark as failed
+                                failed_animations.push(hwnd);
+                            }
                         }
                     }
 
@@ -1375,7 +1419,9 @@ impl WindowTracker {
                             || prev_rect.right != current_rect.right
                             || prev_rect.bottom != current_rect.bottom
                         {
-                            failed_animations.push(hwnd);
+                            if !failed_animations.contains(&hwnd) {
+                                failed_animations.push(hwnd);
+                            }
                             // println!(
                             //     "[DEBUG] Window 0x{:X} moved: prev=({}, {}, {}, {}), curr=({}, {}, {}, {}), size=({}x{}), requested=({}x{})",
                             //     hwnd,
