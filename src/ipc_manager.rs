@@ -1758,10 +1758,15 @@ impl GridIpcManager {
         }
     }
 
-    pub fn update_animations(&mut self) -> Result<Vec<u64>, Box<dyn std::error::Error>> {
+    pub fn update_animations(
+        &mut self,
+    ) -> Result<(Vec<u64>, Vec<u64>), Box<dyn std::error::Error>> {
         if let Ok(mut tracker) = self.tracker.lock() {
-            let completed = tracker.update_animations();
-            Ok(completed.into_iter().map(|hwnd| hwnd as u64).collect())
+            let (completed, failed) = tracker.update_animations();
+            Ok((
+                completed.into_iter().map(|hwnd| hwnd as u64).collect(),
+                failed.into_iter().map(|hwnd| hwnd as u64).collect(),
+            ))
         } else {
             Err("Failed to acquire tracker lock".into())
         }

@@ -46,11 +46,21 @@ pub struct WindowTracker {
 }
 
 impl WindowTracker {
-
-
-        pub fn move_window_to_rect(&self, hwnd: u64, rect: RECT) -> Result<(), String> {
+    /// Returns the HWND (u64) of the current foreground window, or None if not available.
+    pub fn get_foreground_window() -> Option<u64> {
         unsafe {
-            use winapi::um::winuser::{SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE};
+            let hwnd = GetForegroundWindow();
+            if hwnd.is_null() {
+                None
+            } else {
+                Some(hwnd as u64)
+            }
+        }
+    }
+
+    pub fn move_window_to_rect(&self, hwnd: u64, rect: RECT) -> Result<(), String> {
+        unsafe {
+            use winapi::um::winuser::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
             let result = SetWindowPos(
                 hwnd as winapi::shared::windef::HWND,
                 std::ptr::null_mut(),
@@ -67,7 +77,6 @@ impl WindowTracker {
             }
         }
     }
-
 
     pub fn new() -> Self {
         let mut ret = Self::new_with_config(GridConfig::default());
@@ -343,9 +352,9 @@ impl WindowTracker {
         }
 
         let start_col = ((rect.left - self.monitor_rect.left) / cell_width).max(0) as usize;
-        let end_col = ((rect.right - self.monitor_rect.left - 1) / cell_width)
+        let end_col = (((rect.right - self.monitor_rect.left - 1) / cell_width)
             .min(self.config.cols as i32 - 1)
-            .max(0) as usize;
+            .max(0)) as usize;
         let start_row = ((rect.top - self.monitor_rect.top) / cell_height).max(0) as usize;
         let end_row = ((rect.bottom - self.monitor_rect.top - 1) / cell_height)
             .min(self.config.rows as i32 - 1)
@@ -443,17 +452,17 @@ impl WindowTracker {
         // Place windows on the grid (only once)
         for entry in &self.windows {
             let (hwnd, window_info) = entry.pair();
-            if (*hwnd & 0xFF) == 0x2E {
-                let title =
-                    String::from_utf16_lossy(&window_info.title[..window_info.title_len as usize]);
-                let class_name = String::from_utf16_lossy(
-                    &window_info.class_name[..window_info.class_name_len as usize],
-                );
-                println!(
-                    "[DEBUG] HWND ending in 2E: hwnd=0x{:X}, title='{}', class='{}'",
-                    hwnd, title, class_name
-                );
-            }
+            // if (*hwnd & 0xFF) == 0x2E {
+            //     let title =
+            //         String::from_utf16_lossy(&window_info.title[..window_info.title_len as usize]);
+            //     let class_name = String::from_utf16_lossy(
+            //         &window_info.class_name[..window_info.class_name_len as usize],
+            //     );
+            //     println!(
+            //         "[DEBUG] HWND ending in 2E: hwnd=0x{:X}, title='{}', class='{}'",
+            //         hwnd, title, class_name
+            //     );
+            // }
             // Skip desktop windows for occupancy
             if self.is_desktop_hwnd(*hwnd) {
                 continue;
@@ -1272,6 +1281,22 @@ impl WindowTracker {
         easing: EasingType,
     ) -> Result<(), String> {
         if let Some(current_rect) = Self::get_window_rect(hwnd) {
+            if current_rect.left == target_rect.left
+                && current_rect.top == target_rect.top
+                && current_rect.right == target_rect.right
+                && current_rect.bottom == target_rect.bottom
+            {
+                return Ok(());
+            }
+            let distance = (current_rect.left - target_rect.left).abs()
+                + (current_rect.top - target_rect.top).abs()
+                + (current_rect.right - target_rect.right).abs()
+                + (current_rect.bottom - target_rect.bottom).abs();
+            if distance <= 4 {
+                // If the window is already at the target (within 2 pixel), skip animation
+                self.move_window_to_rect(hwnd, target_rect)?;
+                return Ok(());
+            }
             let animation = WindowAnimation::new(
                 hwnd,
                 window::info::RectWrapper(current_rect),
@@ -1280,9 +1305,13 @@ impl WindowTracker {
                 easing.clone(),
             );
             self.active_animations.insert(hwnd, animation);
+            let title = Self::get_window_title(hwnd);
+            let class = Self::get_window_class(hwnd);
             println!(
-                "🎬 Started animation for window {:?}: {} -> {} over {:?}",
+                "🎬 Started animation for window {:?}: '{}' [{}] {} -> {} over {:?} {} {} {} {}",
                 hwnd,
+                title,
+                class,
                 format!(
                     "({},{},{},{})",
                     current_rect.left, current_rect.top, current_rect.right, current_rect.bottom
@@ -1291,7 +1320,11 @@ impl WindowTracker {
                     "({},{},{},{})",
                     target_rect.left, target_rect.top, target_rect.right, target_rect.bottom
                 ),
-                duration
+                duration,
+                (current_rect.left - target_rect.left),
+                (current_rect.top - target_rect.top),
+                (current_rect.right - target_rect.right),
+                (current_rect.bottom - target_rect.bottom)
             );
             Ok(())
         } else {
@@ -1299,9 +1332,9 @@ impl WindowTracker {
         }
     }
 
-    pub fn update_animations(&mut self) -> Vec<u64> {
+    pub fn update_animations(&mut self) -> (Vec<u64>, Vec<u64>) {
         let mut completed_animations = Vec::new();
-
+        let mut failed_animations = Vec::new();
         // Collect keys that need to be processed
         let animation_keys: Vec<u64> = self
             .active_animations
@@ -1315,10 +1348,10 @@ impl WindowTracker {
                     completed_animations.push(hwnd);
                 } else {
                     let current_rect = animation_entry.get_current_rect();
+
                     // Move window to current animation position
                     unsafe {
-                        use winapi::um::winuser::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
-                        SetWindowPos(
+                        let result = SetWindowPos(
                             hwnd as HWND,
                             std::ptr::null_mut(),
                             current_rect.left,
@@ -1327,6 +1360,33 @@ impl WindowTracker {
                             current_rect.bottom - current_rect.top,
                             SWP_NOZORDER | SWP_NOACTIVATE,
                         );
+                        if result == 0 {
+                            let error = GetLastError();
+                            println!(
+                                "[DEBUG] SetWindowPos failed for hwnd=0x{:X} with error code: {}",
+                                hwnd, error
+                            );
+                        }
+                    }
+
+                    if let Some(prev_rect) = WindowTracker::get_window_rect(hwnd) {
+                        if prev_rect.left != current_rect.left
+                            || prev_rect.top != current_rect.top
+                            || prev_rect.right != current_rect.right
+                            || prev_rect.bottom != current_rect.bottom
+                        {
+                            failed_animations.push(hwnd);
+                            // println!(
+                            //     "[DEBUG] Window 0x{:X} moved: prev=({}, {}, {}, {}), curr=({}, {}, {}, {}), size=({}x{}), requested=({}x{})",
+                            //     hwnd,
+                            //     prev_rect.left, prev_rect.top, prev_rect.right, prev_rect.bottom,
+                            //     current_rect.left, current_rect.top, current_rect.right, current_rect.bottom,
+                            //     current_rect.right - current_rect.left,
+                            //     current_rect.bottom - current_rect.top,
+                            //     animation_entry.target_rect.right - animation_entry.target_rect.left,
+                            //     animation_entry.target_rect.bottom - animation_entry.target_rect.top
+                            // );
+                        }
                     }
                 }
             }
@@ -1338,7 +1398,7 @@ impl WindowTracker {
             println!("🎬 Animation completed for window {:?}", hwnd);
         }
 
-        completed_animations
+        (completed_animations, failed_animations)
     }
 
     pub fn apply_grid_layout(

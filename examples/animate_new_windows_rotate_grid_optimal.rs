@@ -1,9 +1,23 @@
+//! Animate new windows on Monitor 1 in a dynamically optimal grid layout.
+//!
+//! - Listens for new window creation events and animates them into a grid.
+//! - The grid layout is recalculated to minimize unused cells and keep the grid as square as possible.
+//! - Windows are assigned to grid cells in row-major order.
+//! - Uses lock-free DashMap/DashSet for window tracking and original positions.
+//! - Handles graceful shutdown and restores windows to their original positions on exit.
+//! - Supports rotating window positions within the grid.
+//!
+//! Usage:
+//!   - Run the program. Open new windows to see them animated into the grid.
+//!   - Press Ctrl+C, q, x, or Esc to exit and restore window positions.
+
 use crossterm::event::{self, Event, KeyCode};
 use ctrlc;
+use dashmap::{DashMap, DashSet};
 use e_grid::window_events::{run_message_loop, WindowEventConfig};
 use e_grid::window_tracker::WindowTracker;
 use e_grid::EasingType;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self};
 use std::sync::{Arc, Mutex};
@@ -11,6 +25,44 @@ use std::thread;
 use std::time::Duration;
 use winapi::shared::windef::RECT;
 
+/// Returns the optimal grid size (rows, cols) for n windows.
+/// The grid will be as square as possible and will not grow until all cells are filled.
+///
+/// # Arguments
+/// * `n` - Number of windows to arrange.
+/// * `max_rows` - Maximum allowed rows.
+/// * `max_cols` - Maximum allowed columns.
+///
+/// # Returns
+/// (rows, cols) tuple for the grid.
+fn optimal_grid(n: usize, max_rows: usize, max_cols: usize) -> (usize, usize) {
+    if n == 1 {
+        return (1, 1);
+    }
+    let mut best = (1, n);
+    let mut min_unused = usize::MAX;
+    for rows in 1..=max_rows {
+        for cols in 1..=max_cols {
+            if rows * cols < n {
+                continue;
+            }
+            let unused = rows * cols - n;
+            let aspect = (rows as isize - cols as isize).abs();
+            // Prefer more square grids, but minimize unused cells
+            if unused < min_unused
+                || (unused == min_unused && aspect < (best.0 as isize - best.1 as isize).abs())
+            {
+                best = (rows, cols);
+                min_unused = unused;
+            }
+        }
+    }
+    best
+}
+
+/// Main entry point.
+/// Sets up event hooks, window tracking, and runs the animation loop.
+/// Restores window positions on exit.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🆕 Animate NEW Windows on Monitor 1 in Rotating Grid (WinEvent, runs until Ctrl+C)");
 
@@ -28,16 +80,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Shared state for new windows and their original rects
     let tracker = Arc::new(Mutex::new(WindowTracker::new()));
-    let grid_hwnds = Arc::new(Mutex::new(Vec::<u64>::new()));
-    let original_rects = Arc::new(Mutex::new(HashMap::<u64, RECT>::new()));
-    let known_hwnds = Arc::new(Mutex::new(HashSet::<u64>::new()));
+    let grid_hwnds = Arc::new(DashMap::<u64, ()>::new()); // <-- DashMap for HWNDs
+    let original_rects = Arc::new(DashMap::<u64, RECT>::new());
+    let known_hwnds = Arc::new(DashSet::<u64>::new());
 
     // Ensure tracker is initialized and monitors are available
     {
         let mut tracker_guard = tracker.lock().unwrap();
         tracker_guard.scan_existing_windows();
         for hwnd in tracker_guard.windows.iter() {
-            known_hwnds.lock().unwrap().insert(*hwnd.key());
+            known_hwnds.insert(*hwnd.key());
         }
         if tracker_guard.monitor_grids.len() < 2 {
             println!("Less than 2 monitors detected. Aborting.");
@@ -82,12 +134,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if let e_grid::ipc_protocol::GridEvent::WindowCreated { hwnd, .. } = event {
             println!("🆕 Window created: HWND 0x{:X}", hwnd);
-            let mut known = known_hwnds_clone.lock().unwrap();
-            if known.contains(&hwnd) {
+            // --- Lock-free known_hwnds check/insert ---
+            if known_hwnds_clone.contains(&hwnd) {
                 println!("🟡 [DEBUG] HWND 0x{:X} already known, skipping.", hwnd);
                 return;
             }
-            known.insert(hwnd);
+            known_hwnds_clone.insert(hwnd);
 
             // --- Lock-free tracker request via channel ---
             let grid_hwnds_clone = grid_hwnds_clone.clone();
@@ -138,22 +190,66 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "🔍 [CHANNEL] Saving original rect for HWND 0x{:X}: left={}, top={}, right={}, bottom={}",
                             hwnd, rect.left, rect.top, rect.right, rect.bottom
                         );
-                        original_rects_clone.lock().unwrap().insert(hwnd, *rect);
+                        original_rects_clone.insert(hwnd, *rect); // <-- DashMap, no lock
                     } else if let Some(rect) = WindowTracker::get_window_rect(hwnd) {
-                        // fallback if not in tracker.windows
                         println!(
                             "🔍 [CHANNEL] Fallback: Saving original rect for HWND 0x{:X}: left={}, top={}, right={}, bottom={}",
                             hwnd, rect.left, rect.top, rect.right, rect.bottom
                         );
-                        original_rects_clone.lock().unwrap().insert(hwnd, rect);
+                        original_rects_clone.insert(hwnd, rect); // <-- DashMap, no lock
                     } else {
                         println!("🔴 [CHANNEL] No rect found for HWND 0x{:X}", hwnd);
                     }
 
-                    println!("🔍 [CHANNEL] Adding HWND 0x{:X} to grid_hwnds", hwnd);
-                    grid_hwnds_clone.lock().unwrap().push(hwnd);
-                    let grid_hwnds_now = grid_hwnds_clone.lock().unwrap().clone();
-                    println!("🔍 [CHANNEL] Current grid_hwnds: {:?}", grid_hwnds_now);
+                    // --- Add HWND to grid_hwnds, then clone in a single lock block ---
+                    let grid_hwnds_now = {
+                        grid_hwnds_clone.insert(hwnd, ());
+                        println!("🔍 [CHANNEL] Adding HWND 0x{:X} to grid_hwnds", hwnd);
+
+                        // --- DashMap: Get current HWNDs as Vec<u64> ---
+                        let grid_hwnds_now: Vec<u64> = grid_hwnds_clone.iter().map(|entry| *entry.key()).collect();
+                        // --- Use optimal_grid for layout ---
+                        let (monitor_rect, max_rows, max_cols) = {
+                            let monitor = tracker.monitor_grids.iter()
+                                .find(|m| m.monitor_id == 1)
+                                .unwrap_or(&tracker.monitor_grids[1]);
+                            (monitor.monitor_rect, monitor.config.rows, monitor.config.cols)
+                        };
+                        let n = grid_hwnds_now.len();
+                        let (rows, cols) = optimal_grid(n, max_rows, max_cols);
+                        println!("🔍 [CHANNEL] Optimal grid for {} windows: {} rows x {} cols", n, rows, cols);
+
+                        // --- Assign windows to grid cells (row-major) ---
+                        let mut positions: Vec<RECT> = Vec::new();
+                        let cell_width = (monitor_rect.right - monitor_rect.left) / cols as i32;
+                        let cell_height = (monitor_rect.bottom - monitor_rect.top) / rows as i32;
+                        for idx in 0..grid_hwnds_now.len() {
+                            let row = idx / cols;
+                            let col = idx % cols;
+                            let rect = RECT {
+                                left: monitor_rect.left + col as i32 * cell_width,
+                                top: monitor_rect.top + row as i32 * cell_height,
+                                right: monitor_rect.left + (col as i32 + 1) * cell_width,
+                                bottom: monitor_rect.top + (row as i32 + 1) * cell_height,
+                            };
+                            println!(
+                                "🔍 [CHANNEL] Target rect for HWND 0x{:X}: left={}, top={}, right={}, bottom={}",
+                                grid_hwnds_now[idx], rect.left, rect.top, rect.right, rect.bottom
+                            );
+                            positions.push(rect);
+                        }
+                        // --- Debug: Show assigned positions ---
+                        for (idx, hwnd) in grid_hwnds_now.iter().enumerate() {
+                            let rect = positions[idx];
+                            println!(
+                                "🔍 [CHANNEL] HWND 0x{:X} assigned to position left={}, top={}, right={}, bottom={}",
+                                hwnd, rect.left, rect.top, rect.right, rect.bottom
+                            );
+                        }
+
+                        // --- Return current HWNDs and their target positions ---
+                        (grid_hwnds_now, positions)
+                    };
 
                     // Monitor info and animation
                     let (monitor_rect, rows, cols) = {
@@ -163,31 +259,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (monitor.monitor_rect, monitor.config.rows, monitor.config.cols)
                     };
 
-                    let grid_size = grid_hwnds_now.len().next_power_of_two().min(rows.min(cols));
+                    let grid_size = grid_hwnds_now.0.len().next_power_of_two().min(rows.min(cols));
                     println!("🔍 [CHANNEL] Grid size for animation: {}", grid_size);
 
-                    let mut positions: Vec<RECT> = Vec::new();
+                    // --- Use optimal grid for positions ---
+                    let n = grid_hwnds_now.0.len();
+                    let (opt_rows, opt_cols) = optimal_grid(n, rows, cols);
+                    let cell_width = ((monitor_rect.right - monitor_rect.left) as f64 / opt_cols as f64).ceil() as i32;
+                    let cell_height = ((monitor_rect.bottom - monitor_rect.top) as f64 / opt_rows as f64).ceil() as i32;
+                    let mut positions: Vec<RECT> = Vec::with_capacity(n);
 
-                    for idx in 0..grid_hwnds_now.len() {
-                        let row = idx / grid_size;
-                        let col = idx % grid_size;
-                        let cell_width = (monitor_rect.right - monitor_rect.left) / grid_size as i32;
-                        let cell_height = (monitor_rect.bottom - monitor_rect.top) / grid_size as i32;
+                    for idx in 0..n {
+                        let row = idx / opt_cols;
+                        let col = idx % opt_cols;
+                        let left = monitor_rect.left + col as i32 * cell_width;
+                        let top = monitor_rect.top + row as i32 * cell_height;
+                        let right = if col + 1 == opt_cols {
+                            monitor_rect.right
+                        } else {
+                            monitor_rect.left + (col as i32 + 1) * cell_width
+                        };
+                        let bottom = if row + 1 == opt_rows {
+                            monitor_rect.bottom
+                        } else {
+                            monitor_rect.top + (row as i32 + 1) * cell_height
+                        };
                         let rect = RECT {
-                            left: monitor_rect.left + col as i32 * cell_width,
-                            top: monitor_rect.top + row as i32 * cell_height,
-                            right: monitor_rect.left + (col as i32 + 1) * cell_width,
-                            bottom: monitor_rect.top + (row as i32 + 1) * cell_height,
+                            left,
+                            top,
+                            right,
+                            bottom,
                         };
                         println!(
                             "🔍 [CHANNEL] Target rect for HWND 0x{:X}: left={}, top={}, right={}, bottom={}",
-                            grid_hwnds_now[idx], rect.left, rect.top, rect.right, rect.bottom
+                            grid_hwnds_now.0[idx], rect.left, rect.top, rect.right, rect.bottom
                         );
                         positions.push(rect);
                     }
 
                     println!("🔍 [CHANNEL] Issuing animation commands...");
-                    for (hwnd, rect) in grid_hwnds_now.iter().zip(&positions) {
+                    let (hwnd_vec, positions_vec) = (&grid_hwnds_now.0, &positions);
+                    for (hwnd, rect) in hwnd_vec.iter().zip(positions_vec) {
                         println!("Animating HWND 0x{:X} to rect ({},{})-({},{}) on monitor_id=1", hwnd, rect.left, rect.top, rect.right, rect.bottom);
                         let res = tracker.start_window_animation(
                             *hwnd,
@@ -248,9 +360,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             // On exit, restore original positions for new windows
             let (grid_hwnds_vec, original_rects_map) = {
-                let grid_hwnds = grid_hwnds.lock().unwrap();
-                let original_rects = original_rects.lock().unwrap();
-                (grid_hwnds.clone(), original_rects.clone())
+                // DashMap: clone keys and values into a HashMap for animation
+                let grid_hwnds_vec: Vec<u64> =
+                    grid_hwnds.iter().map(|entry| *entry.key()).collect();
+                let original_rects: HashMap<u64, RECT> = original_rects
+                    .iter()
+                    .map(|entry| (*entry.key(), *entry.value()))
+                    .collect();
+                (grid_hwnds_vec, original_rects)
             };
             let mut tracker_guard = tracker.lock().unwrap();
             println!("Restoring new windows to original positions...");
@@ -278,47 +395,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Rotate grid windows if more than 1
-        let (do_rotate, grid_hwnds_vec) = {
-            let grid_hwnds = grid_hwnds.lock().unwrap();
-            (grid_hwnds.len() > 1, grid_hwnds.clone())
-        };
+        let grid_hwnds_vec: Vec<u64> = grid_hwnds.iter().map(|entry| *entry.key()).collect();
+        let do_rotate = grid_hwnds_vec.len() > 1;
+
         if do_rotate {
-            let grid_size = grid_hwnds_vec.len().next_power_of_two().min(rows.min(cols));
-            let mut positions: Vec<RECT> = Vec::new();
-            for idx in 0..grid_hwnds_vec.len() {
-                let row = idx / grid_size;
-                let col = idx % grid_size;
-                let cell_width = (monitor_rect.right - monitor_rect.left) / grid_size as i32;
-                let cell_height = (monitor_rect.bottom - monitor_rect.top) / grid_size as i32;
-                positions.push(RECT {
-                    left: monitor_rect.left + col as i32 * cell_width,
-                    top: monitor_rect.top + row as i32 * cell_height,
-                    right: monitor_rect.left + (col as i32 + 1) * cell_width,
-                    bottom: monitor_rect.top + (row as i32 + 1) * cell_height,
-                });
-            }
-            // Rotate the vector (need to update the shared state)
+            // --- Remove closed windows from grid_hwnds before rotating ---
             {
-                let mut grid_hwnds = grid_hwnds.lock().unwrap();
-                grid_hwnds.rotate_right(1);
+                let tracker_guard = tracker.lock().unwrap();
+                for hwnd in grid_hwnds_vec.iter() {
+                    if !tracker_guard.windows.contains_key(hwnd) {
+                        grid_hwnds.remove(hwnd);
+                    }
+                }
             }
-            // Use the rotated vector for animation
-            let grid_hwnds_rotated = {
-                let grid_hwnds = grid_hwnds.lock().unwrap();
-                grid_hwnds.clone()
-            };
-            let mut tracker_guard = tracker.lock().unwrap();
-            for (hwnd, rect) in grid_hwnds_rotated.iter().zip(&positions) {
-                let _ = tracker_guard.start_window_animation(
-                    *hwnd,
-                    *rect,
-                    Duration::from_millis(700),
-                    EasingType::EaseInOut,
-                );
-            }
-            for _ in 0..14 {
-                let _ = tracker_guard.update_animations();
-                thread::sleep(Duration::from_millis(50));
+            let grid_hwnds_vec: Vec<u64> = grid_hwnds.iter().map(|entry| *entry.key()).collect();
+            let n = grid_hwnds_vec.len();
+            let (rows, cols) = optimal_grid(n, rows, cols);
+
+            if grid_hwnds_vec.len() > 0 {
+                let cell_width = (monitor_rect.right - monitor_rect.left) / cols as i32;
+                let cell_height = (monitor_rect.bottom - monitor_rect.top) / rows as i32;
+                let mut positions: Vec<RECT> = Vec::new();
+                for idx in 0..grid_hwnds_vec.len() {
+                    let row = idx / cols;
+                    let col = idx % cols;
+                    positions.push(RECT {
+                        left: monitor_rect.left + col as i32 * cell_width,
+                        top: monitor_rect.top + row as i32 * cell_height,
+                        right: monitor_rect.left + (col as i32 + 1) * cell_width,
+                        bottom: monitor_rect.top + (row as i32 + 1) * cell_height,
+                    });
+                }
+                // Rotate the grid_hwnds_vec (lock-free, just rotate Vec)
+                let mut grid_hwnds_rotated = grid_hwnds_vec.clone();
+                if grid_hwnds_rotated.len() > 1 {
+                    grid_hwnds_rotated.rotate_right(1);
+                }
+                let mut tracker_guard = tracker.lock().unwrap();
+                for (hwnd, rect) in grid_hwnds_rotated.iter().zip(&positions) {
+                    let _ = tracker_guard.start_window_animation(
+                        *hwnd,
+                        *rect,
+                        Duration::from_millis(700),
+                        EasingType::EaseInOut,
+                    );
+                }
+                for _ in 0..14 {
+                    let _ = tracker_guard.update_animations();
+                    thread::sleep(Duration::from_millis(50));
+                }
             }
         }
 

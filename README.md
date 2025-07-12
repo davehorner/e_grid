@@ -2,6 +2,10 @@
 
 A comprehensive, event-driven window management system that provides real-time window tracking, grid-based positioning, and efficient IPC-based communication across multiple monitors.
 
+7/25 - now exposes `e_grid_all` which will grid all windows except the initial focused window.  All other windows are placed across all monitors in an "optimal" way.  If you open or close a window, the monitor grids will grow or shrink to accommodate; the windows will animate to their target cells with a random ease type.
+
+---
+
 NOTICE: This repository is in an interesting state; the examples and functionality may or may not be implemented. Have a look at [e_midi](https://crates.io/crates/e_midi) which includes an example of playing a midi sound using the focus and defocused events. Aside from that; Feel free to take a look at the LLM cruft, it will give you an idea of some of the directions this project could go.
 
 Dave Horner 6/25 MIT/Apache License
