@@ -1,6 +1,6 @@
 [package]
 name = "e_grid"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "A real-time, multi-monitor window grid management and tracking system for Windows."
 authors = ["David Horner"]
@@ -48,6 +48,11 @@ lazy_static = "1.5.0"
 [[bin]]
 name = "e_grid"
 path = "src/main.rs"
+
+[[bin]]
+name = "e_grid_all"
+path = "examples/animate_windows_optimal_across_all_monitors.rs"
+
 
 [dev-dependencies]
 serial_test = "3.2.0"

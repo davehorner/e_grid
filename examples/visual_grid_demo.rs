@@ -363,12 +363,19 @@ impl VisualGridDemo {
         // Use the library's animation system instead of custom logic
         if let Ok(mut tracker) = self.tracker.lock() {
             // Update animations using the WindowTracker's built-in animation system
-            let completed_windows = tracker.update_animations();
+            let (completed_windows, failed_windows) = tracker.update_animations();
 
             if !completed_windows.is_empty() {
                 println!(
                     "✅ Animation frames completed for {} windows",
                     completed_windows.len()
+                );
+            }
+
+            if !failed_windows.is_empty() {
+                println!(
+                    "⚠️ Animation frames failed for {} windows",
+                    failed_windows.len()
                 );
             }
 

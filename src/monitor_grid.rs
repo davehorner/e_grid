@@ -24,6 +24,15 @@ impl MonitorRect {
             bottom: rect.bottom,
         }
     }
+
+    pub fn to_rect(&self) -> RECT {
+        RECT {
+            left: self.left,
+            top: self.top,
+            right: self.right,
+            bottom: self.bottom,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

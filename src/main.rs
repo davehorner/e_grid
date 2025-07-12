@@ -8,8 +8,8 @@ use e_grid::{ipc_server, window_events, GridClient};
 use iceoryx2::prelude::*;
 use iceoryx2::service::ipc::Service;
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use std::{
@@ -402,9 +402,12 @@ fn start_server() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Update animations
-        if let Ok(completed) = ipc_server.update_animations() {
+        if let Ok((completed, failed)) = ipc_server.update_animations() {
             if !completed.is_empty() {
                 println!("🎬 Completed animations for {} windows", completed.len());
+            }
+            if !failed.is_empty() {
+                println!("⚠️ Failed animations for {} windows", failed.len());
             }
         }
 
