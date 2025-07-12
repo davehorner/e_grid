@@ -323,12 +323,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         thread::sleep(Duration::from_millis(animation_duration.as_millis() as u64 / 16));
                     }
                     // Ensure initial focused window stays foreground
-                    if initial_focused_hwnd != 0 {
-                        unsafe {
-                            use winapi::um::winuser::SetForegroundWindow;
-                            SetForegroundWindow(initial_focused_hwnd as winapi::shared::windef::HWND);
-                        }
-                    }
+                    initial_focused_window_stays_foreground(initial_focused_hwnd);
                 }
             })).unwrap();
         }
@@ -705,13 +700,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // Ensure initial focused window stays foreground
-        if initial_focused_hwnd != 0 {
-            unsafe {
-                use winapi::um::winuser::SetForegroundWindow;
-                SetForegroundWindow(initial_focused_hwnd as winapi::shared::windef::HWND);
-            }
-        }
+        // // Ensure initial focused window stays foreground
+        // if initial_focused_hwnd != 0 {
+        //     unsafe {
+        //         initial_focused_window_stays_foreground(initial_focused_hwnd);
+        //     }
+        // }
 
         // Initial focused window remains in position, not animated
         //thread::sleep(Duration::from_millis(500));
@@ -725,4 +719,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     e_grid::window_events::cleanup_hooks();
 
     Ok(())
+}
+
+fn initial_focused_window_stays_foreground(initial_focused_hwnd: u64) {
+    if initial_focused_hwnd != 0 {
+        // Capture the current foreground window before setting
+        let prev_foreground_hwnd = WindowTracker::get_foreground_window().unwrap_or(0);
+        // Bring initial focused window to top without stealing focus
+        unsafe {
+            use winapi::um::winuser::GetAncestor;
+            use winapi::um::winuser::GA_ROOT;
+            use winapi::um::winuser::{
+                SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            };
+            // Get the top-level window for initial_focused_hwnd
+            let mut toplevel_hwnd = initial_focused_hwnd;
+            unsafe {
+                let hwnd = initial_focused_hwnd as winapi::shared::windef::HWND;
+                let ancestor = GetAncestor(hwnd, GA_ROOT);
+                if !ancestor.is_null() {
+                    toplevel_hwnd = ancestor as u64;
+                }
+            }
+            // Set initial focused window as topmost
+            SetWindowPos(
+                toplevel_hwnd as winapi::shared::windef::HWND,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+            use winapi::um::winuser::SetForegroundWindow;
+            SetForegroundWindow(prev_foreground_hwnd as winapi::shared::windef::HWND);
+            // // Briefly wait to ensure Z-order change is registered
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            // // Restore to normal (not topmost)
+            SetWindowPos(
+                initial_focused_hwnd as winapi::shared::windef::HWND,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+        // Restore previous foreground window
+        if prev_foreground_hwnd != 0 {
+            unsafe {
+                use winapi::um::winuser::SetForegroundWindow;
+                SetForegroundWindow(prev_foreground_hwnd as winapi::shared::windef::HWND);
+            }
+        }
+        println!(
+            "Brought initial focused window (HWND 0x{:X}) to top without focus. Restored previous foreground HWND: 0x{:X}",
+            initial_focused_hwnd, prev_foreground_hwnd
+        );
+    }
 }

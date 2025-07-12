@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/davehorner/e_grid/compare/v0.1.5...v0.1.6) - 2025-07-12
+
+### Fixed
+
+- *(e_grid_all)* stop chrome tooltips from being seen as toplevel windows.  if a window doesn't size, at least translate and set window z-order to bottom. fixed issue with focus being driven to initial focused window.
+
 ## [0.1.5](https://github.com/davehorner/e_grid/compare/v0.1.4...v0.1.5) - 2025-07-12
 
 ### Added
