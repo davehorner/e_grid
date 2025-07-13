@@ -443,6 +443,18 @@ impl WindowTracker {
     }
 
     pub fn update_grid(&mut self) {
+        // Throttle: only allow once every 1 seconds
+        {
+            if let Ok(mut last) = self.last_scan_time.try_lock() {
+                let now = std::time::Instant::now();
+                if now.duration_since(*last) < std::time::Duration::from_secs(1) {
+                    // Too soon, skip update
+                    // println!("[DEBUG] Skipping grid update: too soon since last update");
+                    return;
+                }
+                *last = now;
+            }
+        }
         // Reset grid to initial state (keeping off-screen cells marked)
         for row in 0..self.config.rows {
             for col in 0..self.config.cols {
@@ -492,19 +504,6 @@ impl WindowTracker {
                 }
             }
         }
-        // Throttle: only allow once every 2 seconds
-        {
-            let mut last = self.last_scan_time.lock().unwrap();
-            let now = std::time::Instant::now();
-            if now.duration_since(*last) < std::time::Duration::from_secs(1) {
-                // Too soon, skip update
-                // println!("[DEBUG] Skipping grid update: too soon since last update");
-                return;
-            }
-            *last = now;
-        }
-        // Print grid after update
-        self.print_all_grids();
     }
 
     /// Get the primary monitor rectangle for window positioning
@@ -618,6 +617,7 @@ impl WindowTracker {
             let monitor_cells = self.calculate_monitor_cells(&rect);
 
             // Get additional required fields for WindowInfo
+            let is_maximized = WindowTracker::is_window_maximized(hwnd);
             let is_visible = unsafe { IsWindowVisible(hwnd as HWND) != 0 };
             let is_minimized = unsafe { IsIconic(hwnd as HWND) != 0 };
             let mut process_id: u32 = 0;
@@ -693,6 +693,7 @@ impl WindowTracker {
                 window_rect: RectWrapper::from_rect(rect),
                 is_visible,
                 is_minimized,
+                is_maximized,
                 process_id,
                 class_name: class_name_buf,
                 class_name_len: class_name.len() as u32,
@@ -1288,6 +1289,14 @@ impl WindowTracker {
         duration: Duration,
         easing: EasingType,
     ) -> Result<(), String> {
+        if WindowTracker::is_window_maximized(hwnd) {
+            println!(
+                "HWND 0x{:X} is maximized (WindowTracker::is_maximized), skipping animation.",
+                hwnd
+            );
+            return Ok(());
+        }
+
         if let Some(current_rect) = Self::get_window_rect(hwnd) {
             if current_rect.left == target_rect.left
                 && current_rect.top == target_rect.top
@@ -1352,7 +1361,8 @@ impl WindowTracker {
 
         for hwnd in animation_keys {
             if let Some(mut animation_entry) = self.active_animations.get_mut(&hwnd) {
-                if animation_entry.is_completed() {
+                let is_window_maximized = WindowTracker::is_window_maximized(hwnd);
+                if animation_entry.is_completed() || is_window_maximized {
                     completed_animations.push(hwnd);
                 } else {
                     let current_rect = animation_entry.get_current_rect();
@@ -1802,6 +1812,69 @@ impl WindowTracker {
         unsafe { IsIconic(hwnd as HWND) != 0 }
     }
 
+    /// Returns true if the window is maximized.
+    pub fn is_window_maximized(hwnd: u64) -> bool {
+        unsafe {
+            if IsWindow(hwnd as HWND) == 0 {
+                return false;
+            }
+            // Check window placement
+            let mut placement = std::mem::zeroed::<WINDOWPLACEMENT>();
+            placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+            if GetWindowPlacement(hwnd as HWND, &mut placement) != 0 {
+                if placement.showCmd == SW_MAXIMIZE as u32 {
+                    return true;
+                }
+            }
+            // Fallback to IsZoomed and WS_MAXIMIZE style
+            let is_zoomed = IsZoomed(hwnd as HWND) != 0;
+            let style = GetWindowLongW(hwnd as HWND, GWL_STYLE) as u32;
+            let is_maximized_style = (style & WS_MAXIMIZE) != 0;
+            if is_zoomed || is_maximized_style {
+                return true;
+            }
+            // Check if window rect matches any monitor rect
+            if let Some(rect) = Self::get_window_rect(hwnd) {
+                // Get all monitor bounds
+                let monitor_rects = Self::get_actual_monitor_bounds_static();
+                for monitor_rect in monitor_rects {
+                    if rect.left == monitor_rect.left
+                        && rect.top == monitor_rect.top
+                        && rect.right == monitor_rect.right
+                        && rect.bottom == monitor_rect.bottom
+                    {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+    }
+
+    // Helper for static monitor bounds (for use in static fn)
+    fn get_actual_monitor_bounds_static() -> Vec<RECT> {
+        let mut monitors = Vec::new();
+        unsafe {
+            extern "system" fn monitor_enum_proc(
+                _hmonitor: winapi::shared::windef::HMONITOR,
+                _hdc: winapi::shared::windef::HDC,
+                rect: *mut RECT,
+                data: LPARAM,
+            ) -> i32 {
+                let monitors = unsafe { &mut *(data as *mut Vec<RECT>) };
+                monitors.push(unsafe { *rect });
+                1
+            }
+            EnumDisplayMonitors(
+                ptr::null_mut(),
+                ptr::null(),
+                Some(monitor_enum_proc),
+                &mut monitors as *mut Vec<RECT> as LPARAM,
+            );
+        }
+        monitors
+    }
+
     pub fn set_grid_size(&mut self, rows: usize, cols: usize) {
         self.config.rows = rows;
         self.config.cols = cols;
@@ -1929,6 +2002,7 @@ impl WindowTracker {
                     );
                     let is_visible = IsWindowVisible(hwnd) != 0;
                     let is_minimized = IsIconic(hwnd) != 0;
+                    let is_maximized = WindowTracker::is_window_maximized(hwnd as u64);
                     let mut process_id: u32 = 0;
                     GetWindowThreadProcessId(hwnd, &mut process_id);
 
@@ -1941,6 +2015,7 @@ impl WindowTracker {
                         window_rect: RectWrapper::from_rect(rect),
                         is_visible,
                         is_minimized,
+                        is_maximized,
                         process_id,
                         class_name: class_name_buf,
                         class_name_len: class_name_len as u32,

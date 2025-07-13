@@ -695,6 +695,7 @@ impl WindowEventSystem {
                     let class_name = crate::WindowTracker::get_window_class_name(hwnd as u64);
                     let is_visible = crate::WindowTracker::is_window_visible(hwnd as u64);
                     let is_minimized = crate::WindowTracker::is_window_minimized(hwnd as u64);
+                    let is_maximized = crate::WindowTracker::is_window_maximized(hwnd as u64);
                     let window_info = crate::WindowInfo {
                         hwnd: hwnd as u64,
                         window_rect: window::info::RectWrapper(rect),
@@ -716,6 +717,7 @@ impl WindowEventSystem {
                         },
                         is_visible,
                         is_minimized,
+                        is_maximized,
                         process_id,
                         class_name: {
                             let mut class_name_buf = [0u16; 256];

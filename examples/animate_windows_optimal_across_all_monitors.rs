@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use winapi::shared::windef::RECT;
-
+const FRAME_STEP_CNT: u64 = 32;
 /// Returns the optimal grid size (rows, cols) for n windows.
 /// The grid will be as square as possible and will not grow until all cells are filled.
 ///
@@ -171,18 +171,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // Animation logic
-                let (is_visible, is_minimized, title) = if let Some(info) = tracker.windows.get(&hwnd) {
+                let (is_visible, is_minimized, is_maximized, title) = if let Some(info) = tracker.windows.get(&hwnd) {
                     (
                         info.is_visible,
                         info.is_minimized,
+                        info.is_maximized,
                         String::from_utf16_lossy(&info.title[..info.title_len as usize]),
                     )
                 } else {
-                    (false, false, String::new())
+                    (false, false, false, String::new())
                 };
-                println!("🔍 [CHANNEL] After foreground/minimize: HWND 0x{:X} visible={}, minimized={}", hwnd, is_visible, is_minimized);
+                println!("🔍 [CHANNEL] After foreground/minimize: HWND 0x{:X} visible={}, minimized={}, maximized={}", hwnd, is_visible, is_minimized, is_maximized);
 
-                if is_visible && !is_minimized && WindowTracker::is_manageable_window(hwnd) {
+                if is_visible && !is_maximized &&!is_minimized && WindowTracker::is_manageable_window(hwnd) {
                     println!("🆕 [CHANNEL] New window detected: HWND 0x{:X} '{}'", hwnd, title);
 
                     // --- Fix: Always get and store the rect BEFORE any animation ---
@@ -305,6 +306,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("🔍 [CHANNEL] Issuing animation commands...");
                     let (hwnd_vec, positions_vec) = (&grid_hwnds_now.0, &positions);
                     for (hwnd, rect) in hwnd_vec.iter().zip(positions_vec) {
+
+                        if WindowTracker::is_window_maximized(*hwnd) {
+                            println!(
+                                "HWND 0x{:X} is maximized (WindowTracker::is_maximized), skipping animation.",
+                                hwnd
+                            );
+                            continue;
+                        }
+
                         println!("Animating HWND 0x{:X} to rect ({},{})-({},{}) on monitor_id=1", hwnd, rect.left, rect.top, rect.right, rect.bottom);
                         let res = tracker.start_window_animation(
                             *hwnd,
@@ -318,9 +328,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("✅ Animation command issued for HWND 0x{:X}", hwnd);
                         }
                     }
-                    for step in 0..16 {
+                    for step in 0..FRAME_STEP_CNT {
                         tracker.update_animations();
-                        thread::sleep(Duration::from_millis(animation_duration.as_millis() as u64 / 16));
+                        thread::sleep(Duration::from_millis(animation_duration.as_millis() as u64 / FRAME_STEP_CNT));
                     }
                     // Ensure initial focused window stays foreground
                     initial_focused_window_stays_foreground(initial_focused_hwnd);
@@ -388,10 +398,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
-            for _ in 0..16 {
+            for _ in 0..FRAME_STEP_CNT {
                 let _ = tracker_guard.update_animations();
                 thread::sleep(Duration::from_millis(
-                    animation_duration.as_millis() as u64 / 16,
+                    animation_duration.as_millis() as u64 / FRAME_STEP_CNT,
                 ));
             }
             // Cleanup WinEvent hooks to avoid lingering background threads
@@ -403,12 +413,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return false;
         }
 
-        let mut tracker_guard = tracker.lock().unwrap();
+        let tracker_guard = tracker.lock().unwrap();
         let all_hwnds: Vec<u64> = tracker_guard
             .windows
             .iter()
-            .map(|entry| *entry.key())
-            .filter(|hwnd| *hwnd != initial_focused_hwnd)
+            .map(|entry| {
+                (
+                    *entry.key(),
+                    entry.value().is_maximized,
+                    entry.value().is_minimized,
+                    entry.value().is_visible,
+                )
+            })
+            .filter(|(hwnd, is_maximized, is_minimized, is_visible)| {
+                *hwnd != initial_focused_hwnd && !*is_minimized && *is_visible //&& !*is_maximized allow maximized windows a space and dont rearrange when they are maximized
+            })
+            .map(|(hwnd, _, _, _)| hwnd)
             .collect();
 
         // --- Distribute windows based on monitor resolution ---
@@ -422,6 +442,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 w * h
             })
             .collect();
+        drop(tracker_guard);
         let total_area: i64 = monitor_areas.iter().sum();
 
         // Assign windows proportionally to monitor area
@@ -435,11 +456,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Adjust for rounding errors so sum matches total windows
         let mut assigned = windows_per_monitor.iter().sum::<usize>();
         while assigned < all_hwnds.len() {
+            println!(
+                "Adjusting window distribution: assigned={} < total={}",
+                assigned,
+                all_hwnds.len()
+            );
             if let Some((idx, _)) = monitor_areas.iter().enumerate().max_by_key(|(_, &a)| a) {
                 windows_per_monitor[idx] += 1;
                 assigned += 1;
             }
         }
+
         while assigned > all_hwnds.len() {
             if let Some((idx, _)) = windows_per_monitor
                 .iter()
@@ -458,6 +485,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 2. For each monitor, compute the optimal grid for its assigned windows
         let mut monitor_grids: Vec<(usize, usize, i32, i32)> = Vec::with_capacity(monitor_count);
+        let tracker_guard = tracker.lock().unwrap();
         for (monitor_idx, monitor) in tracker_guard.monitor_grids.iter().enumerate() {
             let n = windows_per_monitor[monitor_idx];
             let (rows, cols) = optimal_grid(n, monitor.config.rows, monitor.config.cols);
@@ -471,7 +499,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 monitor_idx, n, rows, cols, cell_width, cell_height
             );
         }
-
+        drop(tracker_guard);
         // 3. Assign windows to grid cells on each monitor
         let mut hwnd_idx = 0;
         let mut grid_targets: Vec<(u64, RECT)> = Vec::new();
@@ -486,11 +514,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut hwnd_assignments: HashMap<u64, (usize, usize, usize)> = HashMap::new();
 
         // First, assign windows to existing empty cells (row-major order)
+        let tracker_guard = tracker.lock().unwrap();
         for (monitor_idx, monitor) in tracker_guard.monitor_grids.iter().enumerate() {
             let n = windows_per_monitor[monitor_idx];
             let (rows, cols, cell_width, cell_height) = monitor_grids[monitor_idx];
             let used_cells = &mut monitor_used_cells[monitor_idx];
-
+            let monitor_hwnd_idx = hwnd_idx;
             for row in 0..rows {
                 for col in 0..cols {
                     if hwnd_idx < total_windows {
@@ -528,7 +557,106 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            // Check if all assigned windows fill the grid for this monitor
+            let assigned_cells = used_cells.iter().flatten().filter(|&&used| used).count();
+            println!(
+                "Monitor {}: assigned_cells={}, total_cells={}, n={}",
+                monitor_idx,
+                assigned_cells,
+                rows * cols,
+                n
+            );
+            if assigned_cells < n {
+                // Undo previous assignments for this monitor
+                grid_targets.retain(|(hwnd, _)| {
+                    if let Some((assigned_monitor_idx, _, _)) = hwnd_assignments.get(hwnd) {
+                        *assigned_monitor_idx != monitor_idx
+                    } else {
+                        true
+                    }
+                });
+                // Clear used cells for this monitor
+                for row in 0..used_cells.len() {
+                    for col in 0..used_cells[row].len() {
+                        used_cells[row][col] = false;
+                    }
+                }
+                for hwnd in hwnd_assignments
+                    .iter()
+                    .filter(|(_, (assigned_monitor_idx, _, _))| {
+                        *assigned_monitor_idx == monitor_idx
+                    })
+                    .map(|(hwnd, _)| *hwnd)
+                    .collect::<Vec<u64>>()
+                {
+                    hwnd_assignments.remove(&hwnd);
+                }
+                let mut tmp_hwnd_idx = monitor_hwnd_idx;
+                // Not all rows/cols are filled, optimize grid for remaining windows
+                let remaining = assigned_cells;
+                let (opt_rows, opt_cols) =
+                    optimal_grid(assigned_cells, monitor.config.rows, monitor.config.cols);
+                println!(
+                    "Monitor {}: optimizing grid for remaining {} windows: {} rows x {} cols",
+                    monitor_idx, remaining, opt_rows, opt_cols
+                );
+
+                let grid_width = monitor.monitor_rect.right - monitor.monitor_rect.left;
+                let grid_height = monitor.monitor_rect.bottom - monitor.monitor_rect.top;
+                let opt_cell_width = grid_width / opt_cols as i32;
+                let opt_cell_height = grid_height / opt_rows as i32;
+                let mut rem_idx = 0;
+                // Update monitor_grids with optimized rows/cols for this monitor
+                monitor_grids[monitor_idx] = (opt_rows, opt_cols, opt_cell_width, opt_cell_height);
+                for row in 0..opt_rows {
+                    for col in 0..opt_cols {
+                        if rem_idx < remaining {
+                            if tmp_hwnd_idx < total_windows {
+                                let hwnd = all_hwnds[tmp_hwnd_idx];
+                                if WindowTracker::is_window_maximized(hwnd) {
+                                    println!(
+                                        "HWND 0x{:X} is maximized (WindowTracker::is_maximized), skipping grid assignment.",
+                                        hwnd
+                                    );
+                                    tmp_hwnd_idx += 1;
+                                    continue;
+                                }
+                                let left = monitor.monitor_rect.left + col as i32 * opt_cell_width;
+                                let top = monitor.monitor_rect.top + row as i32 * opt_cell_height;
+                                let right = if col + 1 == opt_cols {
+                                    monitor.monitor_rect.right
+                                } else {
+                                    left + opt_cell_width
+                                };
+                                let bottom = if row + 1 == opt_rows {
+                                    monitor.monitor_rect.bottom
+                                } else {
+                                    top + opt_cell_height
+                                };
+                                println!(
+                                    "Optimized assign HWND 0x{:X} to monitor {}: cell ({},{}), requested rect=({},{} -> {},{}), cell_size={}x{}",
+                                    hwnd, monitor_idx, row, col, left, top, right, bottom, right-left, bottom-top
+                                );
+
+                                grid_targets.push((
+                                    hwnd,
+                                    RECT {
+                                        left,
+                                        top,
+                                        right,
+                                        bottom,
+                                    },
+                                ));
+                                hwnd_assignments.insert(hwnd, (monitor_idx, row, col));
+                                tmp_hwnd_idx += 1;
+                                rem_idx += 1;
+                            }
+                        }
+                    }
+                }
+            }
         }
+        drop(tracker_guard);
 
         // If there are more windows than empty cells, assign remaining windows by expanding grid as before
         while hwnd_idx < total_windows {
@@ -539,7 +667,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .max_by_key(|(_, &area)| area)
                 .map(|(idx, _)| idx)
                 .unwrap_or(0);
-            let monitor = &tracker_guard.monitor_grids[monitor_idx];
+            let tracker_guard = tracker.lock().unwrap();
+            let monitor = tracker_guard.monitor_grids[monitor_idx].clone();
+            drop(tracker_guard);
             let (rows, cols, cell_width, cell_height) = monitor_grids[monitor_idx];
             let used_cells = &mut monitor_used_cells[monitor_idx];
 
@@ -549,6 +679,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for col in 0..cols {
                     if !used_cells[row][col] {
                         let hwnd = all_hwnds[hwnd_idx];
+
+                        if WindowTracker::is_window_maximized(hwnd) {
+                            println!(
+                                    "HWND 0x{:X} is maximized (WindowTracker::is_maximized), skipping grid assignment.",
+                                    hwnd
+                                );
+                            hwnd_idx += 1;
+                            continue;
+                        }
                         let left = monitor.monitor_rect.left + col as i32 * cell_width;
                         let top = monitor.monitor_rect.top + row as i32 * cell_height;
                         let right = if col + 1 == cols {
@@ -614,20 +753,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut already_animated: HashSet<u64> = HashSet::new();
         let animation_duration = Duration::from_millis(800);
         for (hwnd, rect) in grid_targets.iter() {
+            if WindowTracker::is_window_maximized(*hwnd) {
+                println!(
+                                    "HWND 0x{:X} is maximized (WindowTracker::is_maximized), skipping grid assignment.",
+                                    hwnd
+                                );
+                continue;
+            }
             if *hwnd != initial_focused_hwnd && !already_animated.contains(hwnd) {
+                let mut tracker_guard = tracker.lock().unwrap();
                 let _ = tracker_guard.start_window_animation(
                     *hwnd,
                     *rect,
                     animation_duration.clone(),
-                    EasingType::EaseInOut,
+                    {
+                        use rand::prelude::IndexedRandom;
+                        let variants: [e_grid::EasingType; 7] = [
+                            e_grid::EasingType::Linear,
+                            e_grid::EasingType::EaseIn,
+                            e_grid::EasingType::EaseOut,
+                            e_grid::EasingType::EaseInOut,
+                            e_grid::EasingType::Bounce,
+                            e_grid::EasingType::Elastic,
+                            e_grid::EasingType::Back,
+                        ];
+                        *variants.choose(&mut rand::rng()).unwrap()
+                    },
                 );
+                // Explicitly move the window to the target monitor using SetWindowPos
+                unsafe {
+                    use winapi::um::winuser::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+                    SetWindowPos(
+                        *hwnd as winapi::shared::windef::HWND,
+                        std::ptr::null_mut(),
+                        rect.left,
+                        rect.top,
+                        rect.right - rect.left,
+                        rect.bottom - rect.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
+                drop(tracker_guard);
                 already_animated.insert(*hwnd);
             }
         }
 
         // Animation steps and exit key check
         let animation_duration_ms = animation_duration.as_millis() as u64;
-        let frame_interval_ms = animation_duration_ms / 15; // 15 frames for smooth animation
+        let frame_interval_ms = animation_duration_ms / FRAME_STEP_CNT; // 32 frames for smooth animation
         let animation_steps = (animation_duration_ms / frame_interval_ms).max(1);
 
         for _ in 0..animation_steps {
@@ -643,7 +816,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .map(|entry| (*entry.key(), *entry.value()))
                                 .collect();
                             for (hwnd, rect) in original_rects.iter() {
+                                if WindowTracker::is_window_maximized(*hwnd) {
+                                    println!(
+                                    "HWND 0x{:X} is maximized (WindowTracker::is_maximized), skipping grid assignment.",
+                                    hwnd
+                                );
+                                    continue;
+                                }
                                 if *hwnd != initial_focused_hwnd {
+                                    let mut tracker_guard = tracker.lock().unwrap();
                                     let _ = tracker_guard.start_window_animation(
                                         *hwnd,
                                         *rect,
@@ -662,12 +843,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             *variants.choose(&mut rand::rng()).unwrap()
                                         },
                                     );
+                                    // Explicitly drop tracker_guard here so it is not moved
+                                    drop(tracker_guard);
                                 }
                             }
-                            for _ in 0..16 {
+                            for _ in 0..FRAME_STEP_CNT {
+                                let mut tracker_guard = tracker.lock().unwrap();
                                 let _ = tracker_guard.update_animations();
+                                drop(tracker_guard);
                                 thread::sleep(Duration::from_millis(
-                                    animation_duration.as_millis() as u64 / 16,
+                                    animation_duration.as_millis() as u64 / FRAME_STEP_CNT,
                                 ));
                             }
                             // Cleanup WinEvent hooks to avoid lingering background threads
@@ -682,21 +867,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            // Reacquire the lock for each animation step
+            let mut tracker_guard = tracker.lock().unwrap();
             let _ = tracker_guard.update_animations();
+            drop(tracker_guard);
             thread::sleep(Duration::from_millis(frame_interval_ms as u64));
         }
 
         // After animation, print actual window sizes for debugging
+        // Clone window rects outside the guard to minimize lock duration
+        let tracker_guard = tracker.lock().unwrap();
+        let actual_rects: HashMap<u64, RECT> = grid_targets
+            .iter()
+            .filter_map(|(hwnd, _)| {
+                tracker_guard
+                    .windows
+                    .get(hwnd)
+                    .map(|info| (*hwnd, info.window_rect.to_rect()))
+            })
+            .collect();
+        drop(tracker_guard);
+
         for (hwnd, rect) in grid_targets.iter() {
-            if let Some(info) = tracker_guard.windows.get(hwnd) {
-                let actual = info.window_rect;
+            if let Some(actual) = actual_rects.get(hwnd) {
                 println!(
-                    "Post-animation HWND 0x{:X}: actual rect=({},{} -> {},{}), size={}x{}, requested size={}x{}",
-                    hwnd,
-                    actual.left, actual.top, actual.right, actual.bottom,
-                    actual.right - actual.left, actual.bottom - actual.top,
-                    rect.right - rect.left, rect.bottom - rect.top
-                );
+                "Post-animation HWND 0x{:X}: actual rect=({},{} -> {},{}), size={}x{}, requested size={}x{}",
+                hwnd,
+                actual.left, actual.top, actual.right, actual.bottom,
+                actual.right - actual.left, actual.bottom - actual.top,
+                rect.right - rect.left, rect.bottom - rect.top
+            );
             }
         }
 
