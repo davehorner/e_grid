@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7](https://github.com/davehorner/e_grid/compare/v0.1.6...v0.1.7) - 2025-07-13
+
+### Added
+
+- *(grid)* skip grid placement and animation for maximized windows
+
 ## [0.1.6](https://github.com/davehorner/e_grid/compare/v0.1.5...v0.1.6) - 2025-07-12
 
 ### Fixed

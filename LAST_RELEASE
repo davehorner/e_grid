@@ -1,6 +1,6 @@
-﻿25/07/12|478e56d|0.1.6
-## [0.1.6](https://github.com/davehorner/e_grid/compare/v0.1.5...v0.1.6) - 2025-07-12
+﻿25/07/13|c4f1bc2|0.1.7
+## [0.1.7](https://github.com/davehorner/e_grid/compare/v0.1.6...v0.1.7) - 2025-07-13
 
-### Fixed
+### Added
 
-- *(e_grid_all)* stop chrome tooltips from being seen as toplevel windows.  if a window doesn't size, at least translate and set window z-order to bottom. fixed issue with focus being driven to initial focused window.
+- *(grid)* skip grid placement and animation for maximized windows

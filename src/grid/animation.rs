@@ -7,13 +7,16 @@ use crate::grid::traits::{AnimatableGrid, CellDisplay, GridError, GridResult, Gr
 use crate::window::info::RectWrapper;
 use crate::window::{WindowAnimation, WindowInfo};
 use iceoryx2::prelude::ZeroCopySend;
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use winapi::shared::windef::RECT;
 use winapi::um::winuser::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
 
 #[repr(C)]
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Copy, ZeroCopySend)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, Copy, ZeroCopySend, PartialEq, Eq, Hash,
+)]
 pub enum EasingType {
     Linear,
     EaseIn,
@@ -23,6 +26,23 @@ pub enum EasingType {
     Elastic,
     Back,
 }
+
+// Automatically build a static map from enum discriminant to name string
+pub static EASING_TYPE_MAP: Lazy<HashMap<EasingType, &'static str>> = Lazy::new(|| {
+    use EasingType::*;
+    [
+        (Linear, "Linear"),
+        (EaseIn, "EaseIn"),
+        (EaseOut, "EaseOut"),
+        (EaseInOut, "EaseInOut"),
+        (Bounce, "Bounce"),
+        (Elastic, "Elastic"),
+        (Back, "Back"),
+    ]
+    .iter()
+    .copied()
+    .collect()
+});
 
 #[derive(Debug, Clone)]
 pub enum AnimationCellState {
@@ -129,7 +149,7 @@ impl AnimationGrid {
                     1.0
                 } else {
                     let c4 = (2.0 * std::f32::consts::PI) / 3.0;
-                    -(2.0_f32.powf(10.0 * t - 10.0)) * ((t * 10.0 - 10.75) * c4).sin()
+                    -2.0_f32.powf(10.0 * t - 10.0) * ((t * 10.0 - 10.75) * c4).sin()
                 }
             }
             EasingType::Back => {

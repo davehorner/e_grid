@@ -37,6 +37,7 @@ pub struct WindowInfo {
     pub z_order: u32, // Z-order index for the window
     pub is_visible: bool,
     pub is_minimized: bool,
+    pub is_maximized: bool,
     pub process_id: u32,
     pub class_name: [u16; 256],
     pub class_name_len: u32, // Length of the class name string
@@ -69,6 +70,7 @@ impl Default for WindowInfo {
             z_order: 0,
             is_visible: false,
             is_minimized: false,
+            is_maximized: false,
             process_id: 0,
             class_name: [0u16; 256],
             class_name_len: 0,
@@ -141,6 +143,7 @@ impl WindowInfo {
             z_order: 0,
             is_visible: true,
             is_minimized: false,
+            is_maximized: false,
             process_id: 0,
             class_name: [0u16; 256],
             class_name_len: 0,
