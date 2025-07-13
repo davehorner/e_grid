@@ -177,54 +177,6 @@ fn apply_window_animation_frame(window: &mut WindowState, _progress: f32) -> boo
     false
 }
 
-fn apply_easing(t: f32, easing: &EasingType) -> f32 {
-    match easing {
-        EasingType::Linear => t,
-        EasingType::EaseIn => t * t * t,
-        EasingType::EaseOut => {
-            let u = 1.0 - t;
-            1.0 - (u * u * u)
-        }
-        EasingType::EaseInOut => {
-            if t < 0.5 {
-                4.0 * t * t * t
-            } else {
-                let u = 1.0 - t;
-                1.0 - 4.0 * u * u * u
-            }
-        }
-        EasingType::Bounce => {
-            if t < 1.0 / 2.75 {
-                7.5625 * t * t
-            } else if t < 2.0 / 2.75 {
-                let t = t - 1.5 / 2.75;
-                7.5625 * t * t + 0.75
-            } else if t < 2.5 / 2.75 {
-                let t = t - 2.25 / 2.75;
-                7.5625 * t * t + 0.9375
-            } else {
-                let t = t - 2.625 / 2.75;
-                7.5625 * t * t + 0.984375
-            }
-        }
-        EasingType::Elastic => {
-            if t == 0.0 {
-                0.0
-            } else if t == 1.0 {
-                1.0
-            } else {
-                let c4 = (2.0 * std::f32::consts::PI) / 3.0;
-                -(2.0_f32.powf(10.0 * t - 10.0)) * ((t * 10.0 - 10.75) * c4).sin()
-            }
-        }
-        EasingType::Back => {
-            let c1 = 1.70158;
-            let c3 = c1 + 1.0;
-            c3 * t * t * t - c1 * t * t
-        }
-    }
-}
-
 fn animate_windows_to_grid(
     windows: &mut [WindowState],
     monitor_rect: &RECT,

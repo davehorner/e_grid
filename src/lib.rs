@@ -142,6 +142,15 @@ impl WindowAnimation {
     pub fn apply_easing(&self, t: f32) -> f32 {
         match self.easing {
             EasingType::Linear => t,
+            EasingType::EaseInQuad => t * t,
+            EasingType::EaseOutQuad => 1.0 - (1.0 - t) * (1.0 - t),
+            EasingType::EaseInOutQuad => {
+                if t < 0.5 {
+                    2.0 * t * t
+                } else {
+                    1.0 - (-2.0 * t + 2.0).powf(2.0) / 2.0
+                }
+            }
             EasingType::EaseIn => t * t,
             EasingType::EaseOut => 1.0 - (1.0 - t) * (1.0 - t),
             EasingType::EaseInOut => {
@@ -152,17 +161,19 @@ impl WindowAnimation {
                 }
             }
             EasingType::Bounce => {
-                if t < 1.0 / 2.75 {
-                    7.5625 * t * t
-                } else if t < 2.0 / 2.75 {
-                    let t = t - 1.5 / 2.75;
-                    7.5625 * t * t + 0.75
-                } else if t < 2.5 / 2.75 {
-                    let t = t - 2.25 / 2.75;
-                    7.5625 * t * t + 0.9375
+                let n1 = 7.5625;
+                let d1 = 2.75;
+                if t < 1.0 / d1 {
+                    n1 * t * t
+                } else if t < 2.0 / d1 {
+                    let t = t - 1.5 / d1;
+                    n1 * t * t + 0.75
+                } else if t < 2.5 / d1 {
+                    let t = t - 2.25 / d1;
+                    n1 * t * t + 0.9375
                 } else {
-                    let t = t - 2.625 / 2.75;
-                    7.5625 * t * t + 0.984375
+                    let t = t - 2.625 / d1;
+                    n1 * t * t + 0.984375
                 }
             }
             EasingType::Elastic => {
@@ -179,6 +190,184 @@ impl WindowAnimation {
                 let c1 = 1.70158;
                 let c3 = c1 + 1.0;
                 c3 * t * t * t - c1 * t * t
+            }
+            // Additional match arms for more easing types:
+            EasingType::EaseInCubic => t * t * t,
+            EasingType::EaseOutCubic => 1.0 - (1.0 - t).powi(3),
+            EasingType::EaseInOutCubic => {
+                if t < 0.5 {
+                    4.0 * t * t * t
+                } else {
+                    1.0 - ((-2.0 * t + 2.0).powi(3)) / 2.0
+                }
+            }
+            EasingType::EaseInQuart => t * t * t * t,
+            EasingType::EaseOutQuart => 1.0 - (1.0 - t).powi(4),
+            EasingType::EaseInOutQuart => {
+                if t < 0.5 {
+                    8.0 * t * t * t * t
+                } else {
+                    1.0 - ((-2.0 * t + 2.0).powi(4)) / 2.0
+                }
+            }
+            EasingType::EaseInQuint => t * t * t * t * t,
+            EasingType::EaseOutQuint => 1.0 - (1.0 - t).powi(5),
+            EasingType::EaseInOutQuint => {
+                if t < 0.5 {
+                    16.0 * t * t * t * t * t
+                } else {
+                    1.0 - ((-2.0 * t + 2.0).powi(5)) / 2.0
+                }
+            }
+            EasingType::EaseInSine => 1.0 - (std::f32::consts::PI * t / 2.0).cos(),
+            EasingType::EaseOutSine => (std::f32::consts::PI * t / 2.0).sin(),
+            EasingType::EaseInOutSine => -(std::f32::consts::PI * t).cos() / 2.0 + 0.5,
+            EasingType::EaseInExpo => {
+                if t == 0.0 {
+                    0.0
+                } else {
+                    (2.0_f32).powf(10.0 * t - 10.0)
+                }
+            }
+            EasingType::EaseOutExpo => {
+                if t == 1.0 {
+                    1.0
+                } else {
+                    1.0 - (2.0_f32).powf(-10.0 * t)
+                }
+            }
+            EasingType::EaseInOutExpo => {
+                if t == 0.0 {
+                    0.0
+                } else if t == 1.0 {
+                    1.0
+                } else if t < 0.5 {
+                    (2.0_f32).powf(20.0 * t - 10.0) / 2.0
+                } else {
+                    (2.0 - (2.0_f32).powf(-20.0 * t + 10.0)) / 2.0
+                }
+            }
+            EasingType::EaseInCirc => 1.0 - (1.0 - t * t).sqrt(),
+            EasingType::EaseOutCirc => (1.0 - (t - 1.0).powi(2)).sqrt(),
+            EasingType::EaseInOutCirc => {
+                if t < 0.5 {
+                    (1.0 - (2.0 * t).powi(2)).sqrt() / 2.0
+                } else {
+                    ((1.0 - (-2.0 * t + 2.0).powi(2)).sqrt() + 1.0) / 2.0
+                }
+            }
+            EasingType::EaseInBack => {
+                let c1 = 1.70158;
+                let c3 = c1 + 1.0;
+                c3 * t * t * t - c1 * t * t
+            }
+            EasingType::EaseOutBack => {
+                let c1 = 1.70158;
+                let c3 = c1 + 1.0;
+                1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2)
+            }
+            EasingType::EaseInOutBack => {
+                let c1 = 1.70158;
+                let c2 = c1 * 1.525;
+                if t < 0.5 {
+                    ((2.0 * t).powi(2) * ((c2 + 1.0) * 2.0 * t - c2)) / 2.0
+                } else {
+                    ((2.0 * t - 2.0).powi(2) * ((c2 + 1.0) * (2.0 * t - 2.0) + c2) + 2.0) / 2.0
+                }
+            }
+            EasingType::EaseInElastic => {
+                if t == 0.0 {
+                    0.0
+                } else if t == 1.0 {
+                    1.0
+                } else {
+                    let c4 = (2.0 * std::f32::consts::PI) / 3.0;
+                    -(2.0_f32).powf(10.0 * t - 10.0) * ((t * 10.0 - 10.75) * c4).sin()
+                }
+            }
+            EasingType::EaseOutElastic => {
+                if t == 0.0 {
+                    0.0
+                } else if t == 1.0 {
+                    1.0
+                } else {
+                    let c4 = (2.0 * std::f32::consts::PI) / 3.0;
+                    (2.0_f32).powf(-10.0 * t) * ((t * 10.0 - 0.75) * c4).sin() + 1.0
+                }
+            }
+            EasingType::EaseInOutElastic => {
+                if t == 0.0 {
+                    0.0
+                } else if t == 1.0 {
+                    1.0
+                } else {
+                    let c5 = (2.0 * std::f32::consts::PI) / 4.5;
+                    if t < 0.5 {
+                        -((2.0_f32).powf(20.0 * t - 10.0) * ((20.0 * t - 11.125) * c5).sin()) / 2.0
+                    } else {
+                        ((2.0_f32).powf(-20.0 * t + 10.0) * ((20.0 * t - 11.125) * c5).sin()) / 2.0
+                            + 1.0
+                    }
+                }
+            }
+            EasingType::EaseInBounce => {
+                // Bounce out reversed
+                let bounce_out = |x: f32| {
+                    let n1 = 7.5625;
+                    let d1 = 2.75;
+                    if x < 1.0 / d1 {
+                        n1 * x * x
+                    } else if x < 2.0 / d1 {
+                        let x = x - 1.5 / d1;
+                        n1 * x * x + 0.75
+                    } else if x < 2.5 / d1 {
+                        let x = x - 2.25 / d1;
+                        n1 * x * x + 0.9375
+                    } else {
+                        let x = x - 2.625 / d1;
+                        n1 * x * x + 0.984375
+                    }
+                };
+                1.0 - bounce_out(1.0 - t)
+            }
+            EasingType::EaseOutBounce => {
+                let n1 = 7.5625;
+                let d1 = 2.75;
+                if t < 1.0 / d1 {
+                    n1 * t * t
+                } else if t < 2.0 / d1 {
+                    let t = t - 1.5 / d1;
+                    n1 * t * t + 0.75
+                } else if t < 2.5 / d1 {
+                    let t = t - 2.25 / d1;
+                    n1 * t * t + 0.9375
+                } else {
+                    let t = t - 2.625 / d1;
+                    n1 * t * t + 0.984375
+                }
+            }
+            EasingType::EaseInOutBounce => {
+                let bounce_out = |x: f32| {
+                    let n1 = 7.5625;
+                    let d1 = 2.75;
+                    if x < 1.0 / d1 {
+                        n1 * x * x
+                    } else if x < 2.0 / d1 {
+                        let x = x - 1.5 / d1;
+                        n1 * x * x + 0.75
+                    } else if x < 2.5 / d1 {
+                        let x = x - 2.25 / d1;
+                        n1 * x * x + 0.9375
+                    } else {
+                        let x = x - 2.625 / d1;
+                        n1 * x * x + 0.984375
+                    }
+                };
+                if t < 0.5 {
+                    (1.0 - bounce_out(1.0 - 2.0 * t)) / 2.0
+                } else {
+                    (1.0 + bounce_out(2.0 * t - 1.0)) / 2.0
+                }
             }
         }
     }

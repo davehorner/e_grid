@@ -16,7 +16,6 @@ use ctrlc;
 use dashmap::{DashMap, DashSet};
 use e_grid::window_events::{run_message_loop, WindowEventConfig};
 use e_grid::window_tracker::WindowTracker;
-use e_grid::EasingType;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self};
@@ -320,7 +319,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             *hwnd,
                             *rect,
                             animation_duration.clone(),
-                            EasingType::EaseInOut,
+                                                {
+                        use rand::prelude::IndexedRandom;
+                        let variants: Vec<e_grid::EasingType> = e_grid::grid::animation::EASING_TYPE_MAP
+                            .keys()
+                            .cloned()
+                            .collect();
+                        *variants.choose(&mut rand::rng()).unwrap()
+                    },
                         );
                         if let Err(e) = res {
                             println!("⚠️ Failed to animate window 0x{:X}: {}", hwnd, e);
@@ -394,7 +400,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         *hwnd,
                         *rect,
                         animation_duration.clone(),
-                        EasingType::EaseInOut,
+                        {
+                            use rand::prelude::IndexedRandom;
+                            let variants: Vec<e_grid::EasingType> =
+                                e_grid::grid::animation::EASING_TYPE_MAP
+                                    .keys()
+                                    .cloned()
+                                    .collect();
+                            *variants.choose(&mut rand::rng()).unwrap()
+                        },
                     );
                 }
             }
@@ -768,15 +782,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     animation_duration.clone(),
                     {
                         use rand::prelude::IndexedRandom;
-                        let variants: [e_grid::EasingType; 7] = [
-                            e_grid::EasingType::Linear,
-                            e_grid::EasingType::EaseIn,
-                            e_grid::EasingType::EaseOut,
-                            e_grid::EasingType::EaseInOut,
-                            e_grid::EasingType::Bounce,
-                            e_grid::EasingType::Elastic,
-                            e_grid::EasingType::Back,
-                        ];
+                        let variants: Vec<e_grid::EasingType> =
+                            e_grid::grid::animation::EASING_TYPE_MAP
+                                .keys()
+                                .cloned()
+                                .collect();
                         *variants.choose(&mut rand::rng()).unwrap()
                     },
                 );
@@ -831,15 +841,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         animation_duration.clone(),
                                         {
                                             use rand::prelude::IndexedRandom;
-                                            let variants: [e_grid::EasingType; 7] = [
-                                                e_grid::EasingType::Linear,
-                                                e_grid::EasingType::EaseIn,
-                                                e_grid::EasingType::EaseOut,
-                                                e_grid::EasingType::EaseInOut,
-                                                e_grid::EasingType::Bounce,
-                                                e_grid::EasingType::Elastic,
-                                                e_grid::EasingType::Back,
-                                            ];
+                                            let variants: Vec<e_grid::EasingType> =
+                                                e_grid::grid::animation::EASING_TYPE_MAP
+                                                    .keys()
+                                                    .cloned()
+                                                    .collect();
                                             *variants.choose(&mut rand::rng()).unwrap()
                                         },
                                     );
