@@ -30,6 +30,7 @@ pub mod window;
 pub use crate::grid::GridConfig;
 pub use crate::grid_client_config::GridClientConfig;
 use crate::ipc_client::IpcCommand;
+use crate::ipc_protocol::GridEvent;
 pub use crate::performance_monitor::{EventType, OperationTimer, PerformanceMonitor};
 pub use crate::window::WindowInfo;
 pub use crate::window_tracker::WindowTracker;
@@ -58,6 +59,72 @@ pub const MAX_WINDOW_GRID_CELLS: usize = 64;
 //     Elastic,       // Elastic/spring effect
 //     Back,          // Slight overshoot then settle
 // }
+
+// --- Event type codes as explicit constants ---
+pub const EVENT_TYPE_WINDOW_CREATED: u8 = 0;
+pub const EVENT_TYPE_WINDOW_DESTROYED: u8 = 1;
+pub const EVENT_TYPE_GRID_STATE_CHANGED: u8 = 3;
+pub const EVENT_TYPE_WINDOW_MOVE_START: u8 = 4;
+pub const EVENT_TYPE_WINDOW_MOVE_STOP: u8 = 5;
+pub const EVENT_TYPE_WINDOW_RESIZE_START: u8 = 6;
+pub const EVENT_TYPE_WINDOW_RESIZE_STOP: u8 = 7;
+pub const EVENT_TYPE_WINDOW_MOVE: u8 = 8;
+pub const EVENT_TYPE_WINDOW_RESIZE: u8 = 9;
+pub const EVENT_TYPE_WINDOW_FOCUSED: u8 = 10;
+pub const EVENT_TYPE_WINDOW_DEFOCUSED: u8 = 11;
+
+// --- Mapping method for event type codes ---
+pub fn grid_event_type_code(event: &GridEvent) -> u8 {
+    match event {
+        GridEvent::WindowCreated { .. } => EVENT_TYPE_WINDOW_CREATED,
+        GridEvent::WindowDestroyed { .. } => EVENT_TYPE_WINDOW_DESTROYED,
+        GridEvent::GridStateChanged { .. } => EVENT_TYPE_GRID_STATE_CHANGED,
+        GridEvent::WindowMoveStart { .. } => EVENT_TYPE_WINDOW_MOVE_START,
+        GridEvent::WindowMoveStop { .. } => EVENT_TYPE_WINDOW_MOVE_STOP,
+        GridEvent::WindowResizeStart { .. } => EVENT_TYPE_WINDOW_RESIZE_START,
+        GridEvent::WindowResizeStop { .. } => EVENT_TYPE_WINDOW_RESIZE_STOP,
+        GridEvent::WindowMove { .. } => EVENT_TYPE_WINDOW_MOVE,
+        GridEvent::WindowMoved { .. } => EVENT_TYPE_WINDOW_MOVE,
+        GridEvent::WindowResize { .. } => EVENT_TYPE_WINDOW_RESIZE,
+        GridEvent::WindowFocused { .. } => EVENT_TYPE_WINDOW_FOCUSED,
+        GridEvent::WindowDefocused { .. } => EVENT_TYPE_WINDOW_DEFOCUSED,
+    }
+}
+/// Maps a static string describing the event to its event type code (u8).
+pub fn grid_event_type_code_from_str(event_str: &str) -> u8 {
+    match event_str {
+        "WindowCreated" => EVENT_TYPE_WINDOW_CREATED,
+        "WindowDestroyed" => EVENT_TYPE_WINDOW_DESTROYED,
+        "GridStateChanged" => EVENT_TYPE_GRID_STATE_CHANGED,
+        "WindowMoveStart" => EVENT_TYPE_WINDOW_MOVE_START,
+        "WindowMoveStop" => EVENT_TYPE_WINDOW_MOVE_STOP,
+        "WindowResizeStart" => EVENT_TYPE_WINDOW_RESIZE_START,
+        "WindowResizeStop" => EVENT_TYPE_WINDOW_RESIZE_STOP,
+        "WindowMove" => EVENT_TYPE_WINDOW_MOVE,
+        "WindowResize" => EVENT_TYPE_WINDOW_RESIZE,
+        "WindowFocused" => EVENT_TYPE_WINDOW_FOCUSED,
+        "WindowDefocused" => EVENT_TYPE_WINDOW_DEFOCUSED,
+        _ => 255, // Unknown event code
+    }
+}
+
+/// Maps an event type code (u8) to a static string describing the event.
+pub fn type_code_grid_event_str(code: u8) -> &'static str {
+    match code {
+        EVENT_TYPE_WINDOW_CREATED => "WindowCreated",
+        EVENT_TYPE_WINDOW_DESTROYED => "WindowDestroyed",
+        EVENT_TYPE_GRID_STATE_CHANGED => "GridStateChanged",
+        EVENT_TYPE_WINDOW_MOVE_START => "WindowMoveStart",
+        EVENT_TYPE_WINDOW_MOVE_STOP => "WindowMoveStop",
+        EVENT_TYPE_WINDOW_RESIZE_START => "WindowResizeStart",
+        EVENT_TYPE_WINDOW_RESIZE_STOP => "WindowResizeStop",
+        EVENT_TYPE_WINDOW_MOVE => "WindowMove",
+        EVENT_TYPE_WINDOW_RESIZE => "WindowResize",
+        EVENT_TYPE_WINDOW_FOCUSED => "WindowFocused",
+        EVENT_TYPE_WINDOW_DEFOCUSED => "WindowDefocused",
+        _ => "UnknownEvent",
+    }
+}
 
 #[derive(Clone)]
 pub struct WindowAnimation {

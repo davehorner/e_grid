@@ -1983,14 +1983,14 @@ impl WindowTracker {
         // Callback for EnumWindows to collect windows
         unsafe extern "system" fn enum_windows_proc_collect(hwnd: HWND, lparam: LPARAM) -> i32 {
             let found_windows = &*(lparam as *const DashMap<u64, WindowInfo>);
-            println!("Checking window: {:?}", hwnd);
+            // println!("Checking window: {:?}", hwnd);
             if WindowTracker::is_manageable_window(hwnd as u64) {
-                println!("Found manageable window: {:?}", hwnd);
+                // println!("Found manageable window: {:?}", hwnd);
                 if let Some(rect) = WindowTracker::get_window_rect(hwnd as u64) {
-                    println!(
-                        "Window {:?} has rect: left={}, top={}, right={}, bottom={}",
-                        hwnd, rect.left, rect.top, rect.right, rect.bottom
-                    );
+                // println!(
+                //     "[ENUM] Window HWND=0x{:X} rect: left={}, top={}, right={}, bottom={} (w={}, h={})", 
+                //     hwnd as u64, rect.left, rect.top, rect.right, rect.bottom, rect.right-rect.left, rect.bottom-rect.top
+                // );
                     let mut title_buf = [0u16; 256];
                     let title_len =
                         GetWindowTextW(hwnd, title_buf.as_mut_ptr(), title_buf.len() as i32);

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8](https://github.com/davehorner/e_grid/compare/v0.1.7...v0.1.8) - 2025-07-17
+
+### Other
+
+- *(events)* add continuous move/resize event tracking and client callbacks  - Introduced new `GridEvent` variants: `WindowMove` and `WindowResize` for granular tracking of continuous gestures. - Added corresponding event type constants and utility functions for consistent encoding/decoding. - Updated `GridClient` to support `move_callback` and `resize_callback` handlers for real-time event consumption. - Enhanced `win_event_proc` to emit continuous move and resize events during window gesture operations. - Refactored server/client `grid_event_to_window_event` logic to use `grid_event_type_code` mapping. - Silenced some debug prints for cleaner logs during regular use.
+
 ## [0.1.7](https://github.com/davehorner/e_grid/compare/v0.1.6...v0.1.7) - 2025-07-13
 
 ### Added

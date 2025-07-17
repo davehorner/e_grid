@@ -1,3 +1,4 @@
+use crate::grid_event_type_code;
 use crate::ipc_protocol::{
     AnimationCommand, AnimationStatus, GridCellAssignment, GridEvent, GridLayoutMessage,
     HeartbeatMessage, IpcCommand, IpcCommandType, IpcResponse, IpcResponseType, WindowDetails,
@@ -1310,13 +1311,21 @@ impl GridIpcServer {
         }
     }
 
+    // --- Event type codes as explicit constants ---
+
     // Conversion helper methods
     fn grid_event_to_window_event(&self, event: &GridEvent) -> WindowEvent {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+        let event_type = grid_event_type_code(event);
         match event {
+            GridEvent::WindowDestroyed { hwnd, title } => WindowEvent {
+                event_type,
+                hwnd: *hwnd,
+                ..Default::default()
+            },
             GridEvent::WindowCreated {
                 hwnd,
                 row,
@@ -1332,7 +1341,7 @@ impl GridIpcServer {
                 monitor_id,
                 ..
             } => WindowEvent {
-                event_type: 0,
+                event_type,
                 hwnd: *hwnd,
                 row: *row as u32,
                 col: *col as u32,
@@ -1348,35 +1357,112 @@ impl GridIpcServer {
                 timestamp,
                 ..Default::default()
             },
-            GridEvent::WindowDestroyed { hwnd, .. } => WindowEvent {
-                event_type: 1,
+            GridEvent::WindowResizeStart { 
+                hwnd, 
+                current_row, 
+                current_col, 
+                grid_top_left_row, 
+                grid_top_left_col, 
+                grid_bottom_right_row, 
+                grid_bottom_right_col, 
+                real_x, 
+                real_y, 
+                real_width, 
+                real_height, 
+                monitor_id, 
+                .. 
+            } => WindowEvent {
+                event_type,
                 hwnd: *hwnd,
+                row: *current_row as u32,
+                col: *current_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
                 timestamp,
                 ..Default::default()
             },
-            GridEvent::WindowMoved {
-                hwnd,
-                old_row,
-                old_col,
-                new_row,
-                new_col,
-                grid_top_left_row,
-                grid_top_left_col,
-                grid_bottom_right_row,
-                grid_bottom_right_col,
-                real_x,
-                real_y,
-                real_width,
-                real_height,
-                monitor_id,
-                ..
+            GridEvent::WindowMoved { 
+                hwnd, 
+                grid_top_left_row, 
+                grid_top_left_col, 
+                grid_bottom_right_row, 
+                grid_bottom_right_col, 
+                real_x, 
+                real_y, 
+                real_width, 
+                real_height, 
+                monitor_id, 
+                .. 
             } => WindowEvent {
-                event_type: 2,
+                event_type,
                 hwnd: *hwnd,
-                old_row: *old_row as u32,
-                old_col: *old_col as u32,
-                row: *new_row as u32,
-                col: *new_col as u32,
+                row: *grid_top_left_row as u32,
+                col: *grid_top_left_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
+                timestamp,
+                ..Default::default()
+            },
+            GridEvent::WindowMove { 
+                hwnd, 
+                grid_top_left_row, 
+                grid_top_left_col, 
+                grid_bottom_right_row, 
+                grid_bottom_right_col, 
+                real_x, 
+                real_y, 
+                real_width, 
+                real_height, 
+                monitor_id, 
+                .. 
+            } => WindowEvent {
+                event_type,
+                hwnd: *hwnd,
+                row: *grid_top_left_row as u32,
+                col: *grid_top_left_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
+                timestamp,
+                ..Default::default()
+            },
+            GridEvent::WindowResize { 
+                hwnd, 
+                grid_top_left_row, 
+                grid_top_left_col, 
+                grid_bottom_right_row, 
+                grid_bottom_right_col, 
+                real_x, 
+                real_y, 
+                real_width, 
+                real_height, 
+                monitor_id, 
+                .. 
+            } => WindowEvent {
+                event_type,
+                hwnd: *hwnd,
+                row: 0,
+                col: 0,
                 grid_top_left_row: *grid_top_left_row as u32,
                 grid_top_left_col: *grid_top_left_col as u32,
                 grid_bottom_right_row: *grid_bottom_right_row as u32,
@@ -1404,7 +1490,7 @@ impl GridIpcServer {
                 monitor_id,
                 ..
             } => WindowEvent {
-                event_type: 4, // move_start
+                event_type,
                 hwnd: *hwnd,
                 row: *current_row as u32,
                 col: *current_col as u32,
@@ -1435,41 +1521,10 @@ impl GridIpcServer {
                 monitor_id,
                 ..
             } => WindowEvent {
-                event_type: 5, // move_stop
+                event_type,
                 hwnd: *hwnd,
                 row: *final_row as u32,
                 col: *final_col as u32,
-                grid_top_left_row: *grid_top_left_row as u32,
-                grid_top_left_col: *grid_top_left_col as u32,
-                grid_bottom_right_row: *grid_bottom_right_row as u32,
-                grid_bottom_right_col: *grid_bottom_right_col as u32,
-                real_x: *real_x,
-                real_y: *real_y,
-                real_width: *real_width,
-                real_height: *real_height,
-                monitor_id: *monitor_id,
-                timestamp,
-                ..Default::default()
-            },
-            GridEvent::WindowResizeStart {
-                hwnd,
-                current_row,
-                current_col,
-                grid_top_left_row,
-                grid_top_left_col,
-                grid_bottom_right_row,
-                grid_bottom_right_col,
-                real_x,
-                real_y,
-                real_width,
-                real_height,
-                monitor_id,
-                ..
-            } => WindowEvent {
-                event_type: 6, // resize_start
-                hwnd: *hwnd,
-                row: *current_row as u32,
-                col: *current_col as u32,
                 grid_top_left_row: *grid_top_left_row as u32,
                 grid_top_left_col: *grid_top_left_col as u32,
                 grid_bottom_right_row: *grid_bottom_right_row as u32,
@@ -1497,7 +1552,7 @@ impl GridIpcServer {
                 monitor_id,
                 ..
             } => WindowEvent {
-                event_type: 7, // resize_stop
+                event_type,
                 hwnd: *hwnd,
                 row: *final_row as u32,
                 col: *final_col as u32,
@@ -1518,20 +1573,20 @@ impl GridIpcServer {
                 total_windows,
                 occupied_cells,
             } => WindowEvent {
-                event_type: 3,
+                event_type,
                 timestamp: *timestamp,
                 total_windows: *total_windows as u32,
                 occupied_cells: *occupied_cells as u32,
                 ..Default::default()
             },
             GridEvent::WindowFocused { hwnd, .. } => WindowEvent {
-                event_type: 4, // Focus event type
+                event_type,
                 hwnd: *hwnd,
                 timestamp,
                 ..Default::default()
             },
             GridEvent::WindowDefocused { hwnd, .. } => WindowEvent {
-                event_type: 5, // Defocus event type
+                event_type,
                 hwnd: *hwnd,
                 timestamp,
                 ..Default::default()

@@ -559,7 +559,7 @@ dependencies = [
 
 [[package]]
 name = "e_grid"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "atomic",
  "crossbeam-queue",
