@@ -1,6 +1,6 @@
 // IPC manager logic for e_grid
 // Contains only the GridIpcManager struct and its implementation.
-
+use crate::grid_event_type_code;
 use crate::ipc_protocol::*;
 use crate::{GridConfig, WindowTracker};
 use iceoryx2::port::publisher::Publisher;
@@ -947,13 +947,36 @@ impl GridIpcManager {
         // occupied.len()
         0
     } // Conversion functions between high-level and zero-copy types
+
     fn grid_event_to_window_event(&self, event: &GridEvent) -> WindowEvent {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-
+        let event_type = grid_event_type_code(event);
         match event {
+            GridEvent::WindowResize { hwnd, title, old_width, old_height, new_width, new_height, grid_top_left_row, grid_top_left_col, grid_bottom_right_row, grid_bottom_right_col, real_x, real_y, real_width, real_height, monitor_id } => WindowEvent {
+                event_type,
+                hwnd: *hwnd,
+                row: 0,
+                col: 0,
+                old_row: 0,
+                old_col: 0,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
+                timestamp,
+                total_windows: 0,
+                occupied_cells: 0,
+                process_id: 0,
+                ..Default::default()
+            },
             GridEvent::WindowCreated {
                 hwnd,
                 row,
@@ -969,7 +992,7 @@ impl GridIpcManager {
                 monitor_id,
                 ..
             } => WindowEvent {
-                event_type: 0,
+                event_type,
                 hwnd: *hwnd,
                 row: *row as u32,
                 col: *col as u32,
@@ -986,8 +1009,43 @@ impl GridIpcManager {
                 ..Default::default()
             },
             GridEvent::WindowDestroyed { hwnd, .. } => WindowEvent {
-                event_type: 1,
+                event_type,
                 hwnd: *hwnd,
+                timestamp,
+                ..Default::default()
+            },
+            GridEvent::WindowMove {
+                hwnd,
+                old_row,
+                old_col,
+                new_row,
+                new_col,
+                grid_top_left_row,
+                grid_top_left_col,
+                grid_bottom_right_row,
+                grid_bottom_right_col,
+                real_x,
+                real_y,
+                real_width,
+                real_height,
+                monitor_id,
+                ..
+            } => WindowEvent {
+                event_type,
+                hwnd: *hwnd,
+                old_row: *old_row as u32,
+                old_col: *old_col as u32,
+                row: *new_row as u32,
+                col: *new_col as u32,
+                grid_top_left_row: *grid_top_left_row as u32,
+                grid_top_left_col: *grid_top_left_col as u32,
+                grid_bottom_right_row: *grid_bottom_right_row as u32,
+                grid_bottom_right_col: *grid_bottom_right_col as u32,
+                real_x: *real_x,
+                real_y: *real_y,
+                real_width: *real_width,
+                real_height: *real_height,
+                monitor_id: *monitor_id,
                 timestamp,
                 ..Default::default()
             },
@@ -1008,7 +1066,7 @@ impl GridIpcManager {
                 monitor_id,
                 ..
             } => WindowEvent {
-                event_type: 2,
+                event_type,
                 hwnd: *hwnd,
                 old_row: *old_row as u32,
                 old_col: *old_col as u32,
@@ -1041,7 +1099,7 @@ impl GridIpcManager {
                 monitor_id,
                 ..
             } => WindowEvent {
-                event_type: 4, // move_start
+                event_type,
                 hwnd: *hwnd,
                 row: *current_row as u32,
                 col: *current_col as u32,
@@ -1067,12 +1125,12 @@ impl GridIpcManager {
                 grid_bottom_right_col,
                 real_x,
                 real_y,
-                real_width: real_width2,
-                real_height: real_height2,
+                real_width,
+                real_height,
                 monitor_id,
                 ..
             } => WindowEvent {
-                event_type: 5, // move_stop
+                event_type,
                 hwnd: *hwnd,
                 row: *final_row as u32,
                 col: *final_col as u32,
@@ -1082,8 +1140,8 @@ impl GridIpcManager {
                 grid_bottom_right_col: *grid_bottom_right_col as u32,
                 real_x: *real_x,
                 real_y: *real_y,
-                real_width: *real_width2,
-                real_height: *real_height2,
+                real_width: *real_width,
+                real_height: *real_height,
                 monitor_id: *monitor_id,
                 timestamp,
                 ..Default::default()
@@ -1103,7 +1161,7 @@ impl GridIpcManager {
                 monitor_id,
                 ..
             } => WindowEvent {
-                event_type: 6, // resize_start
+                event_type,
                 hwnd: *hwnd,
                 row: *current_row as u32,
                 col: *current_col as u32,
@@ -1129,12 +1187,12 @@ impl GridIpcManager {
                 grid_bottom_right_col,
                 real_x,
                 real_y,
-                real_width: real_width2,
-                real_height: real_height2,
+                real_width,
+                real_height,
                 monitor_id,
                 ..
             } => WindowEvent {
-                event_type: 7, // resize_stop
+                event_type,
                 hwnd: *hwnd,
                 row: *final_row as u32,
                 col: *final_col as u32,
@@ -1144,8 +1202,8 @@ impl GridIpcManager {
                 grid_bottom_right_col: *grid_bottom_right_col as u32,
                 real_x: *real_x,
                 real_y: *real_y,
-                real_width: *real_width2,
-                real_height: *real_height2,
+                real_width: *real_width,
+                real_height: *real_height,
                 monitor_id: *monitor_id,
                 timestamp,
                 ..Default::default()
@@ -1155,20 +1213,20 @@ impl GridIpcManager {
                 total_windows,
                 occupied_cells,
             } => WindowEvent {
-                event_type: 3,
+                event_type,
                 timestamp: *timestamp,
                 total_windows: *total_windows as u32,
                 occupied_cells: *occupied_cells as u32,
                 ..Default::default()
             },
             GridEvent::WindowFocused { hwnd, .. } => WindowEvent {
-                event_type: 4, // Focus event type
+                event_type,
                 hwnd: *hwnd,
                 timestamp,
                 ..Default::default()
             },
             GridEvent::WindowDefocused { hwnd, .. } => WindowEvent {
-                event_type: 5, // Defocus event type
+                event_type,
                 hwnd: *hwnd,
                 timestamp,
                 ..Default::default()

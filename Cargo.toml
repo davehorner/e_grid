@@ -1,6 +1,6 @@
 [package]
 name = "e_grid"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "A real-time, multi-monitor window grid management and tracking system for Windows."
 authors = ["David Horner"]
@@ -58,4 +58,4 @@ path = "examples/animate_windows_optimal_across_all_monitors.rs"
 serial_test = "3.2.0"
 e_midi = "0.1.10"
 # e_midi = { path = "../e_midi" }
-[workspace]
+

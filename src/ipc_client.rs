@@ -108,6 +108,8 @@ pub struct GridClient {
     window_event_callback: Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
     move_resize_start_callback: Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
     move_resize_stop_callback: Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
+    move_callback: Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
+    resize_callback: Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
     pub virtual_grid: Arc<Vec<AtomicCell<GridCell>>>,
     pub physical_grids: Arc<Vec<AtomicCell<GridCell>>>,
     highlight_topmost: Arc<AtomicBool>,
@@ -127,6 +129,25 @@ pub struct MonitorGridInfo {
 }
 
 impl GridClient {
+    /// Register a callback to be called when window move events occur
+    pub fn set_move_callback<F>(&mut self, callback: F) -> GridClientResult<()> 
+    where
+        F: Fn(WindowEvent) + Send + Sync + 'static,
+    {
+        let mut cb_lock = safe_arc_lock(&self.move_callback, "move callback registration")?;
+        *cb_lock = Some(Box::new(callback));
+        Ok(())
+    }
+
+    /// Register a callback to be called when window resize events occur
+    pub fn set_resize_callback<F>(&mut self, callback: F) -> GridClientResult<()> 
+    where
+        F: Fn(WindowEvent) + Send + Sync + 'static,
+    {
+        let mut cb_lock = safe_arc_lock(&self.resize_callback, "resize callback registration")?;
+        *cb_lock = Some(Box::new(callback));
+        Ok(())
+    }
     pub fn set_window_event_callback<F>(&mut self, callback: F) -> GridClientResult<()>
     where
         F: Fn(WindowEvent) + Send + Sync + 'static,
@@ -307,6 +328,8 @@ impl GridClient {
             window_event_callback: Arc::new(Mutex::new(None)),
             move_resize_start_callback: Arc::new(Mutex::new(None)),
             move_resize_stop_callback: Arc::new(Mutex::new(None)),
+            move_callback: Arc::new(Mutex::new(None)),
+            resize_callback: Arc::new(Mutex::new(None)),
             physical_grids: Arc::new(physical_grids),
             window_list_subscriber,
             monitor_list_subscriber,
@@ -544,6 +567,8 @@ impl GridClient {
         let window_event_callback = self.window_event_callback.clone();
         let move_resize_start_callback = self.move_resize_start_callback.clone();
         let move_resize_stop_callback = self.move_resize_stop_callback.clone();
+        let move_callback = self.move_callback.clone();
+        let resize_callback = self.resize_callback.clone();
         let has_valid_grid_data = self.has_valid_grid_data.clone();
         let config = self.config.clone();
 
@@ -590,6 +615,8 @@ impl GridClient {
                             &window_event_callback,
                             &move_resize_start_callback,
                             &move_resize_stop_callback,
+                            &move_callback,
+                            &resize_callback,
                             &has_valid_grid_data,
                             &config,
                         );
@@ -759,6 +786,8 @@ impl GridClient {
         window_event_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
         move_resize_start_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
         move_resize_stop_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
+        move_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
+        resize_callback: &Arc<Mutex<Option<Box<dyn Fn(WindowEvent) + Send + Sync>>>>,
         has_valid_grid_data: &Arc<AtomicBool>,
         config: &GridConfig,
     ) -> MonitoringResult {
@@ -769,10 +798,8 @@ impl GridClient {
         let mut last_debug_time = std::time::Instant::now();
 
         // Add event filtering to reduce stray events
-        let mut last_move_resize_event: Option<(u64, u32, std::time::Instant)> = None; // (hwnd, event_type, timestamp)
+        let mut last_move_resize_event: Option<(u64, u8, std::time::Instant)> = None; // (hwnd, event_type, timestamp)
         let event_debounce_ms = 100; // Ignore duplicate events within 100ms
-
-        println!("[MONITORING] 🔍 Starting monitoring loop - MONITORS MUST COME FIRST!");
 
         loop {
             if !running.load(std::sync::atomic::Ordering::Relaxed) {
@@ -783,12 +810,12 @@ impl GridClient {
 
             // Debug status every 5 seconds
             if last_debug_time.elapsed().as_secs() >= 5 {
-                println!(
-                    "[MONITORING] 📊 Status: monitors={}, windows={}, pending_windows={}",
-                    monitors.len(),
-                    windows.len(),
-                    pending_window_list.as_ref().map_or(0, |w| w.window_count)
-                );
+                // println!(
+                //     "[MONITORING] 📊 Status: monitors={}, windows={}, pending_windows={}",
+                //     monitors.len(),
+                //     windows.len(),
+                //     pending_window_list.as_ref().map_or(0, |w| w.window_count)
+                // );
                 last_debug_time = std::time::Instant::now();
             }
 
@@ -797,28 +824,34 @@ impl GridClient {
                 let window_event = *event_sample;
                 had_activity = true;
 
-                // Filter out rapid duplicate events to reduce stray events
-                let should_process = match window_event.event_type {
-                    4 | 5 | 6 | 7 => {
+                let should_process = match window_event.event_type.clone() {
+                    crate::EVENT_TYPE_WINDOW_MOVE_START
+                    | crate::EVENT_TYPE_WINDOW_MOVE_STOP
+                    | crate::EVENT_TYPE_WINDOW_MOVE
+                    | crate::EVENT_TYPE_WINDOW_RESIZE
+                    | crate::EVENT_TYPE_WINDOW_RESIZE_START
+                    | crate::EVENT_TYPE_WINDOW_RESIZE_STOP => {
                         // Move/resize events
                         let now = std::time::Instant::now();
                         let should_skip = if let Some((last_hwnd, last_type, last_time)) =
                             last_move_resize_event
                         {
                             last_hwnd == window_event.hwnd
-                                && last_type == window_event.event_type as u32
+                                && last_type == window_event.event_type
                                 && now.duration_since(last_time).as_millis() < event_debounce_ms
                         } else {
                             false
                         };
 
                         if should_skip {
-                            println!("🚫 [CLIENT] Skipping duplicate event: type={} hwnd={} (within {}ms)", 
-                                     window_event.event_type, window_event.hwnd, event_debounce_ms);
+                            println!(
+                                "🚫 [CLIENT] Skipping duplicate event: type={} hwnd={} (within {}ms)",
+                                window_event.event_type, window_event.hwnd, event_debounce_ms
+                            );
                             false
                         } else {
                             last_move_resize_event =
-                                Some((window_event.hwnd, window_event.event_type.into(), now));
+                                Some((window_event.hwnd, window_event.event_type, now));
                             true
                         }
                     }
@@ -843,8 +876,20 @@ impl GridClient {
 
                 // Call specific move/resize callbacks based on event type
                 match window_event.event_type {
-                    4 | 6 => {
-                        // Move start (4) or Resize start (6)
+                    crate::EVENT_TYPE_WINDOW_CREATED => {
+                        println!("🆕 [CLIENT] Window created event");
+                    }
+                    crate::EVENT_TYPE_WINDOW_MOVE => {
+                        println!("🚚 [CLIENT] Window moved event");
+                        if let Ok(cb_lock) = move_callback.lock() {
+                            if let Some(ref cb) = *cb_lock {
+                                cb(window_event);
+                            } else {
+                                println!("⚠️ [CLIENT] Move callback is None!");
+                            }
+                        }
+                    }
+                    crate::EVENT_TYPE_WINDOW_MOVE_START | crate::EVENT_TYPE_WINDOW_RESIZE_START => {
                         println!(
                             "🚀 [CLIENT] Triggering move/resize START callback for event type {}",
                             window_event.event_type
@@ -857,8 +902,7 @@ impl GridClient {
                             }
                         }
                     }
-                    5 | 7 => {
-                        // Move stop (5) or Resize stop (7)
+                    crate::EVENT_TYPE_WINDOW_MOVE_STOP | crate::EVENT_TYPE_WINDOW_RESIZE_STOP => {
                         println!(
                             "🏁 [CLIENT] Triggering move/resize STOP callback for event type {}",
                             window_event.event_type
@@ -868,6 +912,16 @@ impl GridClient {
                                 cb(window_event);
                             } else {
                                 println!("⚠️ [CLIENT] Move/resize stop callback is None!");
+                            }
+                        }
+                    }
+                    crate::EVENT_TYPE_WINDOW_RESIZE => {
+                        println!("📐 [CLIENT] Triggering RESIZE callback for event type {}", window_event.event_type);
+                        if let Ok(cb_lock) = resize_callback.lock() {
+                            if let Some(ref cb) = *cb_lock {
+                                cb(window_event);
+                            } else {
+                                println!("⚠️ [CLIENT] Resize callback is None!");
                             }
                         }
                     }
@@ -1124,10 +1178,10 @@ impl GridClient {
                                     let new_z =
                                         z_order_map.get(&w.hwnd).copied().unwrap_or(usize::MAX);
                                     let wins = new_z < current_z;
-                                    if wins {
-                                        println!("[WINDOW LIST] 🔄 Cell [{},{}]: 0x{:X} (z={}) replaces 0x{:X} (z={})", 
-                                                row, col, w.hwnd, new_z, current_hwnd, current_z);
-                                    }
+                                    // if wins {
+                                    //     println!("[WINDOW LIST] 🔄 Cell [{},{}]: 0x{:X} (z={}) replaces 0x{:X} (z={})", 
+                                    //             row, col, w.hwnd, new_z, current_hwnd, current_z);
+                                    // }
                                     wins
                                 }
                                 ClientCellState::OffScreen => false,
@@ -1165,10 +1219,10 @@ impl GridClient {
                                     let new_z =
                                         z_order_map.get(&w.hwnd).copied().unwrap_or(usize::MAX);
                                     let wins = new_z < current_z;
-                                    if wins {
-                                        println!("[WINDOW LIST] 🔄 Monitor {} Cell [{},{}]: 0x{:X} (z={}) replaces 0x{:X} (z={})", 
-                                                w.monitor_id, row, col, w.hwnd, new_z, current, current_z);
-                                    }
+                                    // if wins {
+                                    //     println!("[WINDOW LIST] 🔄 Monitor {} Cell [{},{}]: 0x{:X} (z={}) replaces 0x{:X} (z={})", 
+                                    //             w.monitor_id, row, col, w.hwnd, new_z, current, current_z);
+                                    // }
                                     wins
                                 }
                             };

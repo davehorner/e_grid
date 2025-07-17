@@ -419,17 +419,14 @@ pub unsafe extern "system" fn win_event_proc(
                                         if moved && !resized {
                                             println!("[MOVE/RESIZE] Gesture detected: MoveStart for HWND {:?}", hwnd);
                                             crate::GLOBAL_EVENT_QUEUE.push((hwnd_val, MoveStart));
-                                            // DON'T set in_progress here - let WindowEventSystem handle it
                                             entry.last_type = Some(MoveStart);
                                         } else if resized && !moved {
                                             println!("[MOVE/RESIZE] Gesture detected: ResizeStart for HWND {:?}", hwnd);
                                             crate::GLOBAL_EVENT_QUEUE.push((hwnd_val, ResizeStart));
-                                            // DON'T set in_progress here - let WindowEventSystem handle it
                                             entry.last_type = Some(ResizeStart);
                                         } else if moved && resized {
                                             println!("[MOVE/RESIZE] Gesture detected: BothStart for HWND {:?}", hwnd);
                                             crate::GLOBAL_EVENT_QUEUE.push((hwnd_val, BothStart));
-                                            // DON'T set in_progress here - let WindowEventSystem handle it
                                             entry.last_type = Some(BothStart);
                                         }
                                     }
@@ -442,6 +439,102 @@ pub unsafe extern "system" fn win_event_proc(
                                     {
                                         entry.last_event = now;
                                         entry.last_rect = current_rect;
+
+                                        // Emit continuous move/resize events during gesture
+                                        if entry.in_progress.load(std::sync::atomic::Ordering::Relaxed) {
+                                            // Determine which event to emit
+                                            if moved && !resized {
+                                                // Continuous move
+                                                if let Some(ref callback) = config.event_callback {
+                                                    let title = WindowTracker::get_window_title(hwnd as u64);
+                                                    let event = crate::ipc_protocol::GridEvent::WindowMoved {
+                                                        hwnd: hwnd as u64,
+                                                        title,
+                                                        old_row: 0, // You may want to track previous row/col if needed
+                                                        old_col: 0,
+                                                        new_row: 0,
+                                                        new_col: 0,
+                                                        grid_top_left_row: 0,
+                                                        grid_top_left_col: 0,
+                                                        grid_bottom_right_row: 0,
+                                                        grid_bottom_right_col: 0,
+                                                        real_x: current_rect.left,
+                                                        real_y: current_rect.top,
+                                                        real_width: (current_rect.right - current_rect.left) as u32,
+                                                        real_height: (current_rect.bottom - current_rect.top) as u32,
+                                                        monitor_id: 0,
+                                                    };
+                                                    callback(event);
+                                                }
+                                            } else if resized && !moved {
+                                                // Continuous resize
+                                                if let Some(ref callback) = config.event_callback {
+                                                    let title = WindowTracker::get_window_title(hwnd as u64);
+                                                    let event = crate::ipc_protocol::GridEvent::WindowResize {
+                                                        hwnd: hwnd as u64,
+                                                        title,
+                                                        grid_top_left_row: 0,
+                                                        grid_top_left_col: 0,
+                                                        grid_bottom_right_row: 0,
+                                                        grid_bottom_right_col: 0,
+                                                        real_x: current_rect.left,
+                                                        real_y: current_rect.top,
+                                                        real_width: (current_rect.right - current_rect.left) as u32,
+                                                        real_height: (current_rect.bottom - current_rect.top) as u32,
+                                                        monitor_id: 0,
+                                                        old_width: (prev_rect.right - prev_rect.left) as u32,
+                                                        old_height: (prev_rect.bottom - prev_rect.top) as u32,
+                                                        new_width: (current_rect.right - current_rect.left) as u32,
+                                                        new_height: (current_rect.bottom - current_rect.top) as u32,
+                                                    };
+                                                    callback(event);
+                                                }
+                                            } else if moved && resized {
+                                                // Both move and resize
+                                                if let Some(ref callback) = config.event_callback {
+                                                    let title = WindowTracker::get_window_title(hwnd as u64);
+                                                    let event = crate::ipc_protocol::GridEvent::WindowMoved {
+                                                        hwnd: hwnd as u64,
+                                                        title,
+                                                        old_row: 0,
+                                                        old_col: 0,
+                                                        new_row: 0,
+                                                        new_col: 0,
+                                                        grid_top_left_row: 0,
+                                                        grid_top_left_col: 0,
+                                                        grid_bottom_right_row: 0,
+                                                        grid_bottom_right_col: 0,
+                                                        real_x: current_rect.left,
+                                                        real_y: current_rect.top,
+                                                        real_width: (current_rect.right - current_rect.left) as u32,
+                                                        real_height: (current_rect.bottom - current_rect.top) as u32,
+                                                        monitor_id: 0,
+                                                    };
+                                                    callback(event);
+                                                }
+                                                if let Some(ref callback) = config.event_callback {
+                                                    let title = WindowTracker::get_window_title(hwnd as u64);
+                                                    let event = crate::ipc_protocol::GridEvent::WindowResize {
+                                                        hwnd: hwnd as u64,
+                                                        title,
+                                                        grid_top_left_row: 0,
+                                                        grid_top_left_col: 0,
+                                                        grid_bottom_right_row: 0,
+                                                        grid_bottom_right_col: 0,
+                                                        real_x: current_rect.left,
+                                                        real_y: current_rect.top,
+                                                        real_width: (current_rect.right - current_rect.left) as u32,
+                                                        real_height: (current_rect.bottom - current_rect.top) as u32,
+                                                        monitor_id: 0,
+                                                        old_width: (prev_rect.right - prev_rect.left) as u32,
+                                                        old_height: (prev_rect.bottom - prev_rect.top) as u32,
+                                                        new_width: (current_rect.right - current_rect.left) as u32,
+                                                        new_height: (current_rect.bottom - current_rect.top) as u32,
+                                                    };
+                                                    callback(event);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
