@@ -130,7 +130,7 @@ pub struct MonitorGridInfo {
 
 impl GridClient {
     /// Register a callback to be called when window move events occur
-    pub fn set_move_callback<F>(&mut self, callback: F) -> GridClientResult<()> 
+    pub fn set_move_callback<F>(&mut self, callback: F) -> GridClientResult<()>
     where
         F: Fn(WindowEvent) + Send + Sync + 'static,
     {
@@ -140,7 +140,7 @@ impl GridClient {
     }
 
     /// Register a callback to be called when window resize events occur
-    pub fn set_resize_callback<F>(&mut self, callback: F) -> GridClientResult<()> 
+    pub fn set_resize_callback<F>(&mut self, callback: F) -> GridClientResult<()>
     where
         F: Fn(WindowEvent) + Send + Sync + 'static,
     {
@@ -798,7 +798,7 @@ impl GridClient {
         let mut last_debug_time = std::time::Instant::now();
 
         // Add event filtering to reduce stray events
-        let mut last_move_resize_event: Option<(u64, u8, std::time::Instant)> = None; // (hwnd, event_type, timestamp)
+        let last_move_resize_event: Option<(u64, u8, std::time::Instant)> = None; // (hwnd, event_type, timestamp)
         let event_debounce_ms = 100; // Ignore duplicate events within 100ms
 
         loop {
@@ -824,43 +824,43 @@ impl GridClient {
                 let window_event = *event_sample;
                 had_activity = true;
 
-                let should_process = match window_event.event_type.clone() {
-                    crate::EVENT_TYPE_WINDOW_MOVE_START
-                    | crate::EVENT_TYPE_WINDOW_MOVE_STOP
-                    | crate::EVENT_TYPE_WINDOW_MOVE
-                    | crate::EVENT_TYPE_WINDOW_RESIZE
-                    | crate::EVENT_TYPE_WINDOW_RESIZE_START
-                    | crate::EVENT_TYPE_WINDOW_RESIZE_STOP => {
-                        // Move/resize events
-                        let now = std::time::Instant::now();
-                        let should_skip = if let Some((last_hwnd, last_type, last_time)) =
-                            last_move_resize_event
-                        {
-                            last_hwnd == window_event.hwnd
-                                && last_type == window_event.event_type
-                                && now.duration_since(last_time).as_millis() < event_debounce_ms
-                        } else {
-                            false
-                        };
+                // let should_process = match window_event.event_type.clone() {
+                //     crate::EVENT_TYPE_WINDOW_MOVE_START
+                //     | crate::EVENT_TYPE_WINDOW_MOVE_STOP
+                //     | crate::EVENT_TYPE_WINDOW_MOVE
+                //     | crate::EVENT_TYPE_WINDOW_RESIZE
+                //     | crate::EVENT_TYPE_WINDOW_RESIZE_START
+                //     | crate::EVENT_TYPE_WINDOW_RESIZE_STOP => {
+                //         // Move/resize events
+                //         let now = std::time::Instant::now();
+                //         let should_skip = if let Some((last_hwnd, last_type, last_time)) =
+                //             last_move_resize_event
+                //         {
+                //             last_hwnd == window_event.hwnd
+                //                 && last_type == window_event.event_type
+                //                 && now.duration_since(last_time).as_millis() < event_debounce_ms
+                //         } else {
+                //             false
+                //         };
 
-                        if should_skip {
-                            println!(
-                                "🚫 [CLIENT] Skipping duplicate event: type={} hwnd={} (within {}ms)",
-                                window_event.event_type, window_event.hwnd, event_debounce_ms
-                            );
-                            false
-                        } else {
-                            last_move_resize_event =
-                                Some((window_event.hwnd, window_event.event_type, now));
-                            true
-                        }
-                    }
-                    _ => true, // Process all other events normally
-                };
+                //         if should_skip {
+                //             println!(
+                //                 "🚫 [CLIENT] Skipping duplicate event: type={} hwnd={} (within {}ms)",
+                //                 window_event.event_type, window_event.hwnd, event_debounce_ms
+                //             );
+                //             false
+                //         } else {
+                //             last_move_resize_event =
+                //                 Some((window_event.hwnd, window_event.event_type, now));
+                //             true
+                //         }
+                //     }
+                //     _ => true, // Process all other events normally
+                // };
 
-                if !should_process {
-                    continue;
-                }
+                // if !should_process {
+                //     continue;
+                // }
 
                 println!(
                     "🔥 [CLIENT] Received window event: type={} hwnd={}",
@@ -916,7 +916,10 @@ impl GridClient {
                         }
                     }
                     crate::EVENT_TYPE_WINDOW_RESIZE => {
-                        println!("📐 [CLIENT] Triggering RESIZE callback for event type {}", window_event.event_type);
+                        println!(
+                            "📐 [CLIENT] Triggering RESIZE callback for event type {}",
+                            window_event.event_type
+                        );
                         if let Ok(cb_lock) = resize_callback.lock() {
                             if let Some(ref cb) = *cb_lock {
                                 cb(window_event);
@@ -1179,7 +1182,7 @@ impl GridClient {
                                         z_order_map.get(&w.hwnd).copied().unwrap_or(usize::MAX);
                                     let wins = new_z < current_z;
                                     // if wins {
-                                    //     println!("[WINDOW LIST] 🔄 Cell [{},{}]: 0x{:X} (z={}) replaces 0x{:X} (z={})", 
+                                    //     println!("[WINDOW LIST] 🔄 Cell [{},{}]: 0x{:X} (z={}) replaces 0x{:X} (z={})",
                                     //             row, col, w.hwnd, new_z, current_hwnd, current_z);
                                     // }
                                     wins
@@ -1220,7 +1223,7 @@ impl GridClient {
                                         z_order_map.get(&w.hwnd).copied().unwrap_or(usize::MAX);
                                     let wins = new_z < current_z;
                                     // if wins {
-                                    //     println!("[WINDOW LIST] 🔄 Monitor {} Cell [{},{}]: 0x{:X} (z={}) replaces 0x{:X} (z={})", 
+                                    //     println!("[WINDOW LIST] 🔄 Monitor {} Cell [{},{}]: 0x{:X} (z={}) replaces 0x{:X} (z={})",
                                     //             w.monitor_id, row, col, w.hwnd, new_z, current, current_z);
                                     // }
                                     wins

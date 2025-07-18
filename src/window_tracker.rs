@@ -35,6 +35,7 @@ pub struct WindowTracker {
     pub windows: DashMap<u64, WindowInfo>, // Lock-free concurrent HashMap, now u64
     pub monitor_rect: RECT,                // Virtual screen rect
     pub config: crate::grid::GridConfig,   // Dynamic grid configuration
+    pub event_dispatch_mode: crate::EventDispatchMode, // Event dispatch mode
     pub grid: Vec<Vec<CellState>>,         // Virtual grid (dynamic)
     pub monitor_grids: Vec<MonitorGrid>,   // Individual monitor grids
     pub enum_counter: AtomicUsize,         // Atomic counter for lock-free access
@@ -46,6 +47,16 @@ pub struct WindowTracker {
 }
 
 impl WindowTracker {
+    /// Returns true if the tracker is in "tracker mode".
+    pub fn is_tracker_mode(&self) -> bool {
+        self.event_dispatch_mode == crate::EventDispatchMode::TrackedOnly
+    }
+
+    /// Returns the current event dispatch mode.
+    pub fn get_event_dispatch_mode(&self) -> crate::EventDispatchMode {
+        self.event_dispatch_mode
+    }
+
     /// Returns the HWND (u64) of the current foreground window, or None if not available.
     pub fn get_foreground_window() -> Option<u64> {
         unsafe {
@@ -83,6 +94,7 @@ impl WindowTracker {
         ret.find_desktop_hwnds();
         ret.last_scan_time =
             std::sync::Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        ret.event_dispatch_mode = crate::EventDispatchMode::AutoTrack; // default
         ret
     }
     /// Returns the current grid state in IPC protocol format (GridState)
@@ -128,6 +140,7 @@ impl WindowTracker {
             windows: DashMap::new(),
             monitor_rect: rect,
             config: config.clone(),
+            event_dispatch_mode: crate::EventDispatchMode::AutoTrack, // default
             grid,
             monitor_grids: Vec::new(),
             enum_counter: AtomicUsize::new(0),
@@ -1987,10 +2000,10 @@ impl WindowTracker {
             if WindowTracker::is_manageable_window(hwnd as u64) {
                 // println!("Found manageable window: {:?}", hwnd);
                 if let Some(rect) = WindowTracker::get_window_rect(hwnd as u64) {
-                // println!(
-                //     "[ENUM] Window HWND=0x{:X} rect: left={}, top={}, right={}, bottom={} (w={}, h={})", 
-                //     hwnd as u64, rect.left, rect.top, rect.right, rect.bottom, rect.right-rect.left, rect.bottom-rect.top
-                // );
+                    // println!(
+                    //     "[ENUM] Window HWND=0x{:X} rect: left={}, top={}, right={}, bottom={} (w={}, h={})",
+                    //     hwnd as u64, rect.left, rect.top, rect.right, rect.bottom, rect.right-rect.left, rect.bottom-rect.top
+                    // );
                     let mut title_buf = [0u16; 256];
                     let title_len =
                         GetWindowTextW(hwnd, title_buf.as_mut_ptr(), title_buf.len() as i32);

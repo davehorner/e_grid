@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/davehorner/e_grid/compare/v0.1.8...v0.2.0) - 2025-07-18
+
+### Added
+
+- *(events)* [**breaking**] add EventDispatchMode and support raw WindowEvent dispatching
+
 ## [0.1.8](https://github.com/davehorner/e_grid/compare/v0.1.7...v0.1.8) - 2025-07-17
 
 ### Other

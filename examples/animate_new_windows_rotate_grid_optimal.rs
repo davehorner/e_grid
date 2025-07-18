@@ -323,7 +323,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Setup WinEvent hooks with our event callback
-    let mut config = WindowEventConfig::new(tracker.clone());
+    let mut config = WindowEventConfig::new(tracker.clone(), e_grid::EventDispatchMode::AutoTrack);
     config = config.with_event_callback(event_callback);
     e_grid::window_events::setup_window_events(config)?;
 

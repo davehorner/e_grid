@@ -20,7 +20,10 @@ pub struct WindowEventConfig {
     pub focus_callback: Option<Box<dyn Fn(u64, bool) + Send + Sync>>, // hwnd, is_focused
     pub heartbeat_reset: Option<Box<dyn Fn() + Send + Sync>>,
     pub event_callback: Option<Box<dyn Fn(crate::ipc_protocol::GridEvent) + Send + Sync>>, // NEW: event publishing callback
+    /// NEW: callback for raw WindowEvent (additive, non-breaking)
+    pub window_event_callback: Option<Box<dyn Fn(crate::ipc_protocol::WindowEvent) + Send + Sync>>,
     pub debug_mode: bool,
+    pub event_dispatch_mode: crate::EventDispatchMode,
     // --- UPDATED: For move/resize tracking ---
     pub move_resize_event_queue:
         Option<Arc<crossbeam_queue::SegQueue<(isize, crate::MoveResizeEventType)>>>,
@@ -28,13 +31,18 @@ pub struct WindowEventConfig {
 }
 
 impl WindowEventConfig {
-    pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Self {
+    pub fn new(
+        tracker: Arc<Mutex<WindowTracker>>,
+        event_dispatch_mode: crate::EventDispatchMode,
+    ) -> Self {
         Self {
             tracker,
             focus_callback: None,
             heartbeat_reset: None,
-            event_callback: None, // NEW
+            event_callback: None,        // NEW
+            window_event_callback: None, // NEW
             debug_mode: false,
+            event_dispatch_mode,
             move_resize_event_queue: None,
             move_resize_states: None,
         }
@@ -66,6 +74,11 @@ impl WindowEventConfig {
 
     pub fn with_debug(mut self, enabled: bool) -> Self {
         self.debug_mode = enabled;
+        self
+    }
+
+    pub fn with_event_dispatch_mode(mut self, mode: crate::EventDispatchMode) -> Self {
+        self.event_dispatch_mode = mode;
         self
     }
 }
@@ -249,15 +262,43 @@ pub unsafe extern "system" fn win_event_proc(
             }
             focus_callback(hwnd as u64, true); // true = FOCUSED
         }
+        // NEW: Also call window_event_callback if present
+        if let Some(ref window_event_callback) = config.window_event_callback {
+            let window_event = crate::ipc_protocol::WindowEvent {
+                event_type: 100u8, // Use a code for foreground/focus event
+                hwnd: hwnd as u64,
+                ..Default::default()
+            };
+            window_event_callback(window_event);
+        }
+        return;
     }
 
-    // NEW: Handle create/destroy events with callbacks
+    // NEW: For all other events, call window_event_callback if present
+    if let Some(ref window_event_callback) = config.window_event_callback {
+        let window_event = crate::ipc_protocol::WindowEvent {
+            event_type: event as u8,
+            hwnd: hwnd as u64,
+            ..Default::default()
+        };
+        window_event_callback(window_event);
+    }
+
+    // Use event_dispatch_mode for event routing
+    let dispatch_mode = config.event_dispatch_mode;
+
+    // NEW: Handle create/destroy events with callbacks, respecting dispatch_mode
     match event {
         EVENT_OBJECT_CREATE => {
             let hwnd_u64 = hwnd as u64;
-            if WindowTracker::is_manageable_window(hwnd_u64) {
+            let should_dispatch = match dispatch_mode {
+                crate::EventDispatchMode::TrackedOnly => {
+                    WindowTracker::is_manageable_window(hwnd_u64)
+                }
+                crate::EventDispatchMode::Open | crate::EventDispatchMode::AutoTrack => true,
+            };
+            if should_dispatch {
                 println!("🆕 [WINEVENT] Window CREATED: HWND 0x{:X}", hwnd_u64);
-
                 if let Some(ref callback) = config.event_callback {
                     let title = WindowTracker::get_window_title(hwnd_u64);
                     let event = crate::ipc_protocol::GridEvent::WindowCreated {
@@ -281,35 +322,43 @@ pub unsafe extern "system" fn win_event_proc(
         }
         EVENT_OBJECT_DESTROY => {
             let hwnd_u64 = hwnd as u64;
-
-            // Check if the window is currently tracked as manageable before proceeding
-            if let Ok(tracker) = config.tracker.lock() {
-                if !tracker.windows.contains_key(&hwnd_u64) {
-                    // Not a managed/tracked window, skip further processing
-                    return;
+            let should_dispatch = match dispatch_mode {
+                crate::EventDispatchMode::TrackedOnly => {
+                    if let Ok(tracker) = config.tracker.lock() {
+                        tracker.windows.contains_key(&hwnd_u64)
+                    } else {
+                        false
+                    }
                 }
-            }
-            // Always send destroy events - let the main.rs event handler determine
-            // if this was a manageable window using the tracking
-            let class_name = WindowTracker::get_window_class_name(hwnd_u64);
-            let title = WindowTracker::get_window_title(hwnd_u64);
-
-            println!(
-                "💀 [WINEVENT] Window DESTROYED: HWND 0x{:X} {class_name} {title}",
-                hwnd_u64
-            );
-
-            if let Some(ref callback) = config.event_callback {
-                let title = if title.is_empty() {
-                    "(destroyed)".to_string()
+                crate::EventDispatchMode::Open | crate::EventDispatchMode::AutoTrack => true,
+            };
+            if should_dispatch {
+                let class_name = WindowTracker::get_window_class_name(hwnd_u64);
+                let title = WindowTracker::get_window_title(hwnd_u64);
+                println!(
+                    "[WINEVENT] Window DESTROYED: HWND 0x{:X} {class_name} {title}",
+                    hwnd_u64
+                );
+                if let Some(ref callback) = config.event_callback {
+                    let title = if title.is_empty() {
+                        "(destroyed)".to_string()
+                    } else {
+                        title
+                    };
+                    let event = crate::ipc_protocol::GridEvent::WindowDestroyed {
+                        hwnd: hwnd_u64,
+                        title,
+                    };
+                    println!("[DESTROYED] Calling event_callback with event: {:?}", event);
+                    callback(event);
                 } else {
-                    title
-                };
-                let event = crate::ipc_protocol::GridEvent::WindowDestroyed {
-                    hwnd: hwnd_u64,
-                    title,
-                };
-                callback(event);
+                    println!("[DESTROYED] No event_callback set in config!");
+                }
+            } else {
+                println!(
+                    "[DESTROYED] HWND 0x{:X} not dispatched due to mode",
+                    hwnd_u64
+                );
             }
         }
         EVENT_OBJECT_SHOW => {
@@ -317,11 +366,9 @@ pub unsafe extern "system" fn win_event_proc(
             if WindowTracker::is_manageable_window(hwnd_u64) {
                 let class = WindowTracker::get_window_class(hwnd_u64);
                 if class == "Windows.UI.Composition.DesktopWindowContentBridge" {
-                    // Skip hidden windows that are part of the Windows UI framework
                     return;
                 }
                 println!("👁️ [WINEVENT] Window SHOWN: HWND 0x{:X}", hwnd_u64);
-
                 if let Some(ref callback) = config.event_callback {
                     let title = WindowTracker::get_window_title(hwnd_u64);
                     let event = crate::ipc_protocol::GridEvent::WindowCreated {
@@ -357,8 +404,71 @@ pub unsafe extern "system" fn win_event_proc(
                 }
             }
         }
+        EVENT_OBJECT_LOCATIONCHANGE => {
+            let hwnd_u64 = hwnd as u64;
+            if WindowTracker::is_manageable_window(hwnd_u64) {
+                println!("📍 [WINEVENT] Window LOCATIONCHANGE: HWND 0x{:X}", hwnd_u64);
+                if let Some(ref callback) = config.event_callback {
+                    let title = WindowTracker::get_window_title(hwnd_u64);
+                    let event = crate::ipc_protocol::GridEvent::WindowMoved {
+                        hwnd: hwnd_u64,
+                        title,
+                        old_row: 0,
+                        old_col: 0,
+                        new_row: 0,
+                        new_col: 0,
+                        grid_top_left_row: 0,
+                        grid_top_left_col: 0,
+                        grid_bottom_right_row: 0,
+                        grid_bottom_right_col: 0,
+                        real_x: 0,
+                        real_y: 0,
+                        real_width: 0,
+                        real_height: 0,
+                        monitor_id: 0,
+                    };
+                    callback(event);
+                }
+            }
+        }
+        EVENT_SYSTEM_MINIMIZESTART => {
+            let hwnd_u64 = hwnd as u64;
+            println!("🗕 [WINEVENT] Window MINIMIZESTART: HWND 0x{:X}", hwnd_u64);
+            if let Some(ref callback) = config.event_callback {
+                let event = crate::ipc_protocol::GridEvent::WindowStateChanged {
+                    hwnd: hwnd_u64,
+                    state: "minimize_start".to_string(),
+                };
+                callback(event);
+            }
+        }
+        EVENT_SYSTEM_MINIMIZEEND => {
+            let hwnd_u64 = hwnd as u64;
+            println!("🗗 [WINEVENT] Window MINIMIZEEND: HWND 0x{:X}", hwnd_u64);
+            if let Some(ref callback) = config.event_callback {
+                let event = crate::ipc_protocol::GridEvent::WindowStateChanged {
+                    hwnd: hwnd_u64,
+                    state: "minimize_end".to_string(),
+                };
+                callback(event);
+            }
+        }
+        EVENT_SYSTEM_FOREGROUND => {
+            let hwnd_u64 = hwnd as u64;
+            println!("⭐ [WINEVENT] Window FOREGROUND: HWND 0x{:X}", hwnd_u64);
+            if let Some(ref callback) = config.event_callback {
+                let event = crate::ipc_protocol::GridEvent::WindowStateChanged {
+                    hwnd: hwnd_u64,
+                    state: "foreground".to_string(),
+                };
+                callback(event);
+            }
+        }
         _ => {
-            // Handle other events (LOCATIONCHANGE, etc.) - existing code
+            println!(
+                "[WINEVENT] Unhandled WinEvent type: {} for HWND 0x{:X}",
+                event, hwnd as u64
+            );
         }
     }
 
@@ -441,12 +551,17 @@ pub unsafe extern "system" fn win_event_proc(
                                         entry.last_rect = current_rect;
 
                                         // Emit continuous move/resize events during gesture
-                                        if entry.in_progress.load(std::sync::atomic::Ordering::Relaxed) {
+                                        if entry
+                                            .in_progress
+                                            .load(std::sync::atomic::Ordering::Relaxed)
+                                        {
                                             // Determine which event to emit
                                             if moved && !resized {
                                                 // Continuous move
                                                 if let Some(ref callback) = config.event_callback {
-                                                    let title = WindowTracker::get_window_title(hwnd as u64);
+                                                    let title = WindowTracker::get_window_title(
+                                                        hwnd as u64,
+                                                    );
                                                     let event = crate::ipc_protocol::GridEvent::WindowMoved {
                                                         hwnd: hwnd as u64,
                                                         title,
@@ -469,7 +584,9 @@ pub unsafe extern "system" fn win_event_proc(
                                             } else if resized && !moved {
                                                 // Continuous resize
                                                 if let Some(ref callback) = config.event_callback {
-                                                    let title = WindowTracker::get_window_title(hwnd as u64);
+                                                    let title = WindowTracker::get_window_title(
+                                                        hwnd as u64,
+                                                    );
                                                     let event = crate::ipc_protocol::GridEvent::WindowResize {
                                                         hwnd: hwnd as u64,
                                                         title,
@@ -492,7 +609,9 @@ pub unsafe extern "system" fn win_event_proc(
                                             } else if moved && resized {
                                                 // Both move and resize
                                                 if let Some(ref callback) = config.event_callback {
-                                                    let title = WindowTracker::get_window_title(hwnd as u64);
+                                                    let title = WindowTracker::get_window_title(
+                                                        hwnd as u64,
+                                                    );
                                                     let event = crate::ipc_protocol::GridEvent::WindowMoved {
                                                         hwnd: hwnd as u64,
                                                         title,
@@ -513,7 +632,9 @@ pub unsafe extern "system" fn win_event_proc(
                                                     callback(event);
                                                 }
                                                 if let Some(ref callback) = config.event_callback {
-                                                    let title = WindowTracker::get_window_title(hwnd as u64);
+                                                    let title = WindowTracker::get_window_title(
+                                                        hwnd as u64,
+                                                    );
                                                     let event = crate::ipc_protocol::GridEvent::WindowResize {
                                                         hwnd: hwnd as u64,
                                                         title,
