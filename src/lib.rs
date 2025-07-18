@@ -1,3 +1,12 @@
+/// Controls which windows generate events: only tracked, or all (open mode)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventDispatchMode {
+    TrackedOnly,
+    Open,
+    /// Like Open, but also adds windows to tracking permanently when events are received
+    AutoTrack,
+}
+
 use crossbeam_queue::SegQueue;
 use dashmap::DashMap;
 use ringbuf::wrap::Prod;
@@ -72,6 +81,7 @@ pub const EVENT_TYPE_WINDOW_MOVE: u8 = 8;
 pub const EVENT_TYPE_WINDOW_RESIZE: u8 = 9;
 pub const EVENT_TYPE_WINDOW_FOCUSED: u8 = 10;
 pub const EVENT_TYPE_WINDOW_DEFOCUSED: u8 = 11;
+pub const EVENT_TYPE_WINDOW_STATE_CHANGED: u8 = 12;
 
 // --- Mapping method for event type codes ---
 pub fn grid_event_type_code(event: &GridEvent) -> u8 {
@@ -88,6 +98,7 @@ pub fn grid_event_type_code(event: &GridEvent) -> u8 {
         GridEvent::WindowResize { .. } => EVENT_TYPE_WINDOW_RESIZE,
         GridEvent::WindowFocused { .. } => EVENT_TYPE_WINDOW_FOCUSED,
         GridEvent::WindowDefocused { .. } => EVENT_TYPE_WINDOW_DEFOCUSED,
+        GridEvent::WindowStateChanged { .. } => EVENT_TYPE_WINDOW_STATE_CHANGED,
     }
 }
 /// Maps a static string describing the event to its event type code (u8).
@@ -104,6 +115,7 @@ pub fn grid_event_type_code_from_str(event_str: &str) -> u8 {
         "WindowResize" => EVENT_TYPE_WINDOW_RESIZE,
         "WindowFocused" => EVENT_TYPE_WINDOW_FOCUSED,
         "WindowDefocused" => EVENT_TYPE_WINDOW_DEFOCUSED,
+        "WindowStateChanged" => EVENT_TYPE_WINDOW_STATE_CHANGED,
         _ => 255, // Unknown event code
     }
 }
@@ -122,6 +134,7 @@ pub fn type_code_grid_event_str(code: u8) -> &'static str {
         EVENT_TYPE_WINDOW_RESIZE => "WindowResize",
         EVENT_TYPE_WINDOW_FOCUSED => "WindowFocused",
         EVENT_TYPE_WINDOW_DEFOCUSED => "WindowDefocused",
+        EVENT_TYPE_WINDOW_STATE_CHANGED => "WindowStateChanged",
         _ => "UnknownEvent",
     }
 }
@@ -565,6 +578,8 @@ pub struct WindowEventSystem {
         Arc<DashMap<usize, Arc<dyn Fn(HWND, &WindowInfo) + Send + Sync>>>,
     // New: Blacklist for problematic HWNDs that consistently fail rect retrieval
     pub blacklisted_hwnds: Arc<DashMap<HWND, std::time::Instant>>,
+    // New: Event dispatch mode (TrackedOnly or Open)
+    pub event_dispatch_mode: EventDispatchMode,
 }
 
 impl WindowEventSystem {
@@ -587,6 +602,7 @@ impl WindowEventSystem {
             move_resize_start_callbacks: Arc::new(DashMap::new()),
             move_resize_stop_callbacks: Arc::new(DashMap::new()),
             blacklisted_hwnds: Arc::new(DashMap::new()),
+            event_dispatch_mode: EventDispatchMode::AutoTrack,
         }
     }
 
@@ -749,61 +765,41 @@ impl WindowEventSystem {
                 continue;
             }
 
-            // Ensure window exists in tracking
+            // Ensure window exists in tracking, or add if open/auto mode, or allow DESTROYED events for untracked windows in open/auto
             let window_exists = self.windows.get(&hwnd).is_some();
+            let is_destroyed_event = matches!(
+                event_type,
+                MoveResizeEventType::MoveStop
+                    | MoveResizeEventType::ResizeStop
+                    | MoveResizeEventType::BothStop
+            ) && if let Some(ref cb) = self.event_callback {
+                // Try to detect if this is a DESTROYED event by checking the event type code
+                // But here, we only have Move/Resize events, so fallback to window_exists logic
+                false
+            } else {
+                false
+            };
             if !window_exists {
-                println!("[WindowEventSystem] Adding tracking for HWND={:?}", hwnd);
-                if let Some(rect) = crate::WindowTracker::get_window_rect(hwnd as u64) {
-                    let title = crate::WindowTracker::get_window_title(hwnd as u64);
-                    let monitor_cells: std::collections::HashMap<usize, Vec<(usize, usize)>> =
-                        std::collections::HashMap::new();
-                    let process_id =
-                        crate::WindowTracker::get_window_process_id(hwnd as u64).unwrap_or(0);
-                    let class_name = crate::WindowTracker::get_window_class_name(hwnd as u64);
-                    let is_visible = crate::WindowTracker::is_window_visible(hwnd as u64);
-                    let is_minimized = crate::WindowTracker::is_window_minimized(hwnd as u64);
-                    let is_maximized = crate::WindowTracker::is_window_maximized(hwnd as u64);
-                    let window_info = crate::WindowInfo {
-                        hwnd: hwnd as u64,
-                        window_rect: window::info::RectWrapper(rect),
-                        title: {
-                            let mut title_buf = [0u16; 256];
-                            let utf16: Vec<u16> = title.encode_utf16().collect();
-                            let len = utf16.len().min(256);
-                            title_buf[..len].copy_from_slice(&utf16[..len]);
-                            title_buf
-                        },
-                        title_len: title.len() as u32,
-                        monitor_ids: {
-                            let mut arr = [0usize; 8];
-                            let ids: Vec<usize> = monitor_cells.keys().cloned().collect();
-                            for (i, id) in ids.iter().take(8).enumerate() {
-                                arr[i] = *id;
-                            }
-                            arr
-                        },
-                        is_visible,
-                        is_minimized,
-                        is_maximized,
-                        process_id,
-                        class_name: {
-                            let mut class_name_buf = [0u16; 256];
-                            let utf16: Vec<u16> = class_name.encode_utf16().collect();
-                            let len = utf16.len().min(256);
-                            class_name_buf[..len].copy_from_slice(&utf16[..len]);
-                            class_name_buf
-                        },
-                        class_name_len: class_name.len() as u32,
-                        z_order: 0,
-                    };
-                    self.windows.insert(hwnd, window_info);
-                } else {
-                    println!(
-                        "[WindowEventSystem] Could not get rect for HWND={:?}, adding to blacklist.",
-                        hwnd
-                    );
-                    self.blacklisted_hwnds.insert(hwnd, Instant::now());
-                    continue;
+                match self.event_dispatch_mode {
+                    EventDispatchMode::TrackedOnly => {
+                        // Only send events for tracked windows
+                        println!(
+                            "[WindowEventSystem] Skipping untracked HWND={:?} (TrackedOnly mode)",
+                            hwnd
+                        );
+                        continue;
+                    }
+                    EventDispatchMode::Open | EventDispatchMode::AutoTrack => {
+                        // For DESTROYED events, allow event through even if not tracked
+                        if let Some(ref cb) = self.event_callback {
+                            // If this is a DESTROYED event, allow it through
+                            // But we don't have the event type here, so allow all events through for untracked windows
+                            // (This is safe for Open/AutoTrack modes)
+                        } else {
+                            // No callback, skip
+                            continue;
+                        }
+                    }
                 }
             }
 

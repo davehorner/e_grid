@@ -56,7 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracker_guard.register_event_callback(Box::new(DebugEventCallback));
     } // Step 3: Set up event-driven window monitoring
     println!("🔧 Setting up event-driven window monitoring...");
-    let config = window_events::WindowEventConfig::new(tracker.clone()).with_debug(true);
+    let config = window_events::WindowEventConfig::new(tracker.clone(), e_grid::EventDispatchMode::AutoTrack).with_debug(true);
     window_events::setup_window_events(config)?;
     // Step 4: Event-driven monitoring is ready (message loop will run in demo phases)
     println!("🔄 Event-driven system ready - message processing will happen in main thread...");

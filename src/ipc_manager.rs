@@ -955,7 +955,23 @@ impl GridIpcManager {
             .as_secs();
         let event_type = grid_event_type_code(event);
         match event {
-            GridEvent::WindowResize { hwnd, title, old_width, old_height, new_width, new_height, grid_top_left_row, grid_top_left_col, grid_bottom_right_row, grid_bottom_right_col, real_x, real_y, real_width, real_height, monitor_id } => WindowEvent {
+            GridEvent::WindowResize {
+                hwnd,
+                title,
+                old_width,
+                old_height,
+                new_width,
+                new_height,
+                grid_top_left_row,
+                grid_top_left_col,
+                grid_bottom_right_row,
+                grid_bottom_right_col,
+                real_x,
+                real_y,
+                real_width,
+                real_height,
+                monitor_id,
+            } => WindowEvent {
                 event_type,
                 hwnd: *hwnd,
                 row: 0,
@@ -1228,6 +1244,13 @@ impl GridIpcManager {
             GridEvent::WindowDefocused { hwnd, .. } => WindowEvent {
                 event_type,
                 hwnd: *hwnd,
+                timestamp,
+                ..Default::default()
+            },
+            GridEvent::WindowStateChanged { hwnd, .. } => WindowEvent {
+                event_type,
+                hwnd: *hwnd,
+                // You may want to map `state` to a field in WindowEvent if available
                 timestamp,
                 ..Default::default()
             },

@@ -510,6 +510,11 @@ impl Default for WindowDetails {
 // Higher-level enum types for external API compatibility
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GridEvent {
+    /// Window state change (minimize, restore, foreground, etc)
+    WindowStateChanged {
+        hwnd: u64,
+        state: String,
+    },
     WindowCreated {
         hwnd: u64,
         title: String,

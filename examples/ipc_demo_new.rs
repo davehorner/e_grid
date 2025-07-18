@@ -496,7 +496,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ipc_manager.setup_services(true, true, true, true, true, true, true, true, true)?;
 
     // Set up window event hooks
-    let config = window_events::WindowEventConfig::new(tracker_arc.clone()).with_debug(true);
+    let config = window_events::WindowEventConfig::new(tracker_arc.clone(), e_grid::EventDispatchMode::AutoTrack).with_debug(true);
     match window_events::setup_window_events(config) {
         Ok(_) => println!("✅ Window event hooks set up successfully!"),
         Err(e) => {

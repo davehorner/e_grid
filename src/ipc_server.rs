@@ -68,9 +68,115 @@ pub struct GridIpcServer {
     event_sender: Option<mpsc::Sender<crate::ipc_protocol::GridEvent>>, // NEW: for sending events to main.rs
     // Add WindowEventSystem for move/resize event polling
     window_event_system: Option<crate::WindowEventSystem>,
+    /// Direct channel for raw WindowEvent objects
+    pub window_event_direct_receiver:
+        Option<std::sync::mpsc::Receiver<crate::ipc_protocol::WindowEvent>>,
+    /// Optional callback for raw WindowEvent objects
+    pub window_event_callback:
+        Option<Box<dyn Fn(crate::ipc_protocol::WindowEvent) + Send + Sync + 'static>>,
 }
 
 impl GridIpcServer {
+    /// Take the direct window event receiver, if available. Can only be called once.
+    pub fn take_window_event_direct_receiver(
+        &mut self,
+    ) -> Option<std::sync::mpsc::Receiver<crate::ipc_protocol::WindowEvent>> {
+        self.window_event_direct_receiver.take()
+    }
+
+    /// Directly publish a WindowEvent to all connected clients (no translation)
+    pub fn publish_window_event_direct(
+        &mut self,
+        window_event: WindowEvent,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        info!("\n\n📡 [DIRECT] Publishing WindowEvent: {:?}", window_event);
+        if let Some(ref mut publisher) = self.event_publisher {
+            if let Err(e) = publisher.send_copy(window_event) {
+                error!("❌ [DIRECT] Failed to send WindowEvent to IPC: {:?}", e);
+            } else {
+                debug!("[publish_window_event_direct] WindowEvent sent to IPC");
+            }
+        } else {
+            error!("❌ [DIRECT] Event publisher is None - not initialized!");
+        }
+        Ok(())
+    }
+    /// Setup window event monitoring using the new library-based system, with explicit dispatch mode
+    pub fn setup_window_events_with_mode(
+        &mut self,
+        mode: crate::EventDispatchMode,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Create a channel for focus events
+        let (focus_sender, focus_receiver) = std::sync::mpsc::channel::<(u64, bool)>();
+        self.focus_event_receiver = Some(focus_receiver);
+        // Create a channel for window move/resize events
+        let (event_sender, event_receiver) =
+            std::sync::mpsc::channel::<crate::ipc_protocol::GridEvent>();
+        self.event_receiver = Some(event_receiver);
+        self.event_sender = Some(event_sender.clone());
+        // Create a channel for direct WindowEvent publishing
+        let (window_event_direct_sender, window_event_direct_receiver) =
+            std::sync::mpsc::channel::<crate::ipc_protocol::WindowEvent>();
+        self.window_event_direct_receiver = Some(window_event_direct_receiver);
+        // --- NEW: Setup WindowEventSystem for move/resize ---
+        let hwnd_map: std::sync::Arc<
+            DashMap<*mut winapi::shared::windef::HWND__, crate::WindowInfo>,
+        > = std::sync::Arc::new(DashMap::new());
+        for entry in self.windows.iter() {
+            let (hwnd_u64, win_info) = entry.pair();
+            let hwnd_ptr = *hwnd_u64 as *mut winapi::shared::windef::HWND__;
+            hwnd_map.insert(hwnd_ptr, win_info.clone());
+        }
+        let mut wes = crate::WindowEventSystem::new(hwnd_map.clone());
+        wes.event_dispatch_mode = mode;
+        let event_sender_for_wes = event_sender.clone();
+        wes.set_event_callback(move |event: crate::ipc_protocol::GridEvent| {
+            println!("[SERVER CALLBACK] Window event: {:?}", event);
+            let _ = event_sender_for_wes.send(event.clone());
+        });
+        let event_sender_for_config = event_sender.clone();
+        let window_event_direct_sender_clone = window_event_direct_sender.clone();
+        let config = WindowEventConfig {
+            tracker: self.tracker.clone(),
+            focus_callback: Some(Box::new(move |hwnd: u64, is_focused: bool| {
+                info!(
+                    "🎯 Focus event: HWND {} - {}",
+                    hwnd,
+                    if is_focused { "FOCUSED" } else { "DEFOCUSED" }
+                );
+                let _ = focus_sender.send((hwnd, is_focused));
+            })),
+            heartbeat_reset: Some(Box::new(|| {
+                // This callback will be called when window events occur
+            })),
+            event_callback: Some(Box::new(move |event: crate::ipc_protocol::GridEvent| {
+                debug!("[event_callback] Received event: {:?}", event);
+                if let Err(e) = event_sender_for_config.send(event.clone()) {
+                    error!("❌ Failed to send event via channel: {:?}", e);
+                }
+            })),
+            window_event_callback: Some(Box::new(
+                move |window_event: crate::ipc_protocol::WindowEvent| {
+                    debug!(
+                        "[window_event_callback] Received raw WindowEvent: {:?}",
+                        window_event
+                    );
+                    let _ = window_event_direct_sender_clone.send(window_event);
+                },
+            )),
+            debug_mode: true,
+            event_dispatch_mode: mode,
+            move_resize_event_queue: Some(wes.event_queue.clone()),
+            move_resize_states: Some(wes.states.clone()),
+        };
+        window_events::setup_window_events(config).map_err(|e| {
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
+                as Box<dyn std::error::Error>
+        })?;
+        self.heartbeat_service = Some(HeartbeatService::new(std::time::Duration::from_secs(3)));
+        self.window_event_system = Some(wes);
+        Ok(())
+    }
     /// Create a new IPC server instance
     pub fn new(tracker: Arc<Mutex<WindowTracker>>) -> Result<Self, Box<dyn std::error::Error>> {
         // Get the config from the tracker once during initialization
@@ -110,8 +216,19 @@ impl GridIpcServer {
             event_receiver: None,
             event_sender: None,
             window_event_system: None,
+            window_event_direct_receiver: None,
+            window_event_callback: None,
         })
     }
+
+    pub fn with_window_event_callback<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(crate::ipc_protocol::WindowEvent) + Send + Sync + 'static,
+    {
+        self.window_event_callback = Some(Box::new(callback));
+        self
+    }
+
     pub fn publish_window_list_message(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         use crate::ipc_protocol::{WindowDetails, WindowListMessage};
         const MAX_WINDOWS: usize = 20; // Define locally since we removed it from imports
@@ -357,6 +474,17 @@ impl GridIpcServer {
 
             // Process window events from the channel and publish them via IPC
             self.process_window_events()?;
+
+            // Process direct WindowEvents from the channel and publish them via IPC
+            if self.window_event_direct_receiver.is_some() {
+                // Take the receiver out of self to avoid borrow checker issues
+                let receiver = self.window_event_direct_receiver.take().unwrap();
+                while let Ok(window_event) = receiver.try_recv() {
+                    let _ = self.publish_window_event_direct(window_event);
+                }
+                // Put the receiver back
+                self.window_event_direct_receiver = Some(receiver);
+            }
 
             // Publish monitor list periodically for new clients (every 5 seconds)
             if self.last_monitor_list_publish.elapsed().as_secs() >= 5 {
@@ -1321,6 +1449,16 @@ impl GridIpcServer {
             .as_secs();
         let event_type = grid_event_type_code(event);
         match event {
+            GridEvent::WindowStateChanged { hwnd, state } => {
+                WindowEvent {
+                    event_type,
+                    hwnd: *hwnd,
+                    // Optionally encode state string into a field if needed
+                    // For now, just set the type and hwnd
+                    timestamp,
+                    ..Default::default()
+                }
+            }
             GridEvent::WindowDestroyed { hwnd, title } => WindowEvent {
                 event_type,
                 hwnd: *hwnd,
@@ -1357,20 +1495,20 @@ impl GridIpcServer {
                 timestamp,
                 ..Default::default()
             },
-            GridEvent::WindowResizeStart { 
-                hwnd, 
-                current_row, 
-                current_col, 
-                grid_top_left_row, 
-                grid_top_left_col, 
-                grid_bottom_right_row, 
-                grid_bottom_right_col, 
-                real_x, 
-                real_y, 
-                real_width, 
-                real_height, 
-                monitor_id, 
-                .. 
+            GridEvent::WindowResizeStart {
+                hwnd,
+                current_row,
+                current_col,
+                grid_top_left_row,
+                grid_top_left_col,
+                grid_bottom_right_row,
+                grid_bottom_right_col,
+                real_x,
+                real_y,
+                real_width,
+                real_height,
+                monitor_id,
+                ..
             } => WindowEvent {
                 event_type,
                 hwnd: *hwnd,
@@ -1388,18 +1526,18 @@ impl GridIpcServer {
                 timestamp,
                 ..Default::default()
             },
-            GridEvent::WindowMoved { 
-                hwnd, 
-                grid_top_left_row, 
-                grid_top_left_col, 
-                grid_bottom_right_row, 
-                grid_bottom_right_col, 
-                real_x, 
-                real_y, 
-                real_width, 
-                real_height, 
-                monitor_id, 
-                .. 
+            GridEvent::WindowMoved {
+                hwnd,
+                grid_top_left_row,
+                grid_top_left_col,
+                grid_bottom_right_row,
+                grid_bottom_right_col,
+                real_x,
+                real_y,
+                real_width,
+                real_height,
+                monitor_id,
+                ..
             } => WindowEvent {
                 event_type,
                 hwnd: *hwnd,
@@ -1417,18 +1555,18 @@ impl GridIpcServer {
                 timestamp,
                 ..Default::default()
             },
-            GridEvent::WindowMove { 
-                hwnd, 
-                grid_top_left_row, 
-                grid_top_left_col, 
-                grid_bottom_right_row, 
-                grid_bottom_right_col, 
-                real_x, 
-                real_y, 
-                real_width, 
-                real_height, 
-                monitor_id, 
-                .. 
+            GridEvent::WindowMove {
+                hwnd,
+                grid_top_left_row,
+                grid_top_left_col,
+                grid_bottom_right_row,
+                grid_bottom_right_col,
+                real_x,
+                real_y,
+                real_width,
+                real_height,
+                monitor_id,
+                ..
             } => WindowEvent {
                 event_type,
                 hwnd: *hwnd,
@@ -1446,18 +1584,18 @@ impl GridIpcServer {
                 timestamp,
                 ..Default::default()
             },
-            GridEvent::WindowResize { 
-                hwnd, 
-                grid_top_left_row, 
-                grid_top_left_col, 
-                grid_bottom_right_row, 
-                grid_bottom_right_col, 
-                real_x, 
-                real_y, 
-                real_width, 
-                real_height, 
-                monitor_id, 
-                .. 
+            GridEvent::WindowResize {
+                hwnd,
+                grid_top_left_row,
+                grid_top_left_col,
+                grid_bottom_right_row,
+                grid_bottom_right_col,
+                real_x,
+                real_y,
+                real_width,
+                real_height,
+                monitor_id,
+                ..
             } => WindowEvent {
                 event_type,
                 hwnd: *hwnd,
@@ -1596,66 +1734,13 @@ impl GridIpcServer {
 
     /// Setup window event monitoring using the new library-based system
     pub fn setup_window_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Create a channel for focus events
-        let (focus_sender, focus_receiver) = mpsc::channel::<(u64, bool)>();
-        self.focus_event_receiver = Some(focus_receiver);
-        // Create a channel for window move/resize events
-        let (event_sender, event_receiver) = mpsc::channel::<crate::ipc_protocol::GridEvent>();
-        self.event_receiver = Some(event_receiver);
-        self.event_sender = Some(event_sender.clone());
-        // --- NEW: Setup WindowEventSystem for move/resize ---
-        // Convert Arc<DashMap<u64, WindowInfo>> to Arc<DashMap<*mut winapi::shared::windef::HWND__, WindowInfo>>
-        let hwnd_map: Arc<DashMap<*mut winapi::shared::windef::HWND__, crate::WindowInfo>> =
-            Arc::new(DashMap::new());
-        for entry in self.windows.iter() {
-            let (hwnd_u64, win_info) = entry.pair();
-            let hwnd_ptr = *hwnd_u64 as *mut winapi::shared::windef::HWND__;
-            hwnd_map.insert(hwnd_ptr, win_info.clone());
-        }
-        let mut wes = crate::WindowEventSystem::new(hwnd_map.clone());
-        let event_sender_for_wes = event_sender.clone();
-        // Only send to the channel; do not attempt to clone or use the publisher here
-        wes.set_event_callback(move |event: crate::ipc_protocol::GridEvent| {
-            println!("[SERVER CALLBACK] Window event: {:?}", event);
-            let _ = event_sender_for_wes.send(event.clone());
-        });
-        // Create window event configuration with focus and event publishing callbacks
-        let event_sender_for_config = event_sender.clone();
-        let config = WindowEventConfig {
-            tracker: self.tracker.clone(),
-            focus_callback: Some(Box::new(move |hwnd: u64, is_focused: bool| {
-                info!(
-                    "🎯 Focus event: HWND {} - {}",
-                    hwnd,
-                    if is_focused { "FOCUSED" } else { "DEFOCUSED" }
-                );
-                let _ = focus_sender.send((hwnd, is_focused));
-            })),
-            heartbeat_reset: Some(Box::new(|| {
-                // This callback will be called when window events occur
-                //println!("💓 Heartbeat reset triggered by window event");
-            })),
-            event_callback: Some(Box::new(move |event: crate::ipc_protocol::GridEvent| {
-                // Debug: Log every event received by the callback
-                debug!("[event_callback] Received event: {:?}", event);
-                // Send event to the main event loop via channel
-                if let Err(e) = event_sender_for_config.send(event.clone()) {
-                    error!("❌ Failed to send event via channel: {:?}", e);
-                }
-            })),
-            debug_mode: true,
-            move_resize_event_queue: Some(wes.event_queue.clone()),
-            move_resize_states: Some(wes.states.clone()),
+        // Default to current mode if available, else AutoTrack
+        let mode = if let Some(ref wes) = self.window_event_system {
+            wes.event_dispatch_mode
+        } else {
+            crate::EventDispatchMode::AutoTrack
         };
-        // Setup window events using the new library system
-        window_events::setup_window_events(config).map_err(|e| {
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
-                as Box<dyn std::error::Error>
-        })?;
-        // Initialize heartbeat service with 30-second timeout
-        self.heartbeat_service = Some(HeartbeatService::new(Duration::from_secs(3)));
-        self.window_event_system = Some(wes);
-        Ok(())
+        self.setup_window_events_with_mode(mode)
     }
 
     /// Process layout commands from clients
@@ -2026,6 +2111,42 @@ where
         true
     })?;
 
+    Ok(())
+}
+
+/// Start the server with a specific EventDispatchMode
+pub fn start_server_with_mode<F>(
+    mode: crate::EventDispatchMode,
+    before_loop: F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: FnOnce(&mut GridIpcServer),
+{
+    // Create the window tracker
+    let mut tracker = WindowTracker::new();
+    tracker.windows = tracker.enumerate_windows();
+    println!(
+        "[Grid] Initial enumeration complete - found {} windows",
+        tracker.windows.len()
+    );
+    let tracker = Arc::new(Mutex::new(tracker));
+    let mut ipc_server = crate::ipc_server::GridIpcServer::new(tracker.clone())?;
+    ipc_server.setup_services()?;
+    ipc_server.start_background_event_loop()?;
+    // Use the provided mode
+    let _ = ipc_server.setup_window_events_with_mode(mode);
+    thread::sleep(Duration::from_millis(500));
+    before_loop(&mut ipc_server);
+    window_events::run_message_loop(|| {
+        ipc_server.poll_move_resize_events();
+        let _ = ipc_server.process_commands();
+        let _ = ipc_server.process_focus_events();
+        let _ = ipc_server.process_window_events();
+        let _ = ipc_server.process_layout_commands();
+        let _ = ipc_server.process_animation_commands();
+        let _ = ipc_server.update_animations();
+        true
+    })?;
     Ok(())
 }
 
