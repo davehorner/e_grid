@@ -405,32 +405,52 @@ pub unsafe extern "system" fn win_event_proc(
             }
         }
         EVENT_OBJECT_LOCATIONCHANGE => {
-            let hwnd_u64 = hwnd as u64;
+            // If pinning, use the parent HWND for pinning logic
+            let hwnd_to_use = hwnd;
+            // unsafe {
+            //     use winapi::um::winuser::GetParent;
+            //     let parent = GetParent(hwnd);
+            //     if !parent.is_null() {
+            //         hwnd_to_use = parent;
+            //     }
+            // }
+            let hwnd_u64 = hwnd_to_use as u64;
             if WindowTracker::is_manageable_window(hwnd_u64) {
-                println!("📍 [WINEVENT] Window LOCATIONCHANGE: HWND 0x{:X}", hwnd_u64);
-                if let Some(ref callback) = config.event_callback {
-                    let title = WindowTracker::get_window_title(hwnd_u64);
-                    let event = crate::ipc_protocol::GridEvent::WindowMoved {
-                        hwnd: hwnd_u64,
-                        title,
-                        old_row: 0,
-                        old_col: 0,
-                        new_row: 0,
-                        new_col: 0,
-                        grid_top_left_row: 0,
-                        grid_top_left_col: 0,
-                        grid_bottom_right_row: 0,
-                        grid_bottom_right_col: 0,
-                        real_x: 0,
-                        real_y: 0,
-                        real_width: 0,
-                        real_height: 0,
-                        monitor_id: 0,
-                    };
-                    callback(event);
+                if let Some(rect) = WindowTracker::get_window_rect(hwnd_u64) {
+                    // Only send event if rect is valid (nonzero size)
+                    if rect.right > rect.left && rect.bottom > rect.top {
+                        println!("📍 [WINEVENT] Window LOCATIONCHANGE: HWND 0x{:X}", hwnd_u64);
+                        if let Some(ref callback) = config.event_callback {
+                            let title = WindowTracker::get_window_title(hwnd_u64);
+                            let event = crate::ipc_protocol::GridEvent::WindowMoved {
+                                hwnd: hwnd_u64,
+                                title,
+                                old_row: 0,
+                                old_col: 0,
+                                new_row: 0,
+                                new_col: 0,
+                                grid_top_left_row: 0,
+                                grid_top_left_col: 0,
+                                grid_bottom_right_row: 0,
+                                grid_bottom_right_col: 0,
+                                real_x: rect.left,
+                                real_y: rect.top,
+                                real_width: (rect.right - rect.left) as u32,
+                                real_height: (rect.bottom - rect.top) as u32,
+                                monitor_id: 0,
+                            };
+                            callback(event);
+                        }
+                    }
+                } else {
+                    println!(
+                        "[WINEVENT] LOCATIONCHANGE for HWND 0x{:X} returned invalid rect",
+                        hwnd_u64
+                    );
                 }
             }
         }
+
         EVENT_SYSTEM_MINIMIZESTART => {
             let hwnd_u64 = hwnd as u64;
             println!("🗕 [WINEVENT] Window MINIMIZESTART: HWND 0x{:X}", hwnd_u64);

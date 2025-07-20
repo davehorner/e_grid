@@ -291,7 +291,12 @@ impl WindowTracker {
                 bottom: 0,
             };
             if GetWindowRect(hwnd as HWND, &mut rect) != 0 {
-                Some(rect)
+                // Only return Some(rect) if the rect is valid
+                if rect.right > rect.left && rect.bottom > rect.top {
+                    Some(rect)
+                } else {
+                    None
+                }
             } else {
                 None
             }

@@ -708,6 +708,8 @@ impl GridIpcManager {
             // Update both virtual and monitor grids
             tracker.update_grid();
             tracker.update_monitor_grids();
+            // Update the window info in the tracker to get the latest rect from the OS
+            // tracker.update_window(hwnd);
             // Release the tracker lock before moving the window
             drop(tracker);
             // Calculate the target position for the virtual grid cell
@@ -754,6 +756,38 @@ impl GridIpcManager {
                     );
                 }
             }
+            // Acquire tracker lock once to get all needed data for the event
+            let (real_x, real_y, real_width, real_height, monitor_id) =
+                if let Ok(tracker) = self.tracker.lock() {
+                    if let Some(window) = tracker.windows.get(&hwnd) {
+                        let rect = &window.window_rect;
+                        let real_x = rect.left;
+                        let real_y = rect.top;
+                        let real_width = (rect.right - rect.left).try_into().unwrap_or(0);
+                        let real_height = (rect.bottom - rect.top).try_into().unwrap_or(0);
+
+                        // Find the monitor that contains the center of the window
+                        let center_x = rect.left + (rect.right - rect.left) / 2;
+                        let center_y = rect.top + (rect.bottom - rect.top) / 2;
+                        let mut found_monitor = 0;
+                        for (i, monitor) in tracker.monitor_grids.iter().enumerate() {
+                            let mrect = &monitor.monitor_rect;
+                            if center_x >= mrect.left
+                                && center_x < mrect.right
+                                && center_y >= mrect.top
+                                && center_y < mrect.bottom
+                            {
+                                found_monitor = i as u32;
+                                break;
+                            }
+                        }
+                        (real_x, real_y, real_width, real_height, found_monitor)
+                    } else {
+                        (0, 0, 0, 0, 0)
+                    }
+                } else {
+                    (0, 0, 0, 0, 0)
+                };
 
             // Publish an event about the assignment
             let event = GridEvent::WindowMoved {
@@ -773,11 +807,11 @@ impl GridIpcManager {
                 grid_top_left_col: target_col,
                 grid_bottom_right_row: target_row,
                 grid_bottom_right_col: target_col,
-                real_x: 0,
-                real_y: 0,
-                real_width: 0,
-                real_height: 0,
-                monitor_id: 0,
+                real_x,
+                real_y,
+                real_width,
+                real_height,
+                monitor_id,
             };
 
             // Convert and publish the event
@@ -906,6 +940,24 @@ impl GridIpcManager {
                 }
             }
             // Publish an event about the assignment
+            // Get real coordinates for the window after move
+            let (real_x, real_y, real_width, real_height) = if let Ok(tracker) = self.tracker.lock()
+            {
+                if let Some(window) = tracker.windows.get(&hwnd) {
+                    let rect = &window.window_rect;
+                    (
+                        rect.left,
+                        rect.top,
+                        rect.right - rect.left,
+                        rect.bottom - rect.top,
+                    )
+                } else {
+                    (0, 0, 0, 0)
+                }
+            } else {
+                (0, 0, 0, 0)
+            };
+
             let event = GridEvent::WindowMoved {
                 hwnd,
                 title: String::from_utf16_lossy(&window_title),
@@ -918,10 +970,10 @@ impl GridIpcManager {
                 grid_top_left_col: target_col,
                 grid_bottom_right_row: target_row,
                 grid_bottom_right_col: target_col,
-                real_x: 0,
-                real_y: 0,
-                real_width: 0,
-                real_height: 0,
+                real_x,
+                real_y,
+                real_width: real_width.try_into().unwrap(),
+                real_height: real_height.try_into().unwrap(),
                 monitor_id: monitor_id as u32,
             };
 
@@ -1437,6 +1489,21 @@ impl GridIpcManager {
         new_row: usize,
         new_col: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let (real_x, real_y, real_width, real_height) = if let Ok(tracker) = self.tracker.lock() {
+            if let Some(window) = tracker.windows.get(&hwnd) {
+                let rect = &window.window_rect;
+                (
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                )
+            } else {
+                (0, 0, 0, 0)
+            }
+        } else {
+            (0, 0, 0, 0)
+        };
         let event = GridEvent::WindowMoved {
             hwnd,
             title,

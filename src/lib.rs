@@ -7,8 +7,10 @@ pub enum EventDispatchMode {
     AutoTrack,
 }
 
+pub mod grid_window_controller;
 use crossbeam_queue::SegQueue;
 use dashmap::DashMap;
+pub use grid_window_controller::GridWindowController;
 use ringbuf::wrap::Prod;
 use ringbuf::HeapRb;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1079,3 +1081,5 @@ impl WindowEventSystem {
 lazy_static::lazy_static! {
     static ref GLOBAL_EVENT_QUEUE: crossbeam_queue::SegQueue<(isize, MoveResizeEventType)> = crossbeam_queue::SegQueue::new();
 }
+
+pub mod window_easing;

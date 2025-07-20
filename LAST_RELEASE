@@ -1,6 +1,6 @@
-﻿25/07/18|58bb888|0.2.0
-## [0.2.0](https://github.com/davehorner/e_grid/compare/v0.1.8...v0.2.0) - 2025-07-18
+﻿25/07/20|2cb521a|0.2.1
+## [0.2.1](https://github.com/davehorner/e_grid/compare/v0.2.0...v0.2.1) - 2025-07-20
 
 ### Added
 
-- *(events)* [**breaking**] add EventDispatchMode and support raw WindowEvent dispatching
+- add animated window movement and improved event tracking
